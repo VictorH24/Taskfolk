@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tasks</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body class="tasksPage">
+  <header>
+    <div>
+      <h1>Tasks</h1>
+      <p>Mission Control Kanban for agent work.</p>
+    </div>
+    <div class="headerActions">
+      <button id="themeToggleBtn" class="secondary themeToggle" type="button" aria-label="Color theme: System. Click to switch theme."><span aria-hidden="true">💻</span><span>System</span></button>
+      <button id="refreshTasksBtn" class="secondary" type="button">Refresh</button>
+      <a id="folderViewNavBtn" class="secondary button" href="./index.html?view=files">Folder view</a>
+      <a class="secondary button" href="./avatar-legend.html">Config</a>
+      <a class="secondary button" href="./index.html">Agent view</a>
+      <button id="logoutBtn" class="secondary hidden" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main class="tasksShell">
+    <section class="taskToolbar" aria-label="Create task">
+      <form id="taskForm" class="taskForm">
+        <input id="taskTitle" name="title" type="text" required placeholder="New task title" />
+        <select id="taskPriority" name="priority" aria-label="Priority">
+          <option value="normal">Normal</option>
+          <option value="high">High</option>
+          <option value="urgent">Urgent</option>
+          <option value="low">Low</option>
+        </select>
+        <input id="taskTags" name="tags" type="text" placeholder="tags, comma separated" />
+        <button type="submit">Add task</button>
+      </form>
+      <textarea id="taskDescription" placeholder="Description or agent instructions"></textarea>
+    </section>
+
+    <section class="agentPanel" aria-label="Task agents">
+      <div class="panelHeader">
+        <div>
+          <span class="eyebrow">Agents</span>
+          <h2>Assignable Workspaces</h2>
+        </div>
+        <a class="secondary button" href="./avatar-legend.html">Manage in Config</a>
+      </div>
+      <div id="agentList" class="taskAgentList"></div>
+      <a class="secondary button archiveLink" href="./archived-tasks.html">View archived tasks</a>
+    </section>
+
+    <section id="kanbanBoard" class="kanbanBoard" aria-label="Task Kanban board"></section>
+  </main>
+
+  <div id="toast" role="status"></div>
+  <script src="./session-auth.js"></script>
+  <script src="./tasks.js"></script>
+</body>
+</html>

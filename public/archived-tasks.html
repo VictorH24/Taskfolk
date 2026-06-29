@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Archived Tasks</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body class="tasksPage">
+  <header>
+    <div>
+      <h1>Archived Tasks</h1>
+      <p>Restore archived Mission Control work items.</p>
+    </div>
+    <div class="headerActions">
+      <button id="themeToggleBtn" class="secondary themeToggle" type="button" aria-label="Color theme: System. Click to switch theme."><span aria-hidden="true">💻</span><span>System</span></button>
+      <button id="refreshArchiveBtn" class="secondary" type="button">Refresh</button>
+      <a class="secondary button" href="./tasks.html">Tasks</a>
+      <a id="folderViewNavBtn" class="secondary button" href="./index.html?view=files">Folder view</a>
+      <button id="logoutBtn" class="secondary hidden" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main class="archiveShell">
+    <section id="archiveList" class="archiveList" aria-label="Archived tasks"></section>
+  </main>
+
+  <div id="toast" role="status"></div>
+  <script src="./session-auth.js"></script>
+  <script src="./archived-tasks.js"></script>
+</body>
+</html>

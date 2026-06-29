@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# environment / secrets
+.env
+.env.*
+!.env.example
+
+# runtime data / uploads
+shared/*
+!shared/.gitkeep
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# coverage/build artifacts
+coverage/
+dist/
+build/

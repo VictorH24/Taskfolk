@@ -1,0 +1,54 @@
+services:
+  claw-os:
+    build: .
+    container_name: Claw-Os
+    restart: unless-stopped
+    # user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      #- "3000:3000"
+      - 127.0.0.1:3000:3000
+    environment:
+      PORT: 3000
+      SHARED_DIR: /shared
+      CONFIG_DIR: /config
+      TASKS_DIR: /tasks
+      MAX_UPLOAD_MB: 100
+      MAX_TEXT_PREVIEW_BYTES: 524288
+      OPENCLAW_SESSIONS_DIR: /openclaw-agents
+      GATEWAY_AUTH_TOKEN: ${GATEWAY_AUTH_TOKEN:-}
+      GATEWAY_AUTH_PASSWORD: ${GATEWAY_AUTH_PASSWORD:-}
+      GATEWAY_AUTH_SECURE_COOKIE: ${GATEWAY_AUTH_SECURE_COOKIE:-false}
+    volumes:
+      # Change ./shared to the host folder you want to expose.
+      # agents workspaces
+      - ~/.openclaw/workspace:/shared/workspace
+      - ~/.openclaw/workspace-coder:/shared/workspace-coder
+      - ~/.openclaw/workspace-hr:/shared/workspace-hr
+      - ~/.openclaw/workspace-engineer:/shared/workspace-engineer
+      - ~/.openclaw/workspace-researcher:/shared/workspace-researcher
+      - ~/.openclaw/workspace-legal:/shared/workspace-legal
+      - ~/.openclaw/workspace-rogueworker:/shared/workspace-rogueworker
+      #additioanl share folders
+      - ~/DEV:/shared/workspace/DEV
+      - ~/DEV:/shared/workspace-coder/DEV
+      # openclaw logs conf and cron
+      - ~/dockerclaw/tmp_logs:/tmp/openclaw:ro
+      - ~/.openclaw/openclaw.json:/config/openclaw.json:ro
+      - ~/.openclaw/state/:/config/state/:ro
+      - ~/.openclaw/cron/:/config/cron/:ro
+      # agents sessions
+      # - ~/.openclaw/agents:/openclaw-agents:ro
+      - ~/.openclaw/agents/main/sessions:/openclaw-agents/main/sessions:ro
+      - ~/.openclaw/agents/coder/sessions:/openclaw-agents/coder/sessions:ro
+      - ~/.openclaw/agents/hr/sessions:/openclaw-agents/hr/sessions:ro
+      - ~/.openclaw/agents/engineer/sessions:/openclaw-agents/engineer/sessions:ro
+      - ~/.openclaw/agents/researcher/sessions:/openclaw-agents/researcher/sessions:ro
+      - ~/.openclaw/agents/legal/sessions:/openclaw-agents/legal/sessions:ro
+      - ~/.openclaw/agents/rogueworker/sessions:/openclaw-agents/rogueworker/sessions:ro
+      #config and taks folders
+      - ./config:/config
+      - ./tasks:/tasks
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

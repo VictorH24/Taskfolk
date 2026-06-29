@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Config</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./avatar-legend.css" />
+</head>
+<body class="legendPage">
+  <header>
+    <div>
+      <h1>Config</h1>
+      <p>Configure avatars, office scene options, and test the pixel office before wiring live agents.</p>
+    </div>
+    <div class="headerActions">
+      <a id="folderViewNavBtn" class="secondary button" href="./index.html?view=files">Folder view</a>
+      <a id="tasksNavBtn" class="secondary button" href="./tasks.html">Tasks</a>
+      <a class="secondary button" href="./office-test.html">Office simulator</a>
+      <a class="secondary button" href="./index.html">Agent View</a>
+      <button id="logoutBtn" class="secondary hidden" type="button">Log out</button>
+    </div>
+  </header>
+  <section class="legendControls moduleControls" aria-label="Module controls">
+      <div>
+        <span class="eyebrow">Modules</span>
+        <h3>Enable Task Board</h3>
+      </div>
+      <div class="moduleToggle">
+        <span id="tasksModuleStatus">Tasks disabled</span>
+        <button id="tasksModuleToggleBtn" class="secondary" type="button" aria-pressed="false">Disabled</button>
+      </div>
+      <div class="moduleToggle">
+        <span id="folderViewModuleStatus">Folder view enabled</span>
+        <button id="folderViewModuleToggleBtn" class="secondary" type="button" aria-pressed="true">Enabled</button>
+      </div>
+    </section>
+  <main class="legendPage">
+    <section class="legendControls legendSceneControls" aria-label="Office scene controls">
+      <div>
+        <span class="eyebrow">Pixel office</span>
+        <h3>Choose Floor, Window, And Poster</h3>
+      </div>
+      <div class="sceneChoiceGroups">
+        <div>
+          <span>Floor</span>
+          <div id="floorButtons" class="variantButtons"></div>
+        </div>
+        <div>
+          <span>Window</span>
+          <div id="windowButtons" class="variantButtons"></div>
+        </div>
+        <div>
+          <span>Poster</span>
+          <div id="posterButtons" class="posterButtons"></div>
+        </div>
+        <div>
+          <span>Empty desks</span>
+          <div class="emptyDeskControl">
+            <input id="emptyDesksInput" type="number" min="0" max="24" step="1" value="0" aria-label="Number of empty desks" />
+          </div>
+        </div>
+      </div>
+    </section>
+     <section class="legendIntro">
+      <div>
+        <span class="eyebrow">Pose reference</span>
+        <h2>Every visible avatar state</h2>
+        <p>Working, blocked, sleeping, and the idle variations are staged in small rooms so we can judge the chair, desk, couch, and bed placement cleanly.</p>
+      </div>
+    </section>
+    <section class="legendControls" aria-label="Avatar variant controls">
+      <div>
+        <span class="eyebrow">Avatar preview</span>
+        <h3>Swap Avatar Set</h3>
+      </div>
+      <div id="variantButtons" class="variantButtons"></div>
+    </section>
+    <section id="legendGrid" class="legendGrid" aria-label="Avatar status legend"></section>
+    <section class="legendAssignments" aria-label="Assign agents to avatars">
+      <div class="legendAssignmentsHeader">
+        <div>
+          <span class="eyebrow">Live agents</span>
+          <h3>Assign Agent Avatars</h3>
+          <p id="assignmentStatus">Loading agents…</p>
+        </div>
+        <div class="assignmentActions">
+          <button id="reloadAssignmentsBtn" class="secondary button" type="button">Refresh</button>
+          <button id="addAgentBtn" class="button" type="button">Add agent</button>
+        </div>
+      </div>
+      <div id="assignmentList" class="assignmentList"></div>
+    </section>
+    <details class="agentApiHelp">
+      <summary>Agent status API</summary>
+      <div class="agentApiHelpBody">
+        <div>
+          <span class="eyebrow">Manual agents</span>
+          <h3>Update An Agent From A Script</h3>
+          <p>Add an agent above, copy its token, then call this endpoint whenever the agent changes state. The office view reads the saved state and refreshes it with the other agents.</p>
+        </div>
+        <dl>
+          <div>
+            <dt>URL</dt>
+            <dd><code id="agentApiUrl">/api/agent-state</code></dd>
+          </div>
+          <div>
+            <dt>States</dt>
+            <dd><code>Working</code>, <code>Blocked</code>, <code>Sleeping</code>, <code>Reading</code>, <code>Gaming</code>, <code>Coffee break</code>, <code>Listening</code>, <code>Walking</code></dd>
+          </div>
+        </dl>
+        <pre><code id="agentApiCurl">curl -X POST http://localhost:3000/api/agent-state \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"AGENT_TOKEN","state":"Working","task":"Handling queue item 42"}'</code></pre>
+        <p>Use the token shown on the manual agent row. The optional <code>task</code> field becomes the short status text in the office.</p>
+      </div>
+    </details>
+  </main>
+
+  <script src="./scene-art.js"></script>
+  <script src="./furniture-art.js"></script>
+  <script src="./avatar-art.js"></script>
+  <script src="./session-auth.js"></script>
+  <script src="./avatar-legend.js"></script>
+</body>
+</html>
