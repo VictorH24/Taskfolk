@@ -34,7 +34,23 @@ const AVATAR_VARIANTS = [
   { value: 'v6_gif', label: 'Variant 6(GIF)', versionLabel: 'v6 gif' },
   { value: 6, label: 'Variant 6' },
   { value: 'v7_gif', label: 'Variant 7(GIF)', versionLabel: 'v7 gif' },
-  { value: 7, label: 'Variant 7' }
+  { value: 7, label: 'Variant 7' },
+  { value: 'v8_gif', label: 'Variant 8 Robot (GIF)', versionLabel: 'v8 robot gif' },
+  { value: 8, label: 'Variant 8 Robot', versionLabel: 'v8 robot' },
+  { value: 'v9_gif', label: 'Variant 9 Robot (GIF)', versionLabel: 'v9 robot gif' },
+  { value: 9, label: 'Variant 9 Robot', versionLabel: 'v9 robot' },
+  { value: 'v10_gif', label: 'Variant 10 Dog (GIF)', versionLabel: 'v10 dog gif' },
+  { value: 10, label: 'Variant 10 Dog', versionLabel: 'v10 dog' },
+  { value: 'v11_gif', label: 'Variant 11 Cat (GIF)', versionLabel: 'v11 cat gif' },
+  { value: 11, label: 'Variant 11 Cat', versionLabel: 'v11 cat' },
+  { value: 'v12_gif', label: 'Variant 12 Gorilla (GIF)', versionLabel: 'v12 gorilla gif' },
+  { value: 12, label: 'Variant 12 Gorilla', versionLabel: 'v12 gorilla' },
+  { value: 'v13_gif', label: 'Variant 13 Tiger (GIF)', versionLabel: 'v13 tiger gif' },
+  { value: 13, label: 'Variant 13 Tiger', versionLabel: 'v13 tiger' },
+  { value: 'v14_gif', label: 'Variant 14 Lion (GIF)', versionLabel: 'v14 lion gif' },
+  { value: 14, label: 'Variant 14 Lion', versionLabel: 'v14 lion' },
+  { value: 'v15_gif', label: 'Variant 15 Robot (GIF)', versionLabel: 'v15 robot gif' },
+  { value: 15, label: 'Variant 15 Robot', versionLabel: 'v15 robot' }
 ];
 const OFFICE_FLOORS = [
   { value: 'wood', label: 'Wood' },
@@ -139,7 +155,7 @@ let savingAssignments = false;
 function normalizeAvatarVariant(value) {
   const raw = String(value ?? 0);
   const numeric = Number(value);
-  const normalized = raw === 'v0' || /^v[1-7]_gif$/.test(raw)
+  const normalized = raw === 'v0' || /^v\d+_gif$/.test(raw)
     ? raw
     : Number.isInteger(numeric) ? numeric : value;
   return AVATAR_VARIANTS.some((variant) => variant.value === normalized) ? normalized : 0;

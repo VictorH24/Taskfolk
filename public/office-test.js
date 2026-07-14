@@ -4,8 +4,8 @@ const themeIcons = { system: '💻', light: '☀️', dark: '🌙' };
 const OFFICE_FLOORS = ['wood', 'wood2', 'carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;
-const AVATAR_VARIANT_COUNT = 8;
-const ASSIGNABLE_AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7];
+const AVATAR_VARIANT_COUNT = 16;
+const ASSIGNABLE_AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7, 'v8_gif', 8, 'v9_gif', 9, 'v10_gif', 10, 'v11_gif', 11, 'v12_gif', 12, 'v13_gif', 13, 'v14_gif', 14, 'v15_gif', 15];
 
 const officeMap = document.querySelector('#officeMap');
 const agentSummary = document.querySelector('#agentSummary');
@@ -110,8 +110,8 @@ function normalizeAgent(agent, index) {
     lastSeen: lastSeenMs ? new Date(lastSeenMs).toISOString() : null,
     sessionFile: session.file || null,
     logFile: session.logFile || null,
-    avatarVariant: agent.avatarVariant === 'v0' || /^v[1-7]_gif$/.test(String(agent.avatarVariant))
-      ? agent.avatarVariant
+    avatarVariant: agent.avatarVariant === 'v0' || ASSIGNABLE_AVATAR_VARIANTS.includes(String(agent.avatarVariant))
+      ? String(agent.avatarVariant)
       : Number.isInteger(Number(agent.avatarVariant)) ? Number(agent.avatarVariant) : null,
     activity: {
       ...activity,

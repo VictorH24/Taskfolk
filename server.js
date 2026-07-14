@@ -27,7 +27,7 @@ const TASK_AGENTS_PATH = path.join(TASKS_DIR, 'agents.json');
 const TASK_EVENTS_PATH = path.join(TASKS_DIR, 'task-events.jsonl');
 const PROCESSED_EVENTS_PATH = path.join(TASKS_DIR, 'processed-events.json');
 const TASK_ARCHIVE_PATH = path.join(TASKS_DIR, 'archive.jsonl');
-const AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7];
+const AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7, 'v8_gif', 8, 'v9_gif', 9, 'v10_gif', 10, 'v11_gif', 11, 'v12_gif', 12, 'v13_gif', 13, 'v14_gif', 14, 'v15_gif', 15];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
@@ -251,7 +251,8 @@ async function requireGatewayAuth(req, res, next) {
 }
 
 function normalizeAvatarVariant(value) {
-  if (value === 'v0' || /^v[1-7]_gif$/.test(String(value))) return value;
+  const raw = String(value);
+  if ((raw === 'v0' || /^v\d+_gif$/.test(raw)) && AVATAR_VARIANTS.includes(raw)) return raw;
   const variant = Number(value);
   return AVATAR_VARIANTS.includes(variant) ? variant : 0;
 }

@@ -32,7 +32,7 @@
     if (key === 'v0') {
       return [`./avatar-scenes/variants/v0/${image.replace(/\.gif$/i, '.png')}`];
     }
-    const gifMatch = key.match(/^v([1-7])_gif$/);
+    const gifMatch = key.match(/^v(\d+)_gif$/);
     if (gifMatch) {
       return gifVariantPaths(gifMatch[1], image);
     }
