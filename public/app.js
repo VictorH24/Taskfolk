@@ -1,9 +1,14 @@
 let currentPath = '';
+const pageParams = new URLSearchParams(window.location.search);
+const companionMode = pageParams.get('companion') === '1';
+const companionView = companionMode && pageParams.get('companionView') === 'avatar' ? 'avatar' : 'office';
+const companionAgentId = pageParams.get('agent') || '';
+const MOST_RECENT_AGENT_ID = '__latest__';
 const themeOptions = ['system', 'light', 'dark'];
 const themeLabels = { system: 'System', light: 'Light', dark: 'Dark' };
 const themeIcons = { system: '💻', light: '☀️', dark: '🌙' };
-const AVATAR_VARIANT_COUNT = 16;
-const ASSIGNABLE_AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7, 'v8_gif', 8, 'v9_gif', 9, 'v10_gif', 10, 'v11_gif', 11, 'v12_gif', 12, 'v13_gif', 13, 'v14_gif', 14, 'v15_gif', 15];
+const AVATAR_VARIANT_COUNT = 23;
+const ASSIGNABLE_AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7, 'v8_gif', 8, 'v9_gif', 9, 'v10_gif', 10, 'v11_gif', 11, 'v12_gif', 12, 'v13_gif', 13, 'v14_gif', 14, 'v15_gif', 15, 'v16_gif', 16, 'v17_gif', 17, 'v18_gif', 18, 'v19_gif', 19, 'v20_gif', 20, 'v21_gif', 21, 'v22_gif', 22];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;
@@ -35,8 +40,8 @@ const newTextFileBtn = document.querySelector('#newTextFileBtn');
 const newFolderBtn = document.querySelector('#newFolderBtn');
 const themeToggleBtn = document.querySelector('#themeToggleBtn');
 let currentPreview = null;
-let agentDisplayMode = getSavedAgentDisplayMode();
-let agentAutoRefresh = getSavedAgentAutoRefresh();
+let agentDisplayMode = companionMode ? 'pixel' : getSavedAgentDisplayMode();
+let agentAutoRefresh = companionMode ? true : getSavedAgentAutoRefresh();
 let sessionDebugVisible = getSavedSessionDebugVisible();
 let cronJobsVisible = getSavedCronJobsVisible();
 let selectedCronJobId = null;
@@ -45,6 +50,8 @@ let agentRefreshTimer = null;
 let agentRefreshInFlight = false;
 let officeSceneConfig = { floor: 'wood', windowView: 'sf', poster: 0, emptyDesks: 0 };
 let modulesConfig = { tasks: { enabled: false }, folderView: { enabled: true } };
+let renderedCompanionAgentId = '';
+let renderedCompanionAgentSignature = '';
 
 function applyTheme(theme) {
   const nextTheme = themeOptions.includes(theme) ? theme : 'system';
@@ -70,6 +77,8 @@ function toggleTheme() {
 }
 
 applyTheme(getSavedTheme() || 'system');
+document.body.classList.toggle('companion-mode', companionMode);
+document.body.classList.toggle('companion-avatar-mode', companionMode && companionView === 'avatar');
 
 function getSavedAgentDisplayMode() {
   try {
@@ -115,7 +124,7 @@ function setAgentDisplayMode(mode) {
 }
 
 function setPixelFullscreen(enabled) {
-  const active = Boolean(enabled) && currentView === 'agents' && agentDisplayMode === 'pixel';
+  const active = (companionMode || Boolean(enabled)) && currentView === 'agents' && agentDisplayMode === 'pixel';
   document.body.classList.toggle('pixel-office-fullscreen', active);
   pixelFullscreenBtn.textContent = active ? 'Exit full page' : 'Full page';
   pixelFullscreenBtn.setAttribute('aria-pressed', String(active));
@@ -185,6 +194,7 @@ function effectiveOfficeTimeClass() {
 
 setAgentDisplayMode(agentDisplayMode);
 setAgentAutoRefresh(agentAutoRefresh);
+if (companionMode) setPixelFullscreen(true);
 
 function setView(view) {
   currentView = view === 'files' && modulesConfig.folderView.enabled ? 'files' : 'agents';
@@ -196,7 +206,7 @@ function setView(view) {
   viewToggleBtn.textContent = showingFiles ? 'Agent view' : 'Folder view';
   pageSubtitle.textContent = showingFiles
     ? 'Browse, upload, download, and preview files in the shared folder.'
-    : 'Mission Control Dashboard for OpenClaw agents.';
+    : 'Watch your AI team at work.';
   if (showingFiles) loadDir(currentPath);
   else { hidePreviewPanel(); loadAgents(); }
   scheduleAgentRefresh();
@@ -568,7 +578,8 @@ async function loadAgents() {
     renderSessionDebugPanel(data);
     renderCronJobsPanel(latestCronJobs);
     officeSceneConfig = normalizeOfficeSceneConfig(data.officeScene);
-    if (agentDisplayMode === 'pixel') renderPixelOffice(data.agents, data.latestSessions?.[0]);
+    if (companionMode && companionView === 'avatar') renderCompanionAvatar(data.agents);
+    else if (agentDisplayMode === 'pixel') renderPixelOffice(data.agents, data.latestSessions?.[0]);
     else renderAgentCards(data.agents);
   } catch (err) {
     officeMap.innerHTML = `<div class="emptyOffice">Unable to load agents: ${esc(err.message)}</div>`;
@@ -847,6 +858,59 @@ function renderPixelOffice(agents, latestSession = null) {
         ${labels.join('')}
       </div>
     </div>`;
+}
+
+function renderCompanionAvatar(agents) {
+  officeMap.className = 'companionAvatarStage';
+  const agent = companionAgentId === MOST_RECENT_AGENT_ID
+    ? [...agents].sort((left, right) => agentRecencyMs(right) - agentRecencyMs(left))[0]
+    : agents.find((candidate) => String(candidate.id) === companionAgentId) || agents[0];
+  if (!agent) {
+    renderedCompanionAgentId = '';
+    renderedCompanionAgentSignature = '';
+    officeMap.innerHTML = '<div class="companionAvatarEmpty">No agents are available.</div>';
+    return;
+  }
+  const agentId = String(agent.id || '');
+  const signature = [
+    agentId,
+    agent.name,
+    agent.status,
+    agent.pose,
+    agent.displayState,
+    agent.avatarVariant,
+    agentRecencyMs(agent)
+  ].join(':');
+  if (signature === renderedCompanionAgentSignature) return;
+  const switchedAgent = Boolean(renderedCompanionAgentId && renderedCompanionAgentId !== agentId);
+  renderedCompanionAgentId = agentId;
+  renderedCompanionAgentSignature = signature;
+  officeMap.innerHTML = `
+    <article class="companionAvatar ${switchedAgent ? 'companionAvatar--enter' : ''} ${esc(agent.status)}" aria-label="${esc(agent.name)} is ${esc(agentStateLabel(agent))}">
+      ${pixelAgentScene(agent, false)}
+      <div class="companionAvatarName">${esc(agent.name || agent.id || 'Agent')}</div>
+    </article>`;
+}
+
+function timestampCandidateMs(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? (value < 1e12 ? value * 1000 : value) : 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function agentRecencyMs(agent = {}) {
+  const activity = agent.activity || {};
+  return Math.max(
+    timestampCandidateMs(agent.lastSeen),
+    timestampCandidateMs(agent.updatedAt),
+    timestampCandidateMs(activity.updatedAt),
+    timestampCandidateMs(activity.lastInteractionAt),
+    timestampCandidateMs(activity.lastMessageAt),
+    timestampCandidateMs(activity.timestamp)
+  );
 }
 
 function pixelAgentScene(agent, meetingMode = false) {
@@ -1192,7 +1256,7 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && currentView === 'agents' && agentAutoRefresh) loadAgents();
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && document.body.classList.contains('pixel-office-fullscreen')) {
+  if (!companionMode && event.key === 'Escape' && document.body.classList.contains('pixel-office-fullscreen')) {
     setPixelFullscreen(false);
   }
 });
@@ -1217,7 +1281,7 @@ setSessionDebugVisible(sessionDebugVisible);
 setCronJobsVisible(cronJobsVisible);
 async function initApp() {
   await loadAppConfig();
-  const initialView = new URLSearchParams(window.location.search).get('view') === 'files' ? 'files' : 'agents';
+  const initialView = !companionMode && pageParams.get('view') === 'files' ? 'files' : 'agents';
   setView(initialView);
 }
 initApp();

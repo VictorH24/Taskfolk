@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Claw OS</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Taskfolk</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
   <body>
+  <div class="companionDragRegion" aria-hidden="true"></div>
   <header>
     <div>
-      <h1>Claw OS</h1>
-      <p id="pageSubtitle">Mission Control Dashboard for OpenClaw agents.</p>
+      <h1>Taskfolk</h1>
+      <p id="pageSubtitle">Watch your AI team at work.</p>
     </div>
     <div class="headerActions">
       <button id="themeToggleBtn" class="secondary themeToggle" type="button" aria-label="Color theme: System. Click to switch theme."><span aria-hidden="true">💻</span><span>System</span></button>
@@ -27,7 +28,7 @@
     <section class="missionControl" id="missionControl">
       <div class="dashboardHero">
         <div>
-          <span class="eyebrow">Agent office</span>
+          <span class="eyebrow">AI agent mission control</span>
           <h2>See who is working at a glance</h2>
           <p>Each desk represents an OpenClaw agent. Green means active, amber means idle, and red means blocked.</p>
           <div class="agentViewControls">

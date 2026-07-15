@@ -4,11 +4,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import * as tar from 'tar';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 const PORT = Number(process.env.PORT || 3000);
+const HOST = String(process.env.HOST || '0.0.0.0');
+const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SHARED_DIR = path.resolve(process.env.SHARED_DIR || '/shared');
 const CONFIG_DIR = path.resolve(process.env.CONFIG_DIR || '/config');
 const TASKS_DIR = path.resolve(process.env.TASKS_DIR || '/tasks');
@@ -21,13 +24,13 @@ const OPENCLAW_CRON_DIR = path.resolve(process.env.OPENCLAW_CRON_DIR || path.joi
 const OPENCLAW_STATE_DB_PATH = path.resolve(process.env.OPENCLAW_STATE_DB_PATH || path.join(CONFIG_DIR, 'state', 'openclaw.sqlite'));
 const AVATAR_ASSIGNMENTS_PATH = path.resolve(process.env.AVATAR_ASSIGNMENTS_PATH || path.join(CONFIG_DIR, 'avatar-assignments.json'));
 const AGENT_STATE_PATH = path.resolve(process.env.AGENT_STATE_PATH || path.join(CONFIG_DIR, 'state.json'));
-const OFFICE_FIXTURE_PATH = path.join(process.cwd(), 'public', 'test-agents.json');
+const OFFICE_FIXTURE_PATH = path.resolve(process.env.OFFICE_FIXTURE_PATH || path.join(SERVER_DIR, 'public', 'test-agents.json'));
 const TASKS_PATH = path.join(TASKS_DIR, 'tasks.json');
 const TASK_AGENTS_PATH = path.join(TASKS_DIR, 'agents.json');
 const TASK_EVENTS_PATH = path.join(TASKS_DIR, 'task-events.jsonl');
 const PROCESSED_EVENTS_PATH = path.join(TASKS_DIR, 'processed-events.json');
 const TASK_ARCHIVE_PATH = path.join(TASKS_DIR, 'archive.jsonl');
-const AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7, 'v8_gif', 8, 'v9_gif', 9, 'v10_gif', 10, 'v11_gif', 11, 'v12_gif', 12, 'v13_gif', 13, 'v14_gif', 14, 'v15_gif', 15];
+const AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7, 'v8_gif', 8, 'v9_gif', 9, 'v10_gif', 10, 'v11_gif', 11, 'v12_gif', 12, 'v13_gif', 13, 'v14_gif', 14, 'v15_gif', 15, 'v16_gif', 16, 'v17_gif', 17, 'v18_gif', 18, 'v19_gif', 19, 'v20_gif', 20, 'v21_gif', 21, 'v22_gif', 22];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
@@ -49,11 +52,13 @@ const TASK_STATUSES = ['backlog', 'ready', 'assigned', 'in_progress', 'blocked',
 const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
 const AGENT_ACTIVE_MS = Number(process.env.AGENT_ACTIVE_MS || 2 * 60 * 1000);
 const AGENT_IDLE_MS = Number(process.env.AGENT_IDLE_MS || 30 * 60 * 1000);
+const RUNTIME_AGENT_TTL_MS = Number(process.env.RUNTIME_AGENT_TTL_MS || 90 * 1000);
+const LOCAL_DESKTOP_MODE = String(process.env.LOCAL_DESKTOP_MODE || '').trim().toLowerCase() === 'true';
 const GATEWAY_AUTH_TOKEN_ENV = String(process.env.GATEWAY_AUTH_TOKEN || '').trim();
 const GATEWAY_AUTH_PASSWORD_ENV = String(process.env.GATEWAY_AUTH_PASSWORD || '').trim();
 const GATEWAY_AUTH_SECURE_COOKIE = String(process.env.GATEWAY_AUTH_SECURE_COOKIE || '').trim().toLowerCase() === 'true';
-const AUTH_COOKIE_NAME = 'claw_os_gateway_auth';
-const PUBLIC_DIR = path.join(process.cwd(), 'public');
+const AUTH_COOKIE_NAME = 'taskfolk_gateway_auth';
+const PUBLIC_DIR = path.join(SERVER_DIR, 'public');
 const PROTECTED_NAMES = new Set(
   String(process.env.PROTECTED_NAMES || '.git,.env')
     .split(',')
@@ -71,6 +76,60 @@ const DEFAULT_AGENTS = [
   { id: 'ops', name: 'Ops Monitor', role: 'Health checks', status: 'active', task: 'Checking production endpoints', x: 82, y: 30 }
 ];
 const CONFIGURED_AGENT_IDLE_TASK = 'Configured in OpenClaw; no session activity yet';
+const runtimeAgentSources = new Map();
+
+function cleanRuntimeText(value, maxLength = 240) {
+  return String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function normalizeRuntimeAgent(agent, provider, index) {
+  const rawId = cleanRuntimeText(agent?.id, 160);
+  if (!rawId) return null;
+  const id = rawId.startsWith(`${provider}:`) ? rawId : `${provider}:${rawId}`;
+  const status = ['active', 'idle', 'blocked'].includes(agent?.status) ? agent.status : 'idle';
+  const lastSeenMs = timestampMs(agent?.lastSeen, agent?.activity?.updatedAt) || Date.now();
+  const activity = agent?.activity && typeof agent.activity === 'object' && !Array.isArray(agent.activity)
+    ? {
+        provider,
+        status: cleanRuntimeText(agent.activity.status, 80) || null,
+        derivedStatus: status,
+        updatedAt: timestampMs(agent.activity.updatedAt) || lastSeenMs,
+        sessionLabel: cleanRuntimeText(agent.activity.sessionLabel, 120) || null,
+        sessionKeyShort: cleanRuntimeText(agent.activity.sessionKeyShort, 160) || null,
+        model: cleanRuntimeText(agent.activity.model, 120) || null,
+        agent: cleanRuntimeText(agent.activity.agent, 120) || null
+      }
+    : { provider, derivedStatus: status, updatedAt: lastSeenMs };
+  return normalizeAgent({
+    id,
+    name: cleanRuntimeText(agent?.name, 120) || provider,
+    role: cleanRuntimeText(agent?.role, 160) || provider,
+    status,
+    task: cleanRuntimeText(agent?.task) || `${provider} session`,
+    lastSeen: new Date(lastSeenMs).toISOString(),
+    source: provider,
+    workspacePath: cleanRuntimeText(agent?.workspacePath, 1024) || null,
+    activity,
+    avatarAssignmentKey: cleanRuntimeText(agent?.avatarAssignmentKey, 160) || null,
+    displayState: cleanRuntimeText(agent?.displayState, 40) || null,
+    pose: cleanRuntimeText(agent?.pose, 40) || null
+  }, index);
+}
+
+function runtimeAgentsSnapshot(nowMs = Date.now()) {
+  const merged = new Map();
+  for (const [sourceId, source] of runtimeAgentSources) {
+    if (nowMs - source.updatedAtMs > RUNTIME_AGENT_TTL_MS) {
+      runtimeAgentSources.delete(sourceId);
+      continue;
+    }
+    for (const agent of source.agents) {
+      const existing = merged.get(agent.id);
+      if (!existing || timestampMs(agent.lastSeen) >= timestampMs(existing.lastSeen)) merged.set(agent.id, agent);
+    }
+  }
+  return [...merged.values()];
+}
 
 function workspacePathFromValue(value) {
   if (!value) return null;
@@ -118,6 +177,7 @@ function normalizeAgent(agent, index) {
     sessions: Number.isFinite(Number(agent.sessions)) ? Number(agent.sessions) : null,
     workspacePath: workspacePathFromValue(agent),
     activity: agent.activity || null,
+    avatarAssignmentKey: agent.avatarAssignmentKey || null,
     displayState: agent.displayState || null,
     pose: agent.pose || null,
     x: Number.isFinite(Number(agent.x)) ? Number(agent.x) : 20 + (index * 18) % 70,
@@ -267,6 +327,18 @@ function normalizeAvatarAssignments(value) {
     assignments[id] = normalizeAvatarVariant(variant);
   }
   return assignments;
+}
+
+function normalizeHiddenAgents(value) {
+  const source = Array.isArray(value?.hiddenAgents) ? value.hiddenAgents : Array.isArray(value) ? value : [];
+  return [...new Set(source.map((entry) => String(entry || '')
+    .trim()
+    .replace(/[\u0000-\u001f]/g, '')
+    .replace(/[^a-zA-Z0-9._:-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 160))
+    .filter(Boolean))]
+    .slice(0, 200);
 }
 
 function randomAgentToken() {
@@ -769,6 +841,7 @@ async function readAvatarConfig() {
     : [];
   return {
     assignments: normalizeAvatarAssignments(data),
+    hiddenAgents: normalizeHiddenAgents(data),
     manualAgents: normalizeManualAgents(data),
     taskAgents: normalizeTaskAgentSettings(data),
     modules: normalizeModules(data),
@@ -788,6 +861,7 @@ async function writeAvatarConfig(value) {
     : current.manualAgents;
   const normalized = {
     assignments: normalizeAvatarAssignments(value?.assignments || value),
+    hiddenAgents: Array.isArray(value?.hiddenAgents) ? normalizeHiddenAgents(value.hiddenAgents) : current.hiddenAgents,
     manualAgents,
     taskAgents: value?.taskAgents && typeof value.taskAgents === 'object' && !Array.isArray(value.taskAgents)
       ? normalizeTaskAgentSettings(value)
@@ -1809,6 +1883,20 @@ function manualAgentsFromConfig(avatarConfig, stateFile) {
 }
 
 async function configuredAgents() {
+  if (LOCAL_DESKTOP_MODE) {
+    return {
+      agents: [],
+      source: 'desktop',
+      configLoaded: false,
+      logFiles: 0,
+      sessionStores: 0,
+      emptySessionStores: 0,
+      sessionDebug: [],
+      latestSessions: [],
+      sessionGroupedCounts: {},
+      weeklyCost: null
+    };
+  }
   const envAgents = configuredAgentsFromEnv();
   if (envAgents.length) return { agents: envAgents, source: 'env', configLoaded: false, logFiles: 0, weeklyCost: null };
 
@@ -1972,6 +2060,39 @@ app.put('/api/agent-state', updateAgentState);
 app.post('/api/agent-status', updateAgentState);
 app.put('/api/agent-status', updateAgentState);
 app.use(requireGatewayAuth);
+
+app.post('/api/runtime-agents', (req, res) => {
+  const sourceId = cleanRuntimeText(req.body?.sourceId, 120);
+  const provider = cleanRuntimeText(req.body?.provider, 40).toLowerCase();
+  const inputAgents = req.body?.agents;
+  if (!sourceId || !/^[a-z0-9][a-z0-9._:-]*$/i.test(sourceId)) {
+    return res.status(400).json({ error: 'A valid runtime sourceId is required.' });
+  }
+  if (!provider || !/^[a-z0-9][a-z0-9._-]*$/.test(provider)) {
+    return res.status(400).json({ error: 'A valid runtime provider is required.' });
+  }
+  if (!Array.isArray(inputAgents)) return res.status(400).json({ error: 'agents must be an array.' });
+  if (inputAgents.length > 24) return res.status(400).json({ error: 'A runtime source may publish at most 24 agents.' });
+
+  const agents = inputAgents.map((agent, index) => normalizeRuntimeAgent(agent, provider, index)).filter(Boolean);
+  if (agents.length) runtimeAgentSources.set(sourceId, { provider, agents, updatedAtMs: Date.now() });
+  else runtimeAgentSources.delete(sourceId);
+  return res.json({ ok: true, provider, accepted: agents.length, ttlMs: RUNTIME_AGENT_TTL_MS });
+});
+
+app.delete('/api/runtime-agents/:agentId', (req, res) => {
+  const agentId = cleanRuntimeText(req.params.agentId, 200);
+  if (!agentId) return res.status(400).json({ error: 'A runtime agent id is required.' });
+  let removed = 0;
+  for (const [sourceId, source] of runtimeAgentSources) {
+    const agents = source.agents.filter((agent) => agent.id !== agentId);
+    removed += source.agents.length - agents.length;
+    if (!agents.length) runtimeAgentSources.delete(sourceId);
+    else if (agents.length !== source.agents.length) runtimeAgentSources.set(sourceId, { ...source, agents });
+  }
+  return res.json({ ok: true, agentId, removed, rediscovery: 'next-publish' });
+});
+
 app.get(['/tasks.html', '/archived-tasks.html'], async (req, res, next) => {
   try {
     const config = await readAvatarConfig();
@@ -2023,6 +2144,7 @@ app.put('/api/avatar-assignments', async (req, res, next) => {
     const current = await readAvatarConfig();
     const config = await writeAvatarConfig({
       assignments: req.body?.assignments || {},
+      hiddenAgents: Array.isArray(req.body?.hiddenAgents) ? req.body.hiddenAgents : current.hiddenAgents,
       manualAgents: Array.isArray(req.body?.manualAgents) ? req.body.manualAgents : current.manualAgents,
       taskAgents: req.body?.taskAgents && typeof req.body.taskAgents === 'object' && !Array.isArray(req.body.taskAgents) ? req.body.taskAgents : current.taskAgents,
       modules: req.body?.modules && typeof req.body.modules === 'object' && !Array.isArray(req.body.modules) ? req.body.modules : current.modules,
@@ -2137,16 +2259,33 @@ app.get('/api/agents', async (req, res, next) => {
     const officeScene = normalizeOfficeScene(openClawConfig);
     for (const key of avatarConfig.officeSceneKeys) officeScene[key] = avatarConfig.officeScene[key];
     const avatarAssignments = avatarConfig.assignments;
-    const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+    const runtimeAgents = runtimeAgentsSnapshot();
+    const runtimeAgentIds = new Set(runtimeAgents.map((agent) => agent.id));
+    const baseAgents = runtimeAgents.length && source === 'sample' ? [] : agents;
+    const agentById = new Map(baseAgents.map((agent) => [agent.id, agent]));
+    for (const runtimeAgent of runtimeAgents) agentById.set(runtimeAgent.id, runtimeAgent);
     for (const manualAgent of manualAgentsFromConfig(avatarConfig, stateFile)) agentById.set(manualAgent.id, manualAgent);
     const mergedAgents = [...agentById.values()];
-    const agentsWithAvatars = mergedAgents.map((agent) => ({
-      ...agent,
-      avatarVariant: Object.prototype.hasOwnProperty.call(avatarAssignments, agent.id) ? avatarAssignments[agent.id] : null
-    }));
+    const hiddenAgentKeys = new Set(avatarConfig.hiddenAgents);
+    const agentsWithAvatars = mergedAgents.map((agent) => {
+      const assignmentKey = agent.avatarAssignmentKey || agent.id;
+      const avatarVariant = Object.prototype.hasOwnProperty.call(avatarAssignments, assignmentKey)
+        ? avatarAssignments[assignmentKey]
+        : Object.prototype.hasOwnProperty.call(avatarAssignments, agent.id) ? avatarAssignments[agent.id] : null;
+      return {
+        ...agent,
+        runtime: runtimeAgentIds.has(agent.id),
+        avatarAssignmentKey: assignmentKey,
+        avatarVariant,
+        hidden: hiddenAgentKeys.has(assignmentKey) || hiddenAgentKeys.has(agent.id)
+      };
+    });
+    const responseAgents = req.query.includeHidden === '1'
+      ? agentsWithAvatars
+      : agentsWithAvatars.filter((agent) => !agent.hidden);
     res.json({
       generatedAt: new Date().toISOString(),
-      source,
+      source: runtimeAgents.length ? (source === 'sample' ? 'runtime' : `${source}+runtime`) : source,
       configLoaded,
       logDir: OPENCLAW_LOG_DIR,
       configPath: OPENCLAW_CONFIG_PATH,
@@ -2165,14 +2304,15 @@ app.get('/api/agents', async (req, res, next) => {
       acceptedManualStates: MANUAL_AGENT_STATES,
       agentStatePath: AGENT_STATE_PATH,
       summary: {
-        total: agentsWithAvatars.length,
-        active: agentsWithAvatars.filter((agent) => agent.status === 'active').length,
-        idle: agentsWithAvatars.filter((agent) => agent.status === 'idle').length,
-        blocked: agentsWithAvatars.filter((agent) => agent.status === 'blocked').length
+        total: responseAgents.length,
+        active: responseAgents.filter((agent) => agent.status === 'active').length,
+        idle: responseAgents.filter((agent) => agent.status === 'idle').length,
+        blocked: responseAgents.filter((agent) => agent.status === 'blocked').length
       },
       avatarAssignmentsPath: AVATAR_ASSIGNMENTS_PATH,
       officeScene,
-      agents: agentsWithAvatars
+      hiddenAgents: avatarConfig.hiddenAgents,
+      agents: responseAgents
     });
   } catch (err) {
     next(err);
@@ -2751,7 +2891,9 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: err.message || 'Server error' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Claw OS listening on http://0.0.0.0:${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  const address = server.address();
+  const listeningPort = typeof address === 'object' && address ? address.port : PORT;
+  console.log(`Taskfolk listening on http://${HOST}:${listeningPort}`);
   console.log(`Sharing folder: ${SHARED_DIR}`);
 });

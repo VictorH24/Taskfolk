@@ -1,5 +1,4 @@
 const legendGrid = document.querySelector('#legendGrid');
-const variantButtons = document.querySelector('#variantButtons');
 const floorButtons = document.querySelector('#floorButtons');
 const windowButtons = document.querySelector('#windowButtons');
 const posterButtons = document.querySelector('#posterButtons');
@@ -50,8 +49,45 @@ const AVATAR_VARIANTS = [
   { value: 'v14_gif', label: 'Variant 14 Lion (GIF)', versionLabel: 'v14 lion gif' },
   { value: 14, label: 'Variant 14 Lion', versionLabel: 'v14 lion' },
   { value: 'v15_gif', label: 'Variant 15 Robot (GIF)', versionLabel: 'v15 robot gif' },
-  { value: 15, label: 'Variant 15 Robot', versionLabel: 'v15 robot' }
+  { value: 15, label: 'Variant 15 Robot', versionLabel: 'v15 robot' },
+  { value: 'v16_gif', label: 'Variant 16 Human Woman (GIF)', versionLabel: 'v16 human woman gif' },
+  { value: 16, label: 'Variant 16 Human Woman', versionLabel: 'v16 human woman' },
+  { value: 'v17_gif', label: 'Variant 17 Human Man (GIF)', versionLabel: 'v17 human man gif' },
+  { value: 17, label: 'Variant 17 Human Man', versionLabel: 'v17 human man' },
+  { value: 'v18_gif', label: 'Variant 18 Human Woman (GIF)', versionLabel: 'v18 human woman gif' },
+  { value: 18, label: 'Variant 18 Human Woman', versionLabel: 'v18 human woman' },
+  { value: 'v19_gif', label: 'Variant 19 Human Man (GIF)', versionLabel: 'v19 human man gif' },
+  { value: 19, label: 'Variant 19 Human Man', versionLabel: 'v19 human man' },
+  { value: 'v20_gif', label: 'Variant 20 Human Woman (GIF)', versionLabel: 'v20 human woman gif' },
+  { value: 20, label: 'Variant 20 Human Woman', versionLabel: 'v20 human woman' },
+  { value: 'v21_gif', label: 'Variant 21 Human Man (GIF)', versionLabel: 'v21 human man gif' },
+  { value: 21, label: 'Variant 21 Human Man', versionLabel: 'v21 human man' },
+  { value: 'v22_gif', label: 'Variant 22 Blonde Woman (GIF)', versionLabel: 'v22 blonde woman gif' },
+  { value: 22, label: 'Variant 22 Blonde Woman', versionLabel: 'v22 blonde woman' }
 ];
+const AVATAR_SHEET_NAMES = {
+  8: 'Robot',
+  9: 'Robot',
+  10: 'Dog',
+  11: 'Cat',
+  12: 'Gorilla',
+  13: 'Tiger',
+  14: 'Lion',
+  15: 'Robot',
+  16: 'Human Woman',
+  17: 'Human Man',
+  18: 'Human Woman',
+  19: 'Human Man',
+  20: 'Human Woman',
+  21: 'Human Man',
+  22: 'Blonde Woman'
+};
+const AVATAR_SHEETS = Array.from({ length: 23 }, (_, value) => ({
+  value,
+  label: `Variant ${value}`,
+  description: AVATAR_SHEET_NAMES[value] || 'Human Avatar',
+  src: `./avatar-scenes/generated-sheets/v${value}.png`
+}));
 const OFFICE_FLOORS = [
   { value: 'wood', label: 'Wood' },
   { value: 'wood2', label: 'Wood2' },
@@ -68,84 +104,9 @@ const OFFICE_WINDOWS = [
 ];
 const OFFICE_POSTER_COUNT = 50;
 
-const LEGEND_CARDS = [
-  {
-    title: 'Working',
-    note: 'Agent is Working.',
-    status: 'Working',
-    className: 'working',
-    label: 'Working',
-    // role: 'Working',
-    pose: 'working'
-  },
-  {
-    title: 'Blocked',
-    note: 'Agent is Blocked he nay need helps.',
-    status: 'Blocked',
-    className: 'blocked',
-    label: 'blocked',
-    // role: 'coder',
-    pose: 'blocked'
-  },
-  {
-    title: 'Sleeping',
-    note: 'Agent is Sleeping, idle for more than 15 minutes.',
-    status: 'Sleeping',
-    className: 'sleeping',
-    label: 'sleeping',
-    // role: 'reviewer',
-    pose: 'sleeping'
-  },
-  {
-    title: 'Reading',
-    note: 'Agent is Reading, idle for less than 2 minutes.',
-    status: 'Reading',
-    className: 'reading',
-    label: 'Reading',
-    // role: 'analyst',
-    pose: 'reading'
-  },
-  {
-    title: 'Gaming',
-    note: 'Agent is Gaming idle for less than 15 minutes.',
-    status: 'Gaming',
-    className: 'gaming',
-    label: 'Builder',
-    // role: 'builder',
-    pose: 'gaming'
-  },
-  {
-    title: 'Coffee',
-    note: 'Coffee break, agent idle for less than 15 minutes.',
-    status: 'Coffee break',
-    className: 'coffee',
-    label: 'Ops',
-    // role: 'ops',
-    pose: 'coffee'
-  },
-  {
-    title: 'Music',
-    note: 'Agent listening to music, idle for less than 2 minutes.',
-    status: 'Listening',
-    className: 'headphones',
-    label: 'Music',
-    // role: 'writer',
-    pose: 'headphones'
-  },
-  {
-    title: 'Walker',
-    note: 'Agent is aalking, idle for less than 2 minutes..',
-    status: 'Walking',
-    className: 'walking',
-    label: 'Walker',
-    // role: 'walker',
-    pose: 'walking'
-  }
-];
-
-let previewVariant = savedPreviewVariant();
 let agents = [];
 let assignments = {};
+let hiddenAgents = [];
 let manualAgents = [];
 let taskAgents = {};
 let modules = { tasks: { enabled: false }, folderView: { enabled: true } };
@@ -159,14 +120,6 @@ function normalizeAvatarVariant(value) {
     ? raw
     : Number.isInteger(numeric) ? numeric : value;
   return AVATAR_VARIANTS.some((variant) => variant.value === normalized) ? normalized : 0;
-}
-
-function savedPreviewVariant() {
-  try {
-    return normalizeAvatarVariant(localStorage.getItem('avatarLegendVariant'));
-  } catch {
-    return 0;
-  }
 }
 
 function esc(value) {
@@ -194,36 +147,93 @@ async function api(path, options = {}) {
   return response.json();
 }
 
-function scene(label, role, pose, variant = previewVariant) {
-  return SceneArt.sceneMarkup({ pose, role, label, variant, showLabel: false });
-}
-
-function card({ title, note, status, className = '', label, role, pose }) {
-  return `
-    <article class="legendCard ${className}">
-      <div class="legendStage ${className}">
-        ${scene(label, role, pose)}
-      </div>
-      <div class="legendMeta">
-        <h3>${title}</h3>
-        <p>${note}</p>
-        <div class="legendStatus">${status}</div>
-      </div>
-    </article>`;
-}
-
-function renderVariantButtons() {
-  variantButtons.innerHTML = AVATAR_VARIANTS.map((variant) => `
-    <button
-      class="variantButton ${variant.value === previewVariant ? 'active' : ''}"
-      type="button"
-      data-variant="${variant.value}"
-      aria-pressed="${variant.value === previewVariant}"
-    >
-      <span>${variant.label}</span>
-      <small>${variant.versionLabel || `v${variant.value}`}</small>
-    </button>
+function renderAvatarSheets() {
+  legendGrid.innerHTML = AVATAR_SHEETS.map((sheet) => `
+    <article class="avatarSheetCard">
+      <span class="avatarSheetImage">
+        <img src="${sheet.src}" alt="${sheet.label} generated avatar sheet" loading="lazy" draggable="false" />
+        <canvas class="avatarSheetCanvas" role="img" aria-label="${sheet.label} generated avatar sheet with transparent background" hidden></canvas>
+      </span>
+      <span class="avatarSheetMeta">
+        <strong>${sheet.label}</strong>
+        <small>${sheet.description} · v${sheet.value}</small>
+      </span>
+    </article>
   `).join('');
+  renderTransparentSheetBackgrounds();
+}
+
+function isPinkBackgroundPixel(data, offset) {
+  const red = data[offset];
+  const green = data[offset + 1];
+  const blue = data[offset + 2];
+  return red > 145
+    && blue > 145
+    && red > green * 1.55
+    && blue > green * 1.45
+    && Math.abs(red - blue) < 105;
+}
+
+function makeSheetBackgroundTransparent(image) {
+  const canvas = image.nextElementSibling;
+  if (!(canvas instanceof HTMLCanvasElement) || !image.naturalWidth || !image.naturalHeight) return;
+
+  try {
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, width, height);
+    const data = pixels.data;
+    const visited = new Uint8Array(width * height);
+    const queue = new Int32Array(width * height);
+    let head = 0;
+    let tail = 0;
+
+    const enqueuePinkPixel = (pixel) => {
+      if (visited[pixel]) return;
+      visited[pixel] = 1;
+      if (!isPinkBackgroundPixel(data, pixel * 4)) return;
+      queue[tail] = pixel;
+      tail += 1;
+    };
+
+    for (let x = 0; x < width; x += 1) {
+      enqueuePinkPixel(x);
+      enqueuePinkPixel((height - 1) * width + x);
+    }
+    for (let y = 1; y < height - 1; y += 1) {
+      enqueuePinkPixel(y * width);
+      enqueuePinkPixel(y * width + width - 1);
+    }
+
+    while (head < tail) {
+      const pixel = queue[head];
+      head += 1;
+      data[pixel * 4 + 3] = 0;
+      const x = pixel % width;
+      if (x > 0) enqueuePinkPixel(pixel - 1);
+      if (x < width - 1) enqueuePinkPixel(pixel + 1);
+      if (pixel >= width) enqueuePinkPixel(pixel - width);
+      if (pixel < width * (height - 1)) enqueuePinkPixel(pixel + width);
+    }
+
+    context.putImageData(pixels, 0, 0);
+    canvas.hidden = false;
+    image.hidden = true;
+  } catch {
+    canvas.hidden = true;
+    image.hidden = false;
+  }
+}
+
+function renderTransparentSheetBackgrounds() {
+  legendGrid.querySelectorAll('.avatarSheetImage img').forEach((image) => {
+    if (image.complete) makeSheetBackgroundTransparent(image);
+    else image.addEventListener('load', () => makeSheetBackgroundTransparent(image), { once: true });
+  });
 }
 
 function renderOfficeSceneButtons() {
@@ -287,22 +297,26 @@ function renderOfficeSceneButtons() {
 }
 
 function renderLegend() {
-  renderVariantButtons();
   renderOfficeSceneButtons();
-  legendGrid.innerHTML = LEGEND_CARDS.map(card).join('');
+  renderAvatarSheets();
 }
 
-function setPreviewVariant(variant) {
-  previewVariant = variant;
-  try { localStorage.setItem('avatarLegendVariant', String(variant)); } catch {}
-  renderLegend();
+function agentConfigKey(agent) {
+  return String(agent?.avatarAssignmentKey || agent?.id || '');
+}
+
+function assignedAvatar(agent) {
+  const key = agentConfigKey(agent);
+  if (Object.prototype.hasOwnProperty.call(assignments, key)) return assignments[key];
+  if (Object.prototype.hasOwnProperty.call(assignments, agent.id)) return assignments[agent.id];
+  return agent.avatarVariant;
 }
 
 function variantSelect(agent) {
-  const assigned = Object.prototype.hasOwnProperty.call(assignments, agent.id) ? assignments[agent.id] : agent.avatarVariant;
-  const value = normalizeAvatarVariant(assigned);
+  const key = agentConfigKey(agent);
+  const value = normalizeAvatarVariant(assignedAvatar(agent));
   return `
-    <select data-agent-id="${esc(agent.id)}" aria-label="Avatar variant for ${esc(agent.name)}">
+    <select data-agent-id="${esc(agent.id)}" data-assignment-key="${esc(key)}" aria-label="Avatar variant for ${esc(agent.name)}">
       ${AVATAR_VARIANTS.map((variant) => `
         <option value="${variant.value}" ${variant.value === value ? 'selected' : ''}>${variant.label}</option>
       `).join('')}
@@ -429,7 +443,7 @@ function renderAssignments() {
     return;
   }
   assignmentList.innerHTML = agents.map((agent) => `
-    <article class="assignmentRow ${isManualAgent(agent) ? 'manual' : ''} ${manualAgentEnabled(agent.id) ? '' : 'disabled'}">
+    <article class="assignmentRow ${isManualAgent(agent) ? 'manual' : ''} ${manualAgentEnabled(agent.id) && !agent.hidden ? '' : 'disabled'}">
       <div class="assignmentAgent">
         ${isManualAgent(agent) ? `
           <label class="manualNameField">
@@ -440,7 +454,7 @@ function renderAssignments() {
           <code>${esc(manualAgentToken(agent.id))}</code>
         ` : `
           <strong>${esc(agent.name)}</strong>
-          <span>${esc(agent.id)} · ${esc(agent.role || 'agent')}</span>
+          <span>${esc(agent.id)} · ${esc(agent.role || 'agent')}${agent.hidden ? ' · disabled in office' : ''}</span>
         `}
       </div>
       <div class="assignmentPreview">
@@ -448,7 +462,7 @@ function renderAssignments() {
           pose: agent.pose || (agent.status === 'blocked' ? 'blocked' : agent.status === 'active' ? 'working' : 'coffee'),
           role: agent.role || 'agent',
           label: agent.name,
-          variant: Object.prototype.hasOwnProperty.call(assignments, agent.id) ? assignments[agent.id] : agent.avatarVariant,
+          variant: assignedAvatar(agent),
           showLabel: false
         })}
       </div>
@@ -460,16 +474,23 @@ function renderAssignments() {
         <span>Workspace</span>
         <input data-agent-workspace="${esc(agent.id)}" value="${esc(taskAgentSettings(agent).workspacePath)}" placeholder="/shared/workspace" aria-label="Task workspace for ${esc(agent.name)}" />
       </label>
-      <div class="taskAgentToggle">
-        <span>Tasks</span>
-        <button class="secondary" type="button" data-toggle-task-agent="${esc(agent.id)}">${taskAgentSettings(agent).enabled ? 'Active' : 'Inactive'}</button>
-      </div>
+      ${modules.tasks.enabled !== false ? `
+        <div class="taskAgentToggle">
+          <span>Tasks</span>
+          <button class="secondary" type="button" data-toggle-task-agent="${esc(agent.id)}">${taskAgentSettings(agent).enabled ? 'Active' : 'Inactive'}</button>
+        </div>
+      ` : ''}
       ${isManualAgent(agent) ? `
         <div class="manualAgentActions">
           <button class="secondary" type="button" data-toggle-agent="${esc(agent.id)}">${manualAgentEnabled(agent.id) ? 'Disable' : 'Enable'}</button>
           <button class="secondary dangerButton" type="button" data-delete-agent="${esc(agent.id)}">Delete</button>
         </div>
-      ` : ''}
+      ` : `
+        <div class="manualAgentActions">
+          <button class="secondary" type="button" data-toggle-visible-agent="${esc(agentConfigKey(agent))}">${agent.hidden ? 'Restore' : 'Disable'}</button>
+          ${agent.runtime ? `<button class="secondary dangerButton" type="button" data-remove-runtime-agent="${esc(agent.id)}" data-assignment-key="${esc(agentConfigKey(agent))}">Remove</button>` : ''}
+        </div>
+      `}
     </article>
   `).join('');
 }
@@ -478,42 +499,98 @@ async function loadAssignments() {
   assignmentStatus.textContent = 'Loading agents…';
   try {
     const [agentData, assignmentData] = await Promise.all([
-      api(`/api/agents?t=${Date.now()}`),
+      api(`/api/agents?includeHidden=1&t=${Date.now()}`),
       api(`/api/avatar-assignments?t=${Date.now()}`)
     ]);
     assignments = assignmentData.assignments || {};
+    hiddenAgents = Array.isArray(assignmentData.hiddenAgents) ? assignmentData.hiddenAgents : [];
     manualAgents = Array.isArray(assignmentData.manualAgents) ? assignmentData.manualAgents : [];
     taskAgents = assignmentData.taskAgents && typeof assignmentData.taskAgents === 'object' ? assignmentData.taskAgents : {};
     modules = normalizeModules(assignmentData.modules);
     agents = mergeManualAgentsIntoAgentList(Array.isArray(agentData.agents) ? agentData.agents : []);
+    let migratedAssignments = false;
+    for (const agent of agents) {
+      const key = agentConfigKey(agent);
+      if (key === agent.id || Object.prototype.hasOwnProperty.call(assignments, key) || !Object.prototype.hasOwnProperty.call(assignments, agent.id)) continue;
+      assignments[key] = assignments[agent.id];
+      delete assignments[agent.id];
+      migratedAssignments = true;
+    }
+    const openCodeProjectKeys = [...new Set(agents
+      .map((agent) => agentConfigKey(agent))
+      .filter((key) => key.startsWith('runtime:opencode-project:')))];
+    const hasSingleOpenCodeAgent = agents.some((agent) => agentConfigKey(agent) === 'runtime:opencode-single');
+    if (hasSingleOpenCodeAgent
+      && !Object.prototype.hasOwnProperty.call(assignments, 'runtime:opencode-single')
+      && Object.prototype.hasOwnProperty.call(assignments, 'runtime:opencode')) {
+      assignments['runtime:opencode-single'] = assignments['runtime:opencode'];
+      delete assignments['runtime:opencode'];
+      migratedAssignments = true;
+    }
+    if (hasSingleOpenCodeAgent && hiddenAgents.includes('runtime:opencode')) {
+      hiddenAgents = [...new Set([
+        ...hiddenAgents.filter((key) => key !== 'runtime:opencode'),
+        'runtime:opencode-single'
+      ])];
+      migratedAssignments = true;
+    }
+    if (openCodeProjectKeys.length) {
+      const legacyOpenCodeKeys = Object.keys(assignments).filter((key) => key.startsWith('opencode:'));
+      const legacyVariant = assignments['runtime:opencode'] ?? (legacyOpenCodeKeys.length
+        ? assignments[legacyOpenCodeKeys.at(-1)]
+        : undefined);
+      if (legacyVariant !== undefined) {
+        for (const key of openCodeProjectKeys) {
+          if (!Object.prototype.hasOwnProperty.call(assignments, key)) assignments[key] = legacyVariant;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(assignments, 'runtime:opencode')) {
+        delete assignments['runtime:opencode'];
+        migratedAssignments = true;
+      }
+      for (const key of legacyOpenCodeKeys) delete assignments[key];
+      migratedAssignments = migratedAssignments || legacyOpenCodeKeys.length > 0;
+
+      const hadLegacyHiddenState = hiddenAgents.includes('runtime:opencode')
+        || hiddenAgents.some((key) => key.startsWith('opencode:'));
+      if (hadLegacyHiddenState) {
+        hiddenAgents = [...new Set([
+          ...hiddenAgents.filter((key) => key !== 'runtime:opencode' && !key.startsWith('opencode:')),
+          ...openCodeProjectKeys
+        ])];
+        migratedAssignments = true;
+      }
+    }
     officeScene = normalizeOfficeScene(assignmentData.officeScene || agentData.officeScene);
     const path = assignmentData.path ? ` · ${assignmentData.path}` : '';
     assignmentStatus.textContent = `Saved assignments${path}`;
     renderLegend();
     renderModuleControls();
     renderAssignments();
+    if (migratedAssignments) await saveAssignments();
   } catch (err) {
     assignmentStatus.textContent = `Unable to load assignments: ${err.message}`;
     assignmentList.innerHTML = '<div class="assignmentEmpty">Open this page through http://localhost:3000/avatar-legend.html to save assignments.</div>';
   }
 }
 
-async function saveAssignments() {
+async function saveAssignments(reload = true) {
   if (savingAssignments) return;
   savingAssignments = true;
   assignmentStatus.textContent = 'Saving assignments…';
   try {
     const data = await api('/api/avatar-assignments', {
       method: 'PUT',
-      body: JSON.stringify({ assignments, manualAgents, taskAgents, modules, officeScene })
+      body: JSON.stringify({ assignments, hiddenAgents, manualAgents, taskAgents, modules, officeScene })
     });
     assignments = data.assignments || {};
+    hiddenAgents = Array.isArray(data.hiddenAgents) ? data.hiddenAgents : hiddenAgents;
     manualAgents = Array.isArray(data.manualAgents) ? data.manualAgents : manualAgents;
     taskAgents = data.taskAgents && typeof data.taskAgents === 'object' ? data.taskAgents : taskAgents;
     modules = normalizeModules(data.modules || modules);
     officeScene = normalizeOfficeScene(data.officeScene);
     assignmentStatus.textContent = `Saved assignments · ${data.path}`;
-    await loadAssignments();
+    if (reload) await loadAssignments();
   } catch (err) {
     assignmentStatus.textContent = `Unable to save assignments: ${err.message}`;
   } finally {
@@ -530,12 +607,6 @@ function normalizeOfficeScene(value = {}) {
     emptyDesks: Math.max(0, Math.min(24, Math.trunc(Number(value.emptyDesks) || 0)))
   };
 }
-
-variantButtons.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-variant]');
-  if (!button) return;
-  setPreviewVariant(normalizeAvatarVariant(button.dataset.variant));
-});
 
 floorButtons.addEventListener('click', (event) => {
   const button = event.target.closest('[data-floor]');
@@ -580,6 +651,7 @@ emptyDesksInput.addEventListener('change', () => {
 tasksModuleToggleBtn?.addEventListener('click', () => {
   modules = normalizeModules({ ...modules, tasks: { enabled: modules.tasks.enabled === false } });
   renderModuleControls();
+  renderAssignments();
   saveAssignments();
 });
 
@@ -592,7 +664,7 @@ folderViewModuleToggleBtn?.addEventListener('click', () => {
 assignmentList.addEventListener('change', (event) => {
   const select = event.target.closest('select[data-agent-id]');
   if (!select) return;
-  assignments[select.dataset.agentId] = normalizeAvatarVariant(select.value);
+  assignments[select.dataset.assignmentKey || select.dataset.agentId] = normalizeAvatarVariant(select.value);
   renderAssignments();
   saveAssignments();
 });
@@ -625,9 +697,39 @@ assignmentList.addEventListener('focusout', (event) => {
   saveAssignments();
 });
 
-assignmentList.addEventListener('click', (event) => {
+assignmentList.addEventListener('click', async (event) => {
+  const removeRuntimeButton = event.target.closest('[data-remove-runtime-agent]');
+  if (removeRuntimeButton) {
+    const id = removeRuntimeButton.dataset.removeRuntimeAgent;
+    const key = removeRuntimeButton.dataset.assignmentKey || id;
+    assignmentStatus.textContent = `Removing ${id}…`;
+    try {
+      await api(`/api/runtime-agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      delete assignments[key];
+      delete assignments[id];
+      delete taskAgents[id];
+      hiddenAgents = hiddenAgents.filter((entry) => entry !== key && entry !== id);
+      agents = agents.filter((agent) => agent.id !== id);
+      renderAssignments();
+      await saveAssignments(false);
+    } catch (err) {
+      assignmentStatus.textContent = `Unable to remove agent: ${err.message}`;
+    }
+    return;
+  }
+  const visibilityButton = event.target.closest('[data-toggle-visible-agent]');
+  if (visibilityButton) {
+    const key = visibilityButton.dataset.toggleVisibleAgent;
+    const hidden = hiddenAgents.includes(key);
+    hiddenAgents = hidden ? hiddenAgents.filter((entry) => entry !== key) : [...new Set([...hiddenAgents, key])];
+    agents = agents.map((agent) => agentConfigKey(agent) === key ? { ...agent, hidden: !hidden } : agent);
+    renderAssignments();
+    saveAssignments();
+    return;
+  }
   const taskToggleButton = event.target.closest('[data-toggle-task-agent]');
   if (taskToggleButton) {
+    if (modules.tasks.enabled === false) return;
     const agent = agents.find((item) => item.id === taskToggleButton.dataset.toggleTaskAgent);
     if (!agent) return;
     const current = taskAgentSettings(agent);
@@ -667,7 +769,7 @@ reloadAssignmentsBtn.addEventListener('click', loadAssignments);
 addAgentBtn.addEventListener('click', () => {
   const agent = newManualAgent();
   manualAgents = [...manualAgents, agent];
-  assignments[agent.id] = previewVariant;
+  assignments[agent.id] = 0;
   agents = [...agents, { ...agent, role: 'Manual agent', status: 'idle', displayState: 'Sleeping', pose: 'sleeping', disabled: false }];
   renderAssignments();
   saveAssignments();

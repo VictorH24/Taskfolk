@@ -1,8 +1,8 @@
-# Claw OS
+# Taskfolk
 
-Claw OS is a a Mission Control Dashboard.
+Taskfolk is a visual mission control dashboard that lets you watch your AI team at work.
 
-![Claw OS Cover](docs/agentsoffice_day.gif)
+![Taskfolk pixel office](docs/taskfolk_day.gif)
 
 
 ## Features
@@ -23,13 +23,93 @@ npm start
 
 Open <http://localhost:3000>.
 
+## Taskfolk desktop companion
+
+Taskfolk includes an Electron companion that shows the pixel office in a small native window. Left-click and drag anywhere inside the window to move it; a narrow six-pixel edge remains reserved for resizing. The window remembers separate bounds for each display mode, can stay above other windows, and keeps running from the system tray or menu bar.
+
+The packaged desktop app uses the universal digital-agent icon at `desktop/icon.png` for application windows, the Dock, and installers.
+
+Launch the desktop app:
+
+```bash
+npm run desktop
+```
+
+On first launch, choose one of two office sources:
+
+- **Run in this app** starts a private Taskfolk server bound to a random loopback port. It requires no separately running server and currently offers local OpenCode and VS Code Copilot agents only. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
+- **Connect to a remote server** uses a running Taskfolk URL (for example `http://127.0.0.1:3000`), its gateway token, and optional gateway password. The companion exchanges those credentials for the normal Taskfolk session cookie.
+
+Remote credentials are never placed in the URL and are encrypted with Electron `safeStorage` when operating-system encryption is available. You can switch office sources later from **Setup**.
+
+For managed or temporary launches, settings can be supplied without saving them:
+
+```bash
+TASKFOLK_URL=http://127.0.0.1:3000 \
+TASKFOLK_TOKEN=your-gateway-token \
+npm run desktop
+```
+
+Set `TASKFOLK_PASSWORD` too when the gateway requires one. Environment credentials take precedence over saved settings for that launch.
+
+### Track OpenCode Desktop and terminal sessions
+
+The desktop companion can publish local OpenCode activity into the connected Taskfolk dashboard. OpenCode Desktop is detected automatically while it is running. The companion reads session title, workspace, model, agent, completion state, and timestamps from OpenCode's local SQLite database; it does not read prompts, message text, tool output, or credentials.
+
+For OpenCode terminal sessions, start the TUI on a fixed loopback port so the companion can attach to the same session server:
+
+```bash
+opencode --port 4096
+```
+
+In **Setup**, enable **Track OpenCode Desktop and terminal sessions**, then choose **One agent per project** or **One agent for all projects**. The adapter merges automatically discovered Desktop activity with the terminal server's `/session/status` and `/session` endpoints, sends normalized session metadata to Taskfolk, and removes runtime agents when OpenCode becomes unavailable. Each grouping mode keeps its own stable avatar configuration.
+
+Each OpenCode project gets its own stable avatar configuration key, so it keeps an independent avatar across new sessions and restarts even though OpenCode changes the underlying session ID. Up to 24 recently active projects can appear at once. The Config page automatically migrates the former global and older per-session OpenCode assignments onto discovered projects. Use **Disable** to hide a project while preserving its configuration, or **Remove** to forget its avatar and task settings and drop it from the current discovery snapshot. A removed project can reappear with the default configuration the next time OpenCode publishes it.
+
+If the OpenCode server uses HTTP Basic authentication, enter its username and password in Setup. The default username is `opencode`. The password is encrypted with Electron `safeStorage` when operating-system encryption is available. Managed launches can provide `OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` instead.
+
+### Track Visual Studio Code Copilot chats
+
+The desktop companion can also publish GitHub Copilot chat activity from Visual Studio Code and Visual Studio Code Insiders. In **Setup**, enable **Track Visual Studio Code Copilot chats**, then choose **One agent per project** or **One agent for all projects**. No Copilot server, token, or additional VS Code extension is required.
+
+This connector reads VS Code's local, machine-scoped chat index and session file timestamps in read-only mode. It uses only the workspace identity, session title, empty-session flag, and timestamps needed to build Taskfolk agents. It does not load or publish prompt bodies, response text, tool output, attachments, or Copilot credentials. Sessions are shown only while VS Code is running, empty chats are ignored, and each workspace keeps a stable avatar configuration key across chat sessions and restarts.
+
+The Taskfolk server keeps desktop-published runtime agents in memory and expires them after 90 seconds without an update. Override this with `RUNTIME_AGENT_TTL_MS` if needed.
+
+The setup page can choose between the full office and a single live avatar on a transparent background. In avatar mode, choose which connected agent to display; its pose continues to update from the live agent state. The setup page also controls window opacity from 25% to 100%.
+
+Choose **Most recently updated (automatic)** in Setup or the single-avatar right-click menu to follow agent activity automatically. On every live refresh, the companion compares the agents' latest activity timestamps and switches to the avatar whose status or session data changed most recently.
+
+In single-avatar mode, transparent pixels are click-through: clicks and scrolling pass to the application underneath. Opaque avatar pixels remain interactive so they can be dragged or right-clicked to open the companion menu.
+
+The single-avatar right-click menu includes **Avatar Size** presets for Tiny (120×150), Extra Small (150×190), Small (220×280), Medium (300×380), Large (420×540), and Extra Large (560×720). Presets resize around the current window center, remain inside the active screen, and are remembered for the next launch.
+
+Setup also accepts a custom avatar width and height. Values are constrained to 120–1200 pixels wide and 150–1200 pixels high. Use **Reset to 300 × 380** to restore the default avatar dimensions before applying the settings.
+
+Right-click anywhere in the companion window to switch back to **Office View**, choose a different agent from **Single Avatar**, change an opacity preset, open **Setup** or the full **Config** page, reload, hide, toggle **Always on Top**, or quit. Setup and Config are also available from the **Office** application menu and tray icon. Config opens in a separate authenticated desktop window and works with both local and remote office modes.
+
+When changing views or reloading, the companion hides the remote page immediately, displays an animated loading indicator, waits for the office or avatar artwork to finish rendering, and then fades the completed view into place.
+
+The web dashboard's dedicated companion displays can also be opened directly after logging in:
+
+- Full office: `/index.html?companion=1`
+- One avatar: `/index.html?companion=1&companionView=avatar&agent=AGENT_ID`
+
+To produce an installer for the current platform:
+
+```bash
+npm run desktop:dist
+```
+
+Installers are written to `dist/`, which is gitignored.
+
 ## Run in docker
 
 docker compose up -d --build
 
 ## Gateway login
 
-Claw OS supports the same auth shape as OpenClaw gateway config:
+Taskfolk supports the same auth shape as OpenClaw gateway config:
 
 ```json
 {
@@ -52,7 +132,7 @@ GATEWAY_AUTH_PASSWORD=optional-password
 GATEWAY_AUTH_SECURE_COOKIE=false
 ```
 
-Docker Compose reads that `.env` file for the `${GATEWAY_AUTH_*}` substitutions in `docker-compose.yml`, and the service maps them into Claw OS auth. Env values take precedence over `gateway.auth.*` in the mounted `openclaw.json`, so you can keep secrets outside the config file.
+Docker Compose reads that `.env` file for the `${GATEWAY_AUTH_*}` substitutions in `docker-compose.yml`, and the service maps them into Taskfolk auth. Env values take precedence over `gateway.auth.*` in the mounted `openclaw.json`, so you can keep secrets outside the config file.
 
 Leave `GATEWAY_AUTH_SECURE_COOKIE=false` for local plain-HTTP access such as `http://127.0.0.1:3000`. Set it to `true` only when the page is served over HTTPS.
 
@@ -111,17 +191,17 @@ You can also pass the token as `X-Agent-Token` and omit `token` from the JSON bo
 
 ### Agent status skill
 
-This repo includes a reusable skill at `skills/claw-agent-status/SKILL.md` for agents that should update their own office status. Add the manual agent token to that agent's environment as `CLAW_OS_AGENT_TOKEN`; optionally set `CLAW_OS_AGENT_STATUS_URL` if Claw OS is not at `http://localhost:3000/api/agent-state`.
+This repo includes a reusable skill at `skills/taskfolk-agent-status/SKILL.md` for agents that should update their own office status. Add the manual agent token to that agent's environment as `TASKFOLK_AGENT_TOKEN`; optionally set `TASKFOLK_AGENT_STATUS_URL` if Taskfolk is not at `http://localhost:3000/api/agent-state`.
 
 Add this to the agent's `SOUL.MD`:
 
 ```md
-Use the `claw-agent-status` skill for every task. Set your Claw OS status to Working before beginning work, and set it to Sleeping before sending the final response.
+Use the `taskfolk-agent-status` skill for every task. Set your Taskfolk status to Working before beginning work, and set it to Sleeping before sending the final response.
 ```
 
 ### Status calculation
 
-Claw OS now starts from configured agents in `openclaw.json` and overlays matching session/log activity:
+Taskfolk starts from configured agents in `openclaw.json` and overlays matching session/log activity:
 
 - The primary source is `agents.list[]` in `openclaw.json`; each entry uses `id` and `name` for the dashboard card.
 - If `agents.list[]` is missing, config entries under agent-like containers such as `agents`, `agentProfiles`, `agentConfigs`, `assistants`, or `sessions` are used as a fallback.

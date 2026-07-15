@@ -201,6 +201,87 @@ body.pixel-office-fullscreen #pixelFullscreenBtn {
   pointer-events: auto;
   box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
 }
+.companionDragRegion { display: none; }
+body.companion-mode .companionDragRegion {
+  display: block;
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 2000;
+  height: 38px;
+  pointer-events: none;
+}
+body.companion-mode { cursor: grab; user-select: none; }
+body.companion-mode.companion-dragging { cursor: grabbing; }
+body.companion-mode.pixel-office-fullscreen .dashboardHero {
+  display: none;
+}
+body.companion-mode.pixel-office-fullscreen .officeMap.pixelOfficeWrap {
+  padding-top: max(38px, 2vw);
+}
+html:has(body.companion-avatar-mode),
+body.companion-avatar-mode {
+  background: transparent !important;
+}
+body.companion-avatar-mode.pixel-office-fullscreen .missionControl,
+body.companion-avatar-mode.pixel-office-fullscreen main {
+  background: transparent;
+}
+body.companion-avatar-mode .companionAvatarStage {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: transparent;
+}
+body.companion-avatar-mode .companionAvatar {
+  position: relative;
+  width: min(82vw, calc(82vh * .75), 360px);
+  aspect-ratio: 3 / 4;
+  filter: drop-shadow(0 10px 10px rgba(0, 0, 0, .22));
+}
+body.companion-avatar-mode .companionAvatarName {
+  position: absolute;
+  left: 50%;
+  bottom: 3%;
+  max-width: 90%;
+  padding: .42rem .7rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 999px;
+  background: rgba(11, 16, 26, .84);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, .28);
+  color: #f8f0dc;
+  font: 700 clamp(10px, 3.6vw, 14px)/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 5px);
+  transition: opacity .14s ease, transform .14s ease;
+}
+body.companion-avatar-mode:hover .companionAvatarName {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+body.companion-avatar-mode .companionAvatar--enter {
+  animation: companionAvatarEnter .2s ease-out both;
+}
+@keyframes companionAvatarEnter {
+  from { opacity: 0; transform: scale(.94); }
+  to { opacity: 1; transform: scale(1); }
+}
+body.companion-avatar-mode .companionAvatar > .sceneFigure {
+  width: 100%;
+  height: 100%;
+}
+body.companion-avatar-mode .companionAvatarEmpty {
+  padding: .65rem .8rem;
+  border-radius: 10px;
+  background: rgba(11, 16, 26, .82);
+  color: #f8f0dc;
+  font: 700 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 .browser, .preview {
   background: var(--panel);
   border: 1px solid var(--line);

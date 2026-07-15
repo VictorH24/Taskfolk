@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Taskfolk Settings</title>
+  <link rel="stylesheet" href="./settings.css" />
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">T</div>
+    <p class="eyebrow">Desktop companion</p>
+    <h1>Taskfolk</h1>
+    <p class="intro">Run Taskfolk directly in this app, or connect it to an existing Taskfolk server.</p>
+
+    <form id="settingsForm">
+      <label class="connectionModeField">
+        <span>Office source</span>
+        <select id="connectionMode" name="connectionMode">
+          <option value="local">Run in this app</option>
+          <option value="remote">Connect to a remote server</option>
+        </select>
+      </label>
+      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. For now, local agents can come from OpenCode and VS Code Copilot.</p>
+      <div id="remoteConnectionFields" class="remoteConnectionFields">
+        <label>
+          <span>Taskfolk URL</span>
+          <input id="url" name="url" type="url" placeholder="http://127.0.0.1:3000" />
+        </label>
+        <label>
+          <span>Gateway token</span>
+          <input id="token" name="token" type="password" autocomplete="off" placeholder="Leave blank to keep the saved token" />
+        </label>
+        <label>
+          <span>Gateway password <small>optional</small></span>
+          <input id="password" name="password" type="password" autocomplete="off" placeholder="Only required when configured" />
+        </label>
+      </div>
+      <div class="displayGrid">
+        <label>
+          <span>Display</span>
+          <select id="displayMode" name="displayMode">
+            <option value="office">Full office</option>
+            <option value="avatar">Single avatar</option>
+          </select>
+        </label>
+        <label id="agentField">
+          <span>Avatar</span>
+          <select id="selectedAgent" name="selectedAgent">
+            <option value="__latest__">Most recently updated (automatic)</option>
+            <option value="">First available agent</option>
+          </select>
+        </label>
+      </div>
+      <div id="avatarSizeField" class="customSizeField">
+        <div class="customSizeHeader">
+          <span>Custom avatar size</span>
+          <button id="resetAvatarSize" class="secondaryButton" type="button">Reset to 300 × 380</button>
+        </div>
+        <div class="sizeInputs">
+          <label>
+            <span>Width</span>
+            <input id="avatarWidth" name="avatarWidth" type="number" min="120" max="1200" step="1" value="300" />
+          </label>
+          <label>
+            <span>Height</span>
+            <input id="avatarHeight" name="avatarHeight" type="number" min="150" max="1200" step="1" value="380" />
+          </label>
+        </div>
+        <small>Applied to single-avatar mode. Presets remain available from the right-click menu.</small>
+      </div>
+      <label class="rangeField">
+        <span>Window opacity <output id="opacityValue" for="opacity">100%</output></span>
+        <input id="opacity" name="opacity" type="range" min="25" max="100" step="5" value="100" />
+      </label>
+      <label class="checkRow">
+        <input id="alwaysOnTop" name="alwaysOnTop" type="checkbox" />
+        <span>Keep the office above other windows</span>
+      </label>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="openCodeEnabled" name="openCodeEnabled" type="checkbox" />
+          <span>Track OpenCode Desktop and terminal sessions</span>
+        </label>
+        <label id="openCodeGroupingField">
+          <span>OpenCode agents</span>
+          <select id="openCodeGrouping" name="openCodeGrouping">
+            <option value="project">One agent per project</option>
+            <option value="single">One agent for all projects</option>
+          </select>
+          <small>Choose whether projects keep separate avatars or share one OpenCode avatar.</small>
+        </label>
+        <label id="openCodeUrlField">
+          <span>Terminal server URL <small>optional fallback</small></span>
+          <input id="openCodeUrl" name="openCodeUrl" type="url" value="http://127.0.0.1:4096" />
+          <small>OpenCode Desktop is detected automatically. For terminal tracking, start OpenCode with <code>opencode --port 4096</code>.</small>
+        </label>
+        <div id="openCodeAuthFields" class="displayGrid">
+          <label>
+            <span>OpenCode username</span>
+            <input id="openCodeUsername" name="openCodeUsername" value="opencode" />
+          </label>
+          <label>
+            <span>OpenCode password <small>optional</small></span>
+            <input id="openCodePassword" name="openCodePassword" type="password" autocomplete="off" />
+          </label>
+        </div>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="vsCodeCopilotEnabled" name="vsCodeCopilotEnabled" type="checkbox" />
+          <span>Track Visual Studio Code Copilot chats</span>
+        </label>
+        <label id="vsCodeCopilotGroupingField">
+          <span>VS Code Copilot agents</span>
+          <select id="vsCodeCopilotGrouping" name="vsCodeCopilotGrouping">
+            <option value="project">One agent per project</option>
+            <option value="single">One agent for all projects</option>
+          </select>
+          <small>Reads local VS Code chat metadata only. Prompts, responses, tool output, and credentials stay private.</small>
+        </label>
+      </section>
+      <button id="connectButton" type="submit">Run and open office</button>
+    </form>
+
+    <p id="message" class="message" role="status"></p>
+    <p id="securityNote" class="securityNote"></p>
+  </main>
+  <script src="./settings.js"></script>
+</body>
+</html>

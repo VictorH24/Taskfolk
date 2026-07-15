@@ -1,16 +1,46 @@
 {
-  "name": "claw-os",
+  "name": "taskfolk",
   "version": "1.0.0",
   "private": true,
-  "description": "Dockerized Claw OS web UI with Mission Control, agent dashboards, and shared workspace tools.",
+  "description": "Taskfolk is a visual mission control dashboard for AI agents and shared workspace tools.",
+  "main": "desktop/main.cjs",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node --test test/*.test.cjs",
+    "desktop": "electron .",
+    "desktop:dist": "electron-builder"
   },
   "dependencies": {
     "express": "^4.18.3",
     "multer": "^2.1.1",
     "tar": "^7.5.13"
+  },
+  "devDependencies": {
+    "electron": "^43.1.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.taskfolk.desktop",
+    "productName": "Taskfolk",
+    "icon": "desktop/icon.png",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "public/**/*",
+      "server.js",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility"
+    }
   }
 }

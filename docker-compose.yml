@@ -1,7 +1,7 @@
 services:
-  claw-os:
+  taskfolk:
     build: .
-    container_name: Claw-Os
+    container_name: Taskfolk
     restart: unless-stopped
     # user: "${UID:-1000}:${GID:-1000}"
     ports:

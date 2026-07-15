@@ -266,6 +266,72 @@ main.legendPage {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 78%);
 }
 
+.avatarSheetGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  gap: 1rem;
+  padding: 1rem;
+  align-items: start;
+}
+
+.avatarSheetCard {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink);
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 16px 40px var(--shadow);
+}
+
+.avatarSheetImage {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  background:
+    linear-gradient(45deg, rgba(109, 94, 252, .06) 25%, transparent 25%, transparent 75%, rgba(109, 94, 252, .06) 75%),
+    linear-gradient(45deg, rgba(109, 94, 252, .06) 25%, transparent 25%, transparent 75%, rgba(109, 94, 252, .06) 75%),
+    var(--panel);
+  background-position: 0 0, 12px 12px;
+  background-size: 24px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.avatarSheetImage img,
+.avatarSheetCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.avatarSheetImage [hidden] {
+  display: none;
+}
+
+.avatarSheetMeta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .8rem .9rem;
+}
+
+.avatarSheetMeta strong {
+  font-size: .95rem;
+}
+
+.avatarSheetMeta small {
+  color: var(--muted);
+  font-size: .75rem;
+  text-align: right;
+}
+
 .legendGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -367,10 +433,6 @@ main.legendPage {
   background: color-mix(in srgb, var(--panel-2), transparent 16%);
   border: 1px solid color-mix(in srgb, var(--line), transparent 20%);
   border-radius: 14px;
-}
-
-.assignmentRow:not(.manual) {
-  grid-template-columns: minmax(0, 1fr) 96px minmax(140px, 190px) minmax(180px, 260px) auto;
 }
 
 .assignmentRow.disabled {
