@@ -34,7 +34,7 @@ These avatars animate in the companion as their live state changes:
 
 | Variant 0 | Robot | Working | Coffee break |
 | :---: | :---: | :---: | :---: |
-| <img src="docs/taskfolk-avatar-variant-0.gif" alt="Animated Taskfolk avatar variant 0 working at a desk" width="180"> | <img src="docs/taskfolk-avatar-robot.gif" alt="Animated Taskfolk robot avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-working.gif" alt="Animated Taskfolk cat avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-coffee.gif" alt="Animated Taskfolk avatar taking a coffee break" width="180"> |
+| <img src="docs/taskfolk-avatar-reading.gif" alt="Animated Taskfolk avatar variant 0 working at a desk" width="180"> | <img src="docs/taskfolk-avatar-robot.gif" alt="Animated Taskfolk robot avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-working.gif" alt="Animated Taskfolk cat avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-coffee.gif" alt="Animated Taskfolk avatar taking a coffee break" width="180"> |
 
 ### Live coding-session support
 
