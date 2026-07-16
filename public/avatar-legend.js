@@ -16,54 +16,34 @@ const tasksModuleStatus = document.querySelector('#tasksModuleStatus');
 const folderViewModuleToggleBtn = document.querySelector('#folderViewModuleToggleBtn');
 const folderViewModuleStatus = document.querySelector('#folderViewModuleStatus');
 
+const isDesktopConfig = new URLSearchParams(window.location.search).get('app') === 'desktop';
+document.body.classList.toggle('desktopConfig', isDesktopConfig);
+
 const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3000' : '';
 const AVATAR_VARIANTS = [
   { value: 0, label: 'Variant 0(GIF)', versionLabel: 'v0 gif' },
-  { value: 'v0', label: 'Variant 0', versionLabel: 'v0' },
   { value: 'v1_gif', label: 'Variant 1(GIF)', versionLabel: 'v1 gif' },
-  { value: 1, label: 'Variant 1' },
   { value: 'v2_gif', label: 'Variant 2(GIF)', versionLabel: 'v2 gif' },
-  { value: 2, label: 'Variant 2' },
   { value: 'v3_gif', label: 'Variant 3(GIF)', versionLabel: 'v3 gif' },
-  { value: 3, label: 'Variant 3' },
   { value: 'v4_gif', label: 'Variant 4(GIF)', versionLabel: 'v4 gif' },
-  { value: 4, label: 'Variant 4' },
   { value: 'v5_gif', label: 'Variant 5(GIF)', versionLabel: 'v5 gif' },
-  { value: 5, label: 'Variant 5' },
   { value: 'v6_gif', label: 'Variant 6(GIF)', versionLabel: 'v6 gif' },
-  { value: 6, label: 'Variant 6' },
   { value: 'v7_gif', label: 'Variant 7(GIF)', versionLabel: 'v7 gif' },
-  { value: 7, label: 'Variant 7' },
   { value: 'v8_gif', label: 'Variant 8 Robot (GIF)', versionLabel: 'v8 robot gif' },
-  { value: 8, label: 'Variant 8 Robot', versionLabel: 'v8 robot' },
   { value: 'v9_gif', label: 'Variant 9 Robot (GIF)', versionLabel: 'v9 robot gif' },
-  { value: 9, label: 'Variant 9 Robot', versionLabel: 'v9 robot' },
   { value: 'v10_gif', label: 'Variant 10 Dog (GIF)', versionLabel: 'v10 dog gif' },
-  { value: 10, label: 'Variant 10 Dog', versionLabel: 'v10 dog' },
   { value: 'v11_gif', label: 'Variant 11 Cat (GIF)', versionLabel: 'v11 cat gif' },
-  { value: 11, label: 'Variant 11 Cat', versionLabel: 'v11 cat' },
   { value: 'v12_gif', label: 'Variant 12 Gorilla (GIF)', versionLabel: 'v12 gorilla gif' },
-  { value: 12, label: 'Variant 12 Gorilla', versionLabel: 'v12 gorilla' },
   { value: 'v13_gif', label: 'Variant 13 Tiger (GIF)', versionLabel: 'v13 tiger gif' },
-  { value: 13, label: 'Variant 13 Tiger', versionLabel: 'v13 tiger' },
   { value: 'v14_gif', label: 'Variant 14 Lion (GIF)', versionLabel: 'v14 lion gif' },
-  { value: 14, label: 'Variant 14 Lion', versionLabel: 'v14 lion' },
   { value: 'v15_gif', label: 'Variant 15 Robot (GIF)', versionLabel: 'v15 robot gif' },
-  { value: 15, label: 'Variant 15 Robot', versionLabel: 'v15 robot' },
   { value: 'v16_gif', label: 'Variant 16 Human Woman (GIF)', versionLabel: 'v16 human woman gif' },
-  { value: 16, label: 'Variant 16 Human Woman', versionLabel: 'v16 human woman' },
   { value: 'v17_gif', label: 'Variant 17 Human Man (GIF)', versionLabel: 'v17 human man gif' },
-  { value: 17, label: 'Variant 17 Human Man', versionLabel: 'v17 human man' },
   { value: 'v18_gif', label: 'Variant 18 Human Woman (GIF)', versionLabel: 'v18 human woman gif' },
-  { value: 18, label: 'Variant 18 Human Woman', versionLabel: 'v18 human woman' },
   { value: 'v19_gif', label: 'Variant 19 Human Man (GIF)', versionLabel: 'v19 human man gif' },
-  { value: 19, label: 'Variant 19 Human Man', versionLabel: 'v19 human man' },
   { value: 'v20_gif', label: 'Variant 20 Human Woman (GIF)', versionLabel: 'v20 human woman gif' },
-  { value: 20, label: 'Variant 20 Human Woman', versionLabel: 'v20 human woman' },
   { value: 'v21_gif', label: 'Variant 21 Human Man (GIF)', versionLabel: 'v21 human man gif' },
-  { value: 21, label: 'Variant 21 Human Man', versionLabel: 'v21 human man' },
-  { value: 'v22_gif', label: 'Variant 22 Blonde Woman (GIF)', versionLabel: 'v22 blonde woman gif' },
-  { value: 22, label: 'Variant 22 Blonde Woman', versionLabel: 'v22 blonde woman' }
+  { value: 'v22_gif', label: 'Variant 22 Blonde Woman (GIF)', versionLabel: 'v22 blonde woman gif' }
 ];
 const AVATAR_SHEET_NAMES = {
   8: 'Robot',
@@ -115,11 +95,15 @@ let savingAssignments = false;
 
 function normalizeAvatarVariant(value) {
   const raw = String(value ?? 0);
+  if (raw === 'v0_gif') return 0;
+  if (/^v\d+_gif$/.test(raw) && AVATAR_VARIANTS.some((variant) => variant.value === raw)) return raw;
   const numeric = Number(value);
-  const normalized = raw === 'v0' || /^v\d+_gif$/.test(raw)
-    ? raw
-    : Number.isInteger(numeric) ? numeric : value;
-  return AVATAR_VARIANTS.some((variant) => variant.value === normalized) ? normalized : 0;
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > 22) return 0;
+  return numeric === 0 ? 0 : `v${numeric}_gif`;
+}
+
+function randomAvatarVariant() {
+  return AVATAR_VARIANTS[Math.floor(Math.random() * AVATAR_VARIANTS.length)].value;
 }
 
 function esc(value) {
@@ -561,6 +545,14 @@ async function loadAssignments() {
         migratedAssignments = true;
       }
     }
+    for (const agent of agents) {
+      const key = agentConfigKey(agent);
+      if (Object.prototype.hasOwnProperty.call(assignments, key)) continue;
+      assignments[key] = agent.avatarVariant === null || agent.avatarVariant === undefined
+        ? randomAvatarVariant()
+        : normalizeAvatarVariant(agent.avatarVariant);
+      migratedAssignments = true;
+    }
     officeScene = normalizeOfficeScene(assignmentData.officeScene || agentData.officeScene);
     const path = assignmentData.path ? ` · ${assignmentData.path}` : '';
     assignmentStatus.textContent = `Saved assignments${path}`;
@@ -769,7 +761,7 @@ reloadAssignmentsBtn.addEventListener('click', loadAssignments);
 addAgentBtn.addEventListener('click', () => {
   const agent = newManualAgent();
   manualAgents = [...manualAgents, agent];
-  assignments[agent.id] = 0;
+  assignments[agent.id] = randomAvatarVariant();
   agents = [...agents, { ...agent, role: 'Manual agent', status: 'idle', displayState: 'Sleeping', pose: 'sleeping', disabled: false }];
   renderAssignments();
   saveAssignments();

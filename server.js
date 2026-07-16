@@ -30,7 +30,7 @@ const TASK_AGENTS_PATH = path.join(TASKS_DIR, 'agents.json');
 const TASK_EVENTS_PATH = path.join(TASKS_DIR, 'task-events.jsonl');
 const PROCESSED_EVENTS_PATH = path.join(TASKS_DIR, 'processed-events.json');
 const TASK_ARCHIVE_PATH = path.join(TASKS_DIR, 'archive.jsonl');
-const AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7, 'v8_gif', 8, 'v9_gif', 9, 'v10_gif', 10, 'v11_gif', 11, 'v12_gif', 12, 'v13_gif', 13, 'v14_gif', 14, 'v15_gif', 15, 'v16_gif', 16, 'v17_gif', 17, 'v18_gif', 18, 'v19_gif', 19, 'v20_gif', 20, 'v21_gif', 21, 'v22_gif', 22];
+const AVATAR_VARIANTS = [0, ...Array.from({ length: 22 }, (_, index) => `v${index + 1}_gif`)];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
@@ -312,9 +312,15 @@ async function requireGatewayAuth(req, res, next) {
 
 function normalizeAvatarVariant(value) {
   const raw = String(value);
-  if ((raw === 'v0' || /^v\d+_gif$/.test(raw)) && AVATAR_VARIANTS.includes(raw)) return raw;
+  if (raw === 'v0_gif') return 0;
+  if (/^v\d+_gif$/.test(raw) && AVATAR_VARIANTS.includes(raw)) return raw;
   const variant = Number(value);
-  return AVATAR_VARIANTS.includes(variant) ? variant : 0;
+  if (!Number.isInteger(variant) || variant < 0 || variant > 22) return 0;
+  return variant === 0 ? 0 : `v${variant}_gif`;
+}
+
+function randomAvatarVariant() {
+  return AVATAR_VARIANTS[crypto.randomInt(AVATAR_VARIANTS.length)];
 }
 
 function normalizeAvatarAssignments(value) {
@@ -2266,6 +2272,17 @@ app.get('/api/agents', async (req, res, next) => {
     for (const runtimeAgent of runtimeAgents) agentById.set(runtimeAgent.id, runtimeAgent);
     for (const manualAgent of manualAgentsFromConfig(avatarConfig, stateFile)) agentById.set(manualAgent.id, manualAgent);
     const mergedAgents = [...agentById.values()];
+    let discoveredAvatar = false;
+    for (const agent of mergedAgents) {
+      const assignmentKey = agent.avatarAssignmentKey || agent.id;
+      if (Object.prototype.hasOwnProperty.call(avatarAssignments, assignmentKey)
+        || Object.prototype.hasOwnProperty.call(avatarAssignments, agent.id)) continue;
+      avatarAssignments[assignmentKey] = randomAvatarVariant();
+      discoveredAvatar = true;
+    }
+    if (discoveredAvatar) {
+      await writeAvatarConfig({ ...avatarConfig, assignments: avatarAssignments });
+    }
     const hiddenAgentKeys = new Set(avatarConfig.hiddenAgents);
     const agentsWithAvatars = mergedAgents.map((agent) => {
       const assignmentKey = agent.avatarAssignmentKey || agent.id;

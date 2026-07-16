@@ -1,20 +1,63 @@
 # Taskfolk
 
-Taskfolk is a visual mission control dashboard that lets you watch your AI team at work.
+Taskfolk is a desktop companion that turns your AI coding sessions into a live pixel office. Keep it beside your editor to see which agents are working, idle, or blocked without opening another dashboard.
+
+![Taskfolk desktop companion showing four live agents in a pixel office](docs/taskfolk-companion.png)
+
+## Start the companion app
+
+```bash
+npm install
+npm run desktop
+```
+
+On first launch, choose how the companion gets its data:
+
+- **Run in this app** starts a private Taskfolk server automatically. No separate server is required. This mode supports local OpenCode and Visual Studio Code Copilot activity.
+- **Connect to a remote server** connects the companion to an existing Taskfolk instance using its URL and gateway credentials.
+
+The companion can display the complete office or one live avatar on a transparent background. Drag it anywhere, resize it, adjust its opacity, keep it above other windows, or leave it running from the tray or menu bar. Window settings are remembered between launches.
+
+### One folk or the whole crew
+
+Switch to **Single Avatar** when you want one compact, transparent companion beside your editor:
+
+![Taskfolk single-avatar companion showing one working folk](docs/taskfolk-single-avatar.png)
+
+Use **Add Another Folk** from the right-click menu to place multiple independent companion windows on screen. Each folk can represent a different connected agent and can be moved or resized separately:
+
+![Taskfolk companion showing three independent avatar windows](docs/taskfolk-multiple-avatars.png)
+
+### Meet some animated folk
+
+These avatars animate in the companion as their live state changes:
+
+| Variant 0 | Robot | Working | Coffee break |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/taskfolk-avatar-variant-0.gif" alt="Animated Taskfolk avatar variant 0 working at a desk" width="180"> | <img src="docs/taskfolk-avatar-robot.gif" alt="Animated Taskfolk robot avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-working.gif" alt="Animated Taskfolk cat avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-coffee.gif" alt="Animated Taskfolk avatar taking a coffee break" width="180"> |
+
+### Live coding-session support
+
+- **OpenCode Desktop and terminal sessions** — detects projects, session state, model, agent, and activity timestamps. For terminal sessions, run `opencode --port 4096` so the companion can connect.
+- **Visual Studio Code Copilot chats** — detects active chats in VS Code and VS Code Insiders without an extra extension, server, or Copilot token.
+- **OpenClaw and manual agents** — connect to a remote Taskfolk server to display configured OpenClaw agents or agents that publish their own status through the API.
+
+Taskfolk reads only the local metadata needed to represent activity. It does not read or publish prompts, response text, tool output, attachments, or credentials. See [Companion app reference](#companion-app-reference) for setup options, privacy details, window controls, and packaging.
+
+## Web dashboard
+
+The same live office is available as a browser dashboard with configuration, shared-folder tools, and optional task views.
 
 ![Taskfolk pixel office](docs/taskfolk_day.gif)
 
+### Dashboard features
 
-## Features
-
-- 2D office-style OpenClaw agent dashboard on the landing page.
 - At-a-glance active, idle, and blocked agent states.
-- Light/dark/system theme toggle retained from the folder app.
-- Folder view switch retains upload, download, preview, edit, and archive features.
-- Optional `OPENCLAW_AGENTS_JSON` environment variable to feed live agent status data.
-- Agent view refreshes live by default and bypasses cached `/api/agents` responses.
+- Live agent refreshes from OpenClaw, desktop connectors, manual agents, or `OPENCLAW_AGENTS_JSON`.
+- Light, dark, and system themes.
+- Upload, download, preview, edit, and archive tools in the folder view.
 
-## Run locally
+### Run the dashboard locally
 
 ```bash
 npm install
@@ -23,19 +66,13 @@ npm start
 
 Open <http://localhost:3000>.
 
-## Taskfolk desktop companion
+## Companion app reference
 
 Taskfolk includes an Electron companion that shows the pixel office in a small native window. Left-click and drag anywhere inside the window to move it; a narrow six-pixel edge remains reserved for resizing. The window remembers separate bounds for each display mode, can stay above other windows, and keeps running from the system tray or menu bar.
 
 The packaged desktop app uses the universal digital-agent icon at `desktop/icon.png` for application windows, the Dock, and installers.
 
-Launch the desktop app:
-
-```bash
-npm run desktop
-```
-
-On first launch, choose one of two office sources:
+Choose one of two office sources:
 
 - **Run in this app** starts a private Taskfolk server bound to a random loopback port. It requires no separately running server and currently offers local OpenCode and VS Code Copilot agents only. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
 - **Connect to a remote server** uses a running Taskfolk URL (for example `http://127.0.0.1:3000`), its gateway token, and optional gateway password. The companion exchanges those credentials for the normal Taskfolk session cookie.
@@ -86,14 +123,9 @@ The single-avatar right-click menu includes **Avatar Size** presets for Tiny (12
 
 Setup also accepts a custom avatar width and height. Values are constrained to 120–1200 pixels wide and 150–1200 pixels high. Use **Reset to 300 × 380** to restore the default avatar dimensions before applying the settings.
 
-Right-click anywhere in the companion window to switch back to **Office View**, choose a different agent from **Single Avatar**, change an opacity preset, open **Setup** or the full **Config** page, reload, hide, toggle **Always on Top**, or quit. Setup and Config are also available from the **Office** application menu and tray icon. Config opens in a separate authenticated desktop window and works with both local and remote office modes.
+Right-click anywhere in the companion window to switch back to **Office View**, choose a different agent from **Single Avatar**, add another independent folk window, change an opacity preset, open **Setup** or the full **Config** page, reload, hide, toggle **Always on Top**, or quit. Setup and Config are also available from the **Office** application menu and tray icon. Config opens in a separate authenticated desktop window and works with both local and remote office modes.
 
 When changing views or reloading, the companion hides the remote page immediately, displays an animated loading indicator, waits for the office or avatar artwork to finish rendering, and then fades the completed view into place.
-
-The web dashboard's dedicated companion displays can also be opened directly after logging in:
-
-- Full office: `/index.html?companion=1`
-- One avatar: `/index.html?companion=1&companionView=avatar&agent=AGENT_ID`
 
 To produce an installer for the current platform:
 

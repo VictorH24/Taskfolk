@@ -147,8 +147,8 @@ function normalizeSession(session, statusValue, nowMs) {
     workspacePath: directory || null,
     source: 'opencode',
     avatarAssignmentKey: project.assignmentKey,
-    displayState: status === 'active' ? 'Working' : status === 'blocked' ? 'Blocked' : 'Sleeping',
-    pose: status === 'active' ? 'working' : status === 'blocked' ? 'blocked' : 'sleeping',
+    displayState: status === 'active' ? 'Working' : status === 'blocked' ? 'Blocked' : 'Idle',
+    pose: status === 'active' ? 'working' : status === 'blocked' ? 'blocked' : null,
     activity: {
       provider: 'opencode',
       status: rawStatus,

@@ -44,8 +44,6 @@ let runtimeCredentials = null;
 let startupError = '';
 let activeBaseUrl = '';
 let availableAgents = [];
-let windowDrag = null;
-let ignoringMouseEvents = false;
 let openCodeTimer = null;
 let openCodeSyncInFlight = false;
 let openCodePublished = false;
@@ -60,40 +58,56 @@ let vsCodeCopilotPublished = false;
 let vsCodeCopilotLastError = '';
 let quitting = false;
 const runtimeAgentMenuSignatures = new Map();
+const companionWindows = new Map();
+const windowDrags = new Map();
+const mouseIgnoringWindows = new Set();
 
-function isOfficeSender(event) {
-  return Boolean(officeWindow && !officeWindow.isDestroyed() && event.sender === officeWindow.webContents);
+function companionWindowForSender(event) {
+  for (const window of companionWindows.keys()) {
+    if (!window.isDestroyed() && event.sender === window.webContents) return window;
+  }
+  return null;
 }
 
 ipcMain.on('office-window-drag:start', (event) => {
-  if (!isOfficeSender(event)) return;
+  const window = companionWindowForSender(event);
+  if (!window) return;
   const cursor = screen.getCursorScreenPoint();
-  const [x, y] = officeWindow.getPosition();
-  windowDrag = { cursor, x, y };
+  const [x, y] = window.getPosition();
+  windowDrags.set(window, { cursor, x, y });
 });
 
 ipcMain.on('office-window-drag:move', (event) => {
-  if (!windowDrag || !isOfficeSender(event)) return;
+  const window = companionWindowForSender(event);
+  const windowDrag = window && windowDrags.get(window);
+  if (!window || !windowDrag) return;
   const cursor = screen.getCursorScreenPoint();
-  officeWindow.setPosition(
+  window.setPosition(
     Math.round(windowDrag.x + cursor.x - windowDrag.cursor.x),
     Math.round(windowDrag.y + cursor.y - windowDrag.cursor.y)
   );
 });
 
 ipcMain.on('office-window-drag:end', (event) => {
-  if (!isOfficeSender(event)) return;
-  windowDrag = null;
-  saveWindowBounds();
+  const window = companionWindowForSender(event);
+  if (!window) return;
+  windowDrags.delete(window);
+  if (window === officeWindow) saveWindowBounds();
 });
 
 ipcMain.on('office-window-mouse:ignore', (event, requested) => {
-  if (!isOfficeSender(event)) return;
-  const ignore = Boolean(requested) && displayMode(readConfig()) === 'avatar';
-  if (ignore === ignoringMouseEvents) return;
-  ignoringMouseEvents = ignore;
-  if (ignore) officeWindow.setIgnoreMouseEvents(true, { forward: true });
-  else officeWindow.setIgnoreMouseEvents(false);
+  const window = companionWindowForSender(event);
+  if (!window) return;
+  const metadata = companionWindows.get(window);
+  const ignore = Boolean(requested) && (metadata?.agentId || displayMode(readConfig()) === 'avatar');
+  if (ignore === mouseIgnoringWindows.has(window)) return;
+  if (ignore) {
+    mouseIgnoringWindows.add(window);
+    window.setIgnoreMouseEvents(true, { forward: true });
+  } else {
+    mouseIgnoringWindows.delete(window);
+    window.setIgnoreMouseEvents(false);
+  }
 });
 
 function displayMode(config = readConfig()) {
@@ -306,7 +320,9 @@ function setAlwaysOnTop(enabled) {
   const config = readConfig();
   const alwaysOnTop = Boolean(enabled);
   writeConfig({ ...config, alwaysOnTop });
-  officeWindow?.setAlwaysOnTop(alwaysOnTop, 'floating');
+  for (const window of companionWindows.keys()) {
+    if (!window.isDestroyed()) window.setAlwaysOnTop(alwaysOnTop, 'floating');
+  }
   rebuildMenus();
 }
 
@@ -341,7 +357,7 @@ function openSettingsWindow(message = '') {
 
 async function openConfigWindow() {
   if (!activeBaseUrl) return openSettingsWindow('Open an office before accessing its Config page.');
-  const configUrl = endpoint(activeBaseUrl, '/avatar-legend.html');
+  const configUrl = endpoint(activeBaseUrl, '/avatar-legend.html?app=desktop');
   if (configWindow && !configWindow.isDestroyed()) {
     if (configWindow.webContents.getURL() !== configUrl) await configWindow.loadURL(configUrl);
     configWindow.show();
@@ -409,11 +425,30 @@ async function fetchAvailableAgents(baseUrl, ses) {
     const data = await response.json();
     return (Array.isArray(data.agents) ? data.agents : []).map((agent) => ({
       id: String(agent.id || ''),
-      name: String(agent.name || agent.id || 'Agent')
+      name: String(agent.name || agent.id || 'Agent'),
+      recencyMs: Math.max(
+        timestampCandidateMs(agent.lastSeen),
+        timestampCandidateMs(agent.updatedAt),
+        timestampCandidateMs(agent.activity?.updatedAt),
+        timestampCandidateMs(agent.activity?.lastInteractionAt),
+        timestampCandidateMs(agent.activity?.lastMessageAt),
+        timestampCandidateMs(agent.activity?.timestamp)
+      )
     })).filter((agent) => agent.id);
   } catch {
     return [];
   }
+}
+
+function timestampCandidateMs(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mostRecentAvailableAgentId() {
+  return [...availableAgents].sort((left, right) => right.recencyMs - left.recencyMs)[0]?.id || '';
 }
 
 async function publishRuntimeAgents(provider, agents, config = readConfig()) {
@@ -441,6 +476,7 @@ async function publishRuntimeAgents(provider, agents, config = readConfig()) {
   if (nextSignature !== runtimeAgentMenuSignatures.get(provider)) {
     runtimeAgentMenuSignatures.set(provider, nextSignature);
     availableAgents = await fetchAvailableAgents(activeBaseUrl, ses);
+    reconcileAdditionalCompanionWindows();
     rebuildMenus();
   }
 }
@@ -582,12 +618,13 @@ function startVsCodeCopilotAdapter() {
   void syncVsCodeCopilotAdapter();
 }
 
-function companionUrl(baseUrl = activeBaseUrl, config = readConfig()) {
+function companionUrl(baseUrl = activeBaseUrl, config = readConfig(), agentId = '') {
   const url = new URL(endpoint(baseUrl, '/index.html'));
   url.searchParams.set('companion', '1');
-  if (displayMode(config) === 'avatar') {
+  if (agentId || displayMode(config) === 'avatar') {
     url.searchParams.set('companionView', 'avatar');
-    if (config.selectedAgent) url.searchParams.set('agent', config.selectedAgent);
+    const selectedAgent = agentId || config.selectedAgent;
+    if (selectedAgent) url.searchParams.set('agent', selectedAgent);
   }
   return url.toString();
 }
@@ -601,13 +638,17 @@ function setOpacity(value) {
   const opacity = normalizedOpacity(value);
   const config = readConfig();
   writeConfig({ ...config, opacity });
-  officeWindow?.setOpacity(opacity);
+  for (const window of companionWindows.keys()) {
+    if (!window.isDestroyed()) window.setOpacity(opacity);
+  }
   rebuildMenus();
 }
 
-function setAvatarWindowSize(width, height) {
-  if (!officeWindow || officeWindow.isDestroyed() || displayMode(readConfig()) !== 'avatar') return;
-  const current = officeWindow.getBounds();
+function setAvatarWindowSize(width, height, targetWindow = officeWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  const metadata = companionWindows.get(targetWindow);
+  if (!metadata?.agentId && displayMode(readConfig()) !== 'avatar') return;
+  const current = targetWindow.getBounds();
   const workArea = screen.getDisplayMatching(current).workArea;
   const nextWidth = Math.min(Math.max(120, Math.round(width)), workArea.width);
   const nextHeight = Math.min(Math.max(150, Math.round(height)), workArea.height);
@@ -618,16 +659,16 @@ function setAvatarWindowSize(width, height) {
   const avatarBounds = { x, y, width: nextWidth, height: nextHeight };
   const config = readConfig();
   writeConfig({ ...config, avatarBounds });
-  officeWindow.setBounds(avatarBounds, process.platform === 'darwin');
+  targetWindow.setBounds(avatarBounds, process.platform === 'darwin');
 }
 
-function avatarSizeMenuItems() {
-  const bounds = officeWindow?.getBounds() || DEFAULT_AVATAR_BOUNDS;
+function avatarSizeMenuItems(targetWindow = officeWindow) {
+  const bounds = targetWindow?.getBounds() || DEFAULT_AVATAR_BOUNDS;
   return AVATAR_SIZE_PRESETS.map((preset) => ({
     label: `${preset.label} (${preset.width} × ${preset.height})`,
     type: 'radio',
     checked: Math.abs(bounds.width - preset.width) <= 2 && Math.abs(bounds.height - preset.height) <= 2,
-    click: () => setAvatarWindowSize(preset.width, preset.height)
+    click: () => setAvatarWindowSize(preset.width, preset.height, targetWindow)
   }));
 }
 
@@ -644,8 +685,8 @@ async function setDisplayMode(mode, selectedAgent = '') {
   writeConfig(nextConfig);
 
   const avatarMode = nextMode === 'avatar';
-  if (!avatarMode && ignoringMouseEvents) {
-    ignoringMouseEvents = false;
+  if (!avatarMode && mouseIgnoringWindows.has(officeWindow)) {
+    mouseIgnoringWindows.delete(officeWindow);
     officeWindow.setIgnoreMouseEvents(false);
   }
   officeWindow.setMinimumSize(avatarMode ? 120 : 360, avatarMode ? 150 : 260);
@@ -655,6 +696,7 @@ async function setDisplayMode(mode, selectedAgent = '') {
   );
   officeWindow.setBounds(nextBounds);
   await loadCompanionView();
+  reconcileAdditionalCompanionWindows();
   rebuildMenus();
 }
 
@@ -686,13 +728,116 @@ function viewMenuItems(config = readConfig()) {
   ];
 }
 
-function showCompanionContextMenu() {
+function displayedAgentIds() {
+  const ids = new Set();
   const config = readConfig();
+  if (officeWindow && !officeWindow.isDestroyed() && displayMode(config) === 'avatar') {
+    const primaryAgentId = config.selectedAgent === MOST_RECENT_AGENT_ID
+      ? mostRecentAvailableAgentId()
+      : config.selectedAgent;
+    if (primaryAgentId) ids.add(primaryAgentId);
+  }
+  for (const [window, metadata] of companionWindows) {
+    if (window !== officeWindow && !window.isDestroyed() && metadata.agentId) ids.add(metadata.agentId);
+  }
+  return ids;
+}
+
+function displayedFolkCount() {
+  const primaryAvatarVisible = Boolean(
+    officeWindow
+    && !officeWindow.isDestroyed()
+    && displayMode(readConfig()) === 'avatar'
+  );
+  let count = primaryAvatarVisible ? 1 : 0;
+  for (const [window, metadata] of companionWindows) {
+    if (window !== officeWindow && !window.isDestroyed() && metadata.agentId) count += 1;
+  }
+  return count;
+}
+
+function availableAdditionalAgents() {
+  if (displayedFolkCount() >= availableAgents.length) return [];
+  const displayed = displayedAgentIds();
+  return availableAgents.filter((agent) => !displayed.has(agent.id));
+}
+
+function reconcileAdditionalCompanionWindows() {
+  const availableIds = new Set(availableAgents.map((agent) => agent.id));
+  const usedIds = new Set();
+  const config = readConfig();
+  if (displayMode(config) === 'avatar' && config.selectedAgent) {
+    usedIds.add(config.selectedAgent === MOST_RECENT_AGENT_ID ? mostRecentAvailableAgentId() : config.selectedAgent);
+  }
+  const additionalWindows = [...companionWindows.entries()]
+    .filter(([window, metadata]) => window !== officeWindow && !window.isDestroyed() && metadata.agentId);
+  for (const [window, metadata] of additionalWindows) {
+    if (!availableIds.has(metadata.agentId) || usedIds.has(metadata.agentId)) {
+      window.close();
+      continue;
+    }
+    usedIds.add(metadata.agentId);
+  }
+  const allowedAdditionalCount = Math.max(0, availableAgents.length - (
+    officeWindow && !officeWindow.isDestroyed() && displayMode(config) === 'avatar' ? 1 : 0
+  ));
+  const survivors = additionalWindows.filter(([window]) => !window.isDestroyed());
+  for (const [window] of survivors.slice(allowedAdditionalCount)) window.close();
+}
+
+function additionalFolkMenuItems() {
+  const remaining = availableAdditionalAgents();
+  if (!availableAgents.length) return [{ label: 'No agents available', enabled: false }];
+  if (!remaining.length) return [{ label: 'All agents are on screen', enabled: false }];
+  return remaining.map((agent) => ({
+    label: agent.name,
+    click: () => createAdditionalCompanionWindow(agent.id)
+  }));
+}
+
+async function setAdditionalWindowAgent(targetWindow, agentId) {
+  const metadata = companionWindows.get(targetWindow);
+  if (!metadata || metadata.primary || !availableAgents.some((agent) => agent.id === agentId)) return;
+  const usedElsewhere = displayedAgentIds();
+  usedElsewhere.delete(metadata.agentId);
+  if (usedElsewhere.has(agentId)) return;
+  metadata.agentId = agentId;
+  try {
+    await targetWindow.loadURL(companionUrl(activeBaseUrl, readConfig(), agentId));
+  } catch (error) {
+    console.warn(`Could not switch companion folk: ${error.message}`);
+  }
+  rebuildMenus();
+}
+
+function additionalAgentMenuItems(targetWindow) {
+  const selectedAgent = companionWindows.get(targetWindow)?.agentId;
+  const usedElsewhere = displayedAgentIds();
+  usedElsewhere.delete(selectedAgent);
+  return availableAgents.map((agent) => ({
+    label: agent.name,
+    type: 'radio',
+    checked: agent.id === selectedAgent,
+    enabled: agent.id === selectedAgent || !usedElsewhere.has(agent.id),
+    click: () => setAdditionalWindowAgent(targetWindow, agent.id)
+  }));
+}
+
+function showCompanionContextMenu(targetWindow = officeWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  const config = readConfig();
+  const metadata = companionWindows.get(targetWindow);
+  const additionalWindow = Boolean(metadata && !metadata.primary);
   const opacity = Math.round(normalizedOpacity(config.opacity) * 100);
   const menu = Menu.buildFromTemplate([
-    ...viewMenuItems(config),
+    ...(additionalWindow
+      ? [{ label: 'Folk', submenu: additionalAgentMenuItems(targetWindow) }]
+      : viewMenuItems(config)),
+    { label: 'Add Another Folk', submenu: additionalFolkMenuItems() },
     { type: 'separator' },
-    ...(displayMode(config) === 'avatar' ? [{ label: 'Avatar Size', submenu: avatarSizeMenuItems() }] : []),
+    ...(additionalWindow || displayMode(config) === 'avatar'
+      ? [{ label: 'Avatar Size', submenu: avatarSizeMenuItems(targetWindow) }]
+      : []),
     {
       label: `Opacity: ${opacity}%`,
       submenu: [100, 90, 75, 50, 25].map((percent) => ({
@@ -704,13 +849,97 @@ function showCompanionContextMenu() {
     },
     { label: 'Open Setup…', click: () => openSettingsWindow() },
     { label: 'Open Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
-    { label: 'Reload', click: () => officeWindow?.reload() },
+    { label: 'Reload', click: () => targetWindow.reload() },
     { label: 'Always on Top', type: 'checkbox', checked: Boolean(config.alwaysOnTop), click: (item) => setAlwaysOnTop(item.checked) },
     { type: 'separator' },
-    { label: 'Hide', click: () => { officeWindow?.hide(); rebuildMenus(); } },
+    ...(additionalWindow
+      ? [{ label: 'Remove This Folk', click: () => targetWindow.close() }]
+      : [{ label: 'Hide', click: () => { targetWindow.hide(); rebuildMenus(); } }]),
     { role: 'quit' }
   ]);
-  menu.popup({ window: officeWindow });
+  menu.popup({ window: targetWindow });
+}
+
+function cascadedAvatarBounds(referenceWindow) {
+  const config = readConfig();
+  const base = referenceWindow && !referenceWindow.isDestroyed()
+    ? referenceWindow.getBounds()
+    : usableBounds(config.avatarBounds, DEFAULT_AVATAR_BOUNDS);
+  const workArea = screen.getDisplayMatching(base).workArea;
+  const width = Math.min(Math.max(120, Number(config.avatarBounds?.width) || DEFAULT_AVATAR_BOUNDS.width), workArea.width);
+  const height = Math.min(Math.max(150, Number(config.avatarBounds?.height) || DEFAULT_AVATAR_BOUNDS.height), workArea.height);
+  const offset = 28 * Math.max(1, companionWindows.size);
+  return {
+    x: Math.max(workArea.x, Math.min(base.x + offset, workArea.x + workArea.width - width)),
+    y: Math.max(workArea.y, Math.min(base.y + offset, workArea.y + workArea.height - height)),
+    width,
+    height
+  };
+}
+
+function createCompanionBrowserWindow(bounds, config = readConfig()) {
+  return new BrowserWindow({
+    ...bounds,
+    minWidth: 120,
+    minHeight: 150,
+    show: false,
+    resizable: true,
+    movable: true,
+    alwaysOnTop: Boolean(config.alwaysOnTop),
+    title: 'Taskfolk',
+    icon: APP_ICON_PATH,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      partition: PARTITION,
+      preload: path.join(__dirname, 'office-preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      devTools: !app.isPackaged
+    }
+  });
+}
+
+function secureCompanionNavigation(targetWindow, baseUrl) {
+  const allowedOrigin = new URL(baseUrl).origin;
+  targetWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  targetWindow.webContents.on('will-navigate', (event, target) => {
+    try {
+      if (new URL(target).origin !== allowedOrigin) event.preventDefault();
+    } catch {
+      event.preventDefault();
+    }
+  });
+  targetWindow.webContents.on('context-menu', (event) => {
+    event.preventDefault();
+    showCompanionContextMenu(targetWindow);
+  });
+}
+
+async function createAdditionalCompanionWindow(agentId) {
+  if (!activeBaseUrl || !availableAdditionalAgents().some((agent) => agent.id === agentId)) return;
+  const config = readConfig();
+  const referenceWindow = BrowserWindow.getFocusedWindow() || officeWindow;
+  const targetWindow = createCompanionBrowserWindow(cascadedAvatarBounds(referenceWindow), config);
+  companionWindows.set(targetWindow, { primary: false, agentId });
+  secureCompanionNavigation(targetWindow, activeBaseUrl);
+  targetWindow.on('closed', () => {
+    windowDrags.delete(targetWindow);
+    mouseIgnoringWindows.delete(targetWindow);
+    companionWindows.delete(targetWindow);
+    rebuildMenus();
+  });
+  targetWindow.once('ready-to-show', () => targetWindow.show());
+  targetWindow.setOpacity(normalizedOpacity(config.opacity));
+  try {
+    await targetWindow.loadURL(companionUrl(activeBaseUrl, config, agentId));
+  } catch (error) {
+    console.warn(`Could not add companion folk: ${error.message}`);
+    if (!targetWindow.isDestroyed()) targetWindow.destroy();
+  }
+  rebuildMenus();
 }
 
 async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
@@ -733,60 +962,34 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
     writeConfig(config);
   }
 
-  if (officeWindow && !officeWindow.isDestroyed()) officeWindow.destroy();
-  ignoringMouseEvents = false;
+  for (const window of [...companionWindows.keys()]) {
+    if (!window.isDestroyed()) window.destroy();
+  }
+  companionWindows.clear();
+  windowDrags.clear();
+  mouseIgnoringWindows.clear();
   const avatarMode = displayMode(config) === 'avatar';
-  officeWindow = new BrowserWindow({
-    ...usableBounds(
-      avatarMode ? config.avatarBounds : config.bounds,
-      avatarMode ? DEFAULT_AVATAR_BOUNDS : DEFAULT_BOUNDS
-    ),
-    minWidth: avatarMode ? 120 : 360,
-    minHeight: avatarMode ? 150 : 260,
-    show: false,
-    resizable: true,
-    movable: true,
-    alwaysOnTop: Boolean(config.alwaysOnTop),
-    title: 'Taskfolk',
-    icon: APP_ICON_PATH,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    webPreferences: {
-      partition: PARTITION,
-      preload: path.join(__dirname, 'office-preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      devTools: !app.isPackaged
-    }
-  });
-
-  const allowedOrigin = new URL(normalizedUrl).origin;
-  officeWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  officeWindow.webContents.on('will-navigate', (event, target) => {
-    try {
-      if (new URL(target).origin !== allowedOrigin) event.preventDefault();
-    } catch {
-      event.preventDefault();
-    }
-  });
-  officeWindow.webContents.on('context-menu', (event) => {
-    event.preventDefault();
-    showCompanionContextMenu();
-  });
+  officeWindow = createCompanionBrowserWindow(usableBounds(
+    avatarMode ? config.avatarBounds : config.bounds,
+    avatarMode ? DEFAULT_AVATAR_BOUNDS : DEFAULT_BOUNDS
+  ), config);
+  officeWindow.setMinimumSize(avatarMode ? 120 : 360, avatarMode ? 150 : 260);
+  const primaryWindow = officeWindow;
+  companionWindows.set(primaryWindow, { primary: true, agentId: '' });
+  secureCompanionNavigation(primaryWindow, normalizedUrl);
   officeWindow.on('move', persistWindowState);
   officeWindow.on('resize', persistWindowState);
   officeWindow.on('closed', () => {
-    windowDrag = null;
-    ignoringMouseEvents = false;
-    officeWindow = null;
+    windowDrags.delete(primaryWindow);
+    mouseIgnoringWindows.delete(primaryWindow);
+    companionWindows.delete(primaryWindow);
+    if (officeWindow === primaryWindow) officeWindow = null;
     rebuildMenus();
   });
-  officeWindow.once('ready-to-show', () => officeWindow?.show());
-  officeWindow.setOpacity(normalizedOpacity(config.opacity));
+  primaryWindow.once('ready-to-show', () => primaryWindow.show());
+  primaryWindow.setOpacity(normalizedOpacity(config.opacity));
 
-  await officeWindow.loadURL(companionUrl(normalizedUrl, config));
+  await primaryWindow.loadURL(companionUrl(normalizedUrl, config));
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
   settingsWindow?.close();
@@ -869,7 +1072,7 @@ ipcMain.handle('settings:load', () => {
       || credentials.token
       || credentials.password
     ),
-    alwaysOnTop: Boolean(config.alwaysOnTop),
+    alwaysOnTop: config.alwaysOnTop === undefined ? true : Boolean(config.alwaysOnTop),
     displayMode: displayMode(config),
     selectedAgent: config.selectedAgent || '',
     opacity: normalizedOpacity(config.opacity),

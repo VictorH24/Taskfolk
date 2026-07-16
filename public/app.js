@@ -8,7 +8,7 @@ const themeOptions = ['system', 'light', 'dark'];
 const themeLabels = { system: 'System', light: 'Light', dark: 'Dark' };
 const themeIcons = { system: '💻', light: '☀️', dark: '🌙' };
 const AVATAR_VARIANT_COUNT = 23;
-const ASSIGNABLE_AVATAR_VARIANTS = [0, 'v0', 'v1_gif', 1, 'v2_gif', 2, 'v3_gif', 3, 'v4_gif', 4, 'v5_gif', 5, 'v6_gif', 6, 'v7_gif', 7, 'v8_gif', 8, 'v9_gif', 9, 'v10_gif', 10, 'v11_gif', 11, 'v12_gif', 12, 'v13_gif', 13, 'v14_gif', 14, 'v15_gif', 15, 'v16_gif', 16, 'v17_gif', 17, 'v18_gif', 18, 'v19_gif', 19, 'v20_gif', 20, 'v21_gif', 21, 'v22_gif', 22];
+const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 22 }, (_, index) => `v${index + 1}_gif`)];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;
@@ -582,7 +582,20 @@ async function loadAgents() {
     else if (agentDisplayMode === 'pixel') renderPixelOffice(data.agents, data.latestSessions?.[0]);
     else renderAgentCards(data.agents);
   } catch (err) {
-    officeMap.innerHTML = `<div class="emptyOffice">Unable to load agents: ${esc(err.message)}</div>`;
+    const avatarCompanion = companionMode && companionView === 'avatar';
+    if (avatarCompanion) {
+      renderedCompanionAgentId = '';
+      renderedCompanionAgentSignature = '';
+    }
+    officeMap.className = avatarCompanion
+      ? 'companionAvatarStage'
+      : companionMode ? 'officeMap pixelOfficeWrap agentLoadError' : 'officeMap agentLoadError';
+    officeMap.innerHTML = `
+      <div class="${avatarCompanion ? 'companionAvatarEmpty' : 'emptyOffice'} agentLoadFailure">
+        <span>Unable to load agents: ${esc(err.message)}</span>
+        <button class="agentLoadRefreshBtn" type="button" data-companion-interactive>Refresh</button>
+      </div>`;
+    officeMap.querySelector('.agentLoadRefreshBtn')?.addEventListener('click', loadAgents);
   } finally {
     agentRefreshInFlight = false;
     scheduleAgentRefresh();
@@ -726,10 +739,13 @@ function pixelRole(agent) {
 }
 
 function avatarVariant(agent) {
-  if (ASSIGNABLE_AVATAR_VARIANTS.includes(agent.avatarVariant)) return agent.avatarVariant;
+  const raw = String(agent.avatarVariant ?? '');
+  if (raw === '0' || raw === 'v0' || raw === 'v0_gif') return 0;
+  if (ASSIGNABLE_AVATAR_VARIANTS.includes(raw)) return raw;
   const assigned = Number(agent.avatarVariant);
-  if (ASSIGNABLE_AVATAR_VARIANTS.includes(assigned)) return assigned;
-  return Math.abs(hashString(`${agent.id || ''}:${agent.name || ''}:${agent.role || ''}`)) % AVATAR_VARIANT_COUNT;
+  if (Number.isInteger(assigned) && assigned > 0 && assigned < AVATAR_VARIANT_COUNT) return `v${assigned}_gif`;
+  const fallback = Math.abs(hashString(`${agent.id || ''}:${agent.name || ''}:${agent.role || ''}`)) % AVATAR_VARIANT_COUNT;
+  return fallback === 0 ? 0 : `v${fallback}_gif`;
 }
 
 function pixelRoomState(agents) {
@@ -796,6 +812,30 @@ function renderPixelLatestSession(latest) {
     </div>`;
 }
 
+function fitPixelThoughtBubble(agentElement) {
+  const bubble = agentElement.querySelector('.pixelAgentThought');
+  const scene = agentElement.closest('.pixelOfficeScene');
+  if (!bubble || !scene) return;
+
+  const agentRect = agentElement.getBoundingClientRect();
+  const sceneRect = scene.getBoundingClientRect();
+  const bubbleWidth = bubble.offsetWidth;
+  const pageInset = 12;
+  const boundaryLeft = Math.max(pageInset, sceneRect.left + pageInset);
+  const boundaryRight = Math.min(window.innerWidth - pageInset, sceneRect.right - pageInset);
+  const centeredLeft = agentRect.left + agentRect.width / 2 - bubbleWidth / 2;
+  let shift = 0;
+
+  if (centeredLeft < boundaryLeft) shift = boundaryLeft - centeredLeft;
+  if (centeredLeft + bubbleWidth + shift > boundaryRight) {
+    shift += boundaryRight - (centeredLeft + bubbleWidth + shift);
+  }
+
+  const tailPosition = Math.max(18, Math.min(bubbleWidth - 18, bubbleWidth / 2 - shift));
+  bubble.style.setProperty('--thought-shift', `${Math.round(shift)}px`);
+  bubble.style.setProperty('--thought-tail', `${Math.round(tailPosition)}px`);
+}
+
 function renderPixelOffice(agents, latestSession = null) {
   officeMap.className = 'officeMap pixelOfficeWrap';
   const roomState = pixelRoomState(agents);
@@ -812,10 +852,12 @@ function renderPixelOffice(agents, latestSession = null) {
   const people = agents.map((agent, index) => {
     const useMeetingPose = roomState.meetingMode && agent.status === 'active';
     const position = pixelPosition(index, agents.length + sceneConfig.emptyDesks);
+    const thoughtId = `pixel-agent-thought-${index}`;
     labels.push(`
       <span class="pixelAgentName ${esc(agent.status)}" style="left:${position.left}%;top:${position.top + 3}%;">${esc(agent.name)}</span>`);
     return `
-      <article class="pixelAgent ${esc(agent.status)} ${useMeetingPose ? 'meeting' : ''} role-${pixelRole(agent)} ${activityLevel(agent)} ${agentAgeClass(agent)}" style="left:${position.left}%;top:${position.top}%;" aria-label="${esc(agent.name)} is ${esc(agentStateLabel(agent))}">
+      <article class="pixelAgent ${esc(agent.status)} ${useMeetingPose ? 'meeting' : ''} role-${pixelRole(agent)} ${activityLevel(agent)} ${agentAgeClass(agent)}" style="left:${position.left}%;top:${position.top}%;" tabindex="0" aria-label="${esc(agent.name)} is ${esc(agentStateLabel(agent))}" aria-describedby="${thoughtId}">
+        <div class="pixelAgentThought" id="${thoughtId}" role="tooltip">${esc(agent.task)}</div>
         ${pixelAgentScene(agent, useMeetingPose)}
       </article>`;
   }).join('');
@@ -858,6 +900,11 @@ function renderPixelOffice(agents, latestSession = null) {
         ${labels.join('')}
       </div>
     </div>`;
+
+  for (const agentElement of officeMap.querySelectorAll('.pixelAgent')) {
+    agentElement.addEventListener('pointerenter', () => fitPixelThoughtBubble(agentElement));
+    agentElement.addEventListener('focus', () => fitPixelThoughtBubble(agentElement));
+  }
 }
 
 function renderCompanionAvatar(agents) {
@@ -868,7 +915,12 @@ function renderCompanionAvatar(agents) {
   if (!agent) {
     renderedCompanionAgentId = '';
     renderedCompanionAgentSignature = '';
-    officeMap.innerHTML = '<div class="companionAvatarEmpty">No agents are available.</div>';
+    officeMap.innerHTML = `
+      <div class="companionAvatarEmpty agentLoadFailure">
+        <span>No agents are available.</span>
+        <button class="agentLoadRefreshBtn" type="button" data-companion-interactive>Refresh</button>
+      </div>`;
+    officeMap.querySelector('.agentLoadRefreshBtn')?.addEventListener('click', loadAgents);
     return;
   }
   const agentId = String(agent.id || '');
@@ -879,14 +931,17 @@ function renderCompanionAvatar(agents) {
     agent.pose,
     agent.displayState,
     agent.avatarVariant,
+    agent.task,
     agentRecencyMs(agent)
   ].join(':');
   if (signature === renderedCompanionAgentSignature) return;
   const switchedAgent = Boolean(renderedCompanionAgentId && renderedCompanionAgentId !== agentId);
   renderedCompanionAgentId = agentId;
   renderedCompanionAgentSignature = signature;
+  const showWorkingThought = agent.status === 'active';
   officeMap.innerHTML = `
-    <article class="companionAvatar ${switchedAgent ? 'companionAvatar--enter' : ''} ${esc(agent.status)}" aria-label="${esc(agent.name)} is ${esc(agentStateLabel(agent))}">
+    <article class="companionAvatar ${switchedAgent ? 'companionAvatar--enter' : ''} ${esc(agent.status)}" tabindex="0" aria-label="${esc(agent.name)} is ${esc(agentStateLabel(agent))}"${showWorkingThought ? ' aria-describedby="companion-agent-thought"' : ''}>
+      ${showWorkingThought ? `<div class="companionAgentThought" id="companion-agent-thought" role="tooltip">${esc(agent.task)}</div>` : ''}
       ${pixelAgentScene(agent, false)}
       <div class="companionAvatarName">${esc(agent.name || agent.id || 'Agent')}</div>
     </article>`;
@@ -917,6 +972,12 @@ function pixelAgentScene(agent, meetingMode = false) {
   const name = esc(agent.name);
   const role = pixelRole(agent);
   const variant = avatarVariant(agent);
+  // Runtime agents share the same recency-based idle animation policy. Manual
+  // agents keep their explicitly selected states (Reading, Sleeping, etc.).
+  if (agent.status === 'idle' && agent.source !== 'manual') {
+    const pose = idlePose(agent);
+    return window.SceneArt.sceneMarkup({ pose, role, label: name, variant, showLabel: false });
+  }
   if (agent.pose && !meetingMode) {
     return window.SceneArt.sceneMarkup({ pose: agent.pose, role, label: name, variant, showLabel: false });
   }

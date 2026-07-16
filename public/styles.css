@@ -260,6 +260,55 @@ body.companion-avatar-mode .companionAvatarName {
   transform: translate(-50%, 5px);
   transition: opacity .14s ease, transform .14s ease;
 }
+body.companion-avatar-mode .companionAgentThought {
+  position: absolute;
+  left: 50%;
+  top: 2%;
+  z-index: 10;
+  width: max-content;
+  max-width: min(320px, 90vw);
+  padding: .65rem .8rem;
+  border: 2px solid #41372f;
+  border-radius: 18px;
+  background: #fffdf4;
+  box-shadow: 0 5px 0 rgba(46, 35, 28, .22);
+  color: #302a25;
+  font: 700 clamp(11px, 3.2vw, 14px)/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  transform: translate(-50%, -35%) scale(.96);
+  transform-origin: 50% 100%;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .14s ease, transform .14s ease, visibility 0s linear .14s;
+}
+body.companion-avatar-mode .companionAgentThought::before,
+body.companion-avatar-mode .companionAgentThought::after {
+  content: "";
+  position: absolute;
+  border: 2px solid #41372f;
+  border-radius: 50%;
+  background: #fffdf4;
+}
+body.companion-avatar-mode .companionAgentThought::before {
+  left: calc(50% - 10px);
+  bottom: -12px;
+  width: 13px;
+  height: 13px;
+}
+body.companion-avatar-mode .companionAgentThought::after {
+  left: calc(50% + 3px);
+  bottom: -21px;
+  width: 7px;
+  height: 7px;
+}
+body.companion-avatar-mode .companionAvatar:hover .companionAgentThought,
+body.companion-avatar-mode .companionAvatar:focus .companionAgentThought {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, -42%) scale(1);
+  transition-delay: 0s;
+}
 body.companion-avatar-mode:hover .companionAvatarName {
   opacity: 1;
   transform: translate(-50%, 0);
@@ -453,6 +502,8 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
 .agentDetails dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .agentSkills span { font-size: .72rem; background: color-mix(in srgb, var(--accent), transparent 82%); }
 .emptyOffice { padding: 2rem; color: var(--muted); }
+.agentLoadFailure { display: flex; flex-direction: column; align-items: center; gap: .8rem; text-align: center; }
+.agentLoadRefreshBtn { cursor: pointer; user-select: none; }
 .pixelOfficeWrap { display: block; /*min-height: 68vh;*/ padding: clamp(.5rem, 2vw, 1rem); background: #080b0f; border-color: #2a211a; overflow: hidden; }
 .pixelOfficeScene {
   position: relative;
@@ -1040,6 +1091,67 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   height: auto;
   transform: translate(-50%, -50%);
   z-index: 3;
+}
+.pixelAgent:hover,
+.pixelAgent:focus {
+  z-index: 90;
+}
+.pixelAgent:focus-visible {
+  outline: 2px solid #fff8df;
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+.pixelAgentThought {
+  --thought-tail: 50%;
+  --thought-shift: 0px;
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% - 34px);
+  z-index: 10;
+  width: max-content;
+  max-width: min(280px, 70vw);
+  padding: .6rem .75rem;
+  border: 2px solid #41372f;
+  border-radius: 18px;
+  background: #fffdf4;
+  box-shadow: 0 5px 0 rgba(46, 35, 28, .22);
+  color: #302a25;
+  font: 700 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  text-align: left;
+  transform: translate(calc(-50% + var(--thought-shift)), 5px) scale(.96);
+  transform-origin: 50% 100%;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .14s ease, transform .14s ease, visibility 0s linear .14s;
+}
+.pixelAgentThought::before,
+.pixelAgentThought::after {
+  content: "";
+  position: absolute;
+  border: 2px solid #41372f;
+  border-radius: 50%;
+  background: #fffdf4;
+}
+.pixelAgentThought::before {
+  left: calc(var(--thought-tail) - 10px);
+  bottom: -12px;
+  width: 13px;
+  height: 13px;
+}
+.pixelAgentThought::after {
+  left: calc(var(--thought-tail) + 3px);
+  bottom: -21px;
+  width: 7px;
+  height: 7px;
+}
+.pixelAgent:hover .pixelAgentThought,
+.pixelAgent:focus .pixelAgentThought {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(calc(-50% + var(--thought-shift)), 0) scale(1);
+  transition-delay: 0s;
 }
 .pixelOfficeScene.crowdedOffice .pixelAgent {
   width: clamp(86px, 8.4vw, 118px);

@@ -136,8 +136,8 @@ function normalizeSession(entry, reference, workspaceStoragePath, nowMs) {
     workspacePath: workspace.workspacePath,
     source: 'vscode-copilot',
     avatarAssignmentKey: project.assignmentKey,
-    displayState: status === 'active' ? 'Working' : 'Sleeping',
-    pose: status === 'active' ? 'working' : 'sleeping',
+    displayState: status === 'active' ? 'Working' : 'Idle',
+    pose: status === 'active' ? 'working' : null,
     activity: {
       provider: 'vscode-copilot',
       status: status === 'active' ? 'busy' : 'idle',

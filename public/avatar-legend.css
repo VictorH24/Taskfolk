@@ -5,6 +5,11 @@ body.legendPage {
     var(--bg);
 }
 
+body.desktopConfig [data-hide-in-desktop-config],
+body.desktopConfig .moduleControls {
+  display: none;
+}
+
 main.legendPage {
   display: block;
   grid-template-columns: none;

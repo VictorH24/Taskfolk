@@ -139,6 +139,8 @@ function avatarContainsOpaquePixel(x, y) {
   if (!document.documentElement.classList.contains('companion-revealed')) {
     return loaderContainsPoint(x, y);
   }
+  const target = document.elementFromPoint(x, y);
+  if (target instanceof Element && target.closest('[data-companion-interactive]')) return true;
   const image = document.querySelector('.companionAvatar .sceneArt');
   if (!(image instanceof HTMLImageElement) || !image.complete || !image.naturalWidth || !image.naturalHeight) return false;
   const rect = image.getBoundingClientRect();
@@ -194,6 +196,7 @@ function finishDrag() {
 
 window.addEventListener('pointerdown', (event) => {
   if (event.button !== 0 || nearResizeEdge(event)) return;
+  if (event.target instanceof Element && event.target.closest('[data-companion-interactive]')) return;
   dragging = true;
   captureTarget = event.target instanceof Element ? event.target : document.documentElement;
   try { captureTarget.setPointerCapture(event.pointerId); } catch {}
