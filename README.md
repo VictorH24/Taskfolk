@@ -22,7 +22,7 @@ The companion can display the complete office or one live avatar on a transparen
 
 Switch to **Single Avatar** when you want one compact, transparent companion beside your editor:
 
-![Taskfolk single-avatar companion showing one working folk](docs/taskfolk-single-avatar.png)
+![Taskfolk single-avatar companion showing one working folk](docs/taskfolk-single-avatar.gif)
 
 Use **Add Another Folk** from the right-click menu to place multiple independent companion windows on screen. Each folk can represent a different connected agent and can be moved or resized separately:
 
