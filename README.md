@@ -2,7 +2,7 @@
 
 Taskfolk is a desktop companion that turns your AI coding sessions into a live pixel office. Keep it beside your editor to see which agents are working, idle, or blocked without opening another dashboard.
 
-![Taskfolk desktop companion showing four live agents in a pixel office](docs/taskfolk-companion.png)
+![Taskfolk desktop companion showing four live agents in a pixel office](docs/taskfolk_day.gif)
 
 ## Start the companion app
 
