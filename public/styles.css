@@ -2314,21 +2314,6 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   background: #e5c45f;
   box-shadow: -8px 5px 0 #e5c45f, 8px 5px 0 #e5c45f;
 }
-.pixelAgent.blocked::after {
-  content: "!";
-  position: absolute;
-  z-index: 6;
-  right: 14%;
-  top: 6%;
-  width: 22px;
-  height: 22px;
-  color: #fff3d8;
-  background: #b74343;
-  border: 3px solid #4a1f20;
-  text-align: center;
-  font: 900 16px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  animation: pixelAlertBlink .8s steps(2, end) infinite;
-}
 .pixelBed {
   position: absolute;
   left: 8%;
@@ -2490,10 +2475,6 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
 @keyframes pixelNapBreath {
   0%, 100% { transform: rotate(-90deg) translateX(0); }
   50% { transform: rotate(-90deg) translateX(2px); }
-}
-@keyframes pixelAlertBlink {
-  0%, 100% { filter: brightness(1); }
-  50% { filter: brightness(1.55); }
 }
 @keyframes pixelMatrixRain {
   0% { background-position: 0 0, 0 0; filter: brightness(.95); }
