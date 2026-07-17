@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Taskfolk</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+  <body>
+  <div class="companionDragRegion" aria-hidden="true"></div>
+  <header>
+    <div>
+      <h1>Taskfolk</h1>
+      <p id="pageSubtitle">Watch your AI team at work.</p>
+    </div>
+    <div class="headerActions">
+      <button id="themeToggleBtn" class="secondary themeToggle" type="button" aria-label="Color theme: System. Click to switch theme."><span aria-hidden="true">💻</span><span>System</span></button>
+      <a id="avatarLegendBtn" class="secondary button" href="./avatar-legend.html">Config</a>
+      <button id="viewToggleBtn" class="secondary" type="button">Folder view</button>
+      <button id="refreshBtn" type="button">Refresh</button>
+      <button id="logoutBtn" class="secondary hidden" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="missionControl" id="missionControl">
+      <div class="dashboardHero">
+        <div>
+          <span class="eyebrow">AI agent mission control</span>
+          <h2>See who is working at a glance</h2>
+          <p>Each desk represents an OpenClaw agent. Green means active, amber means idle, and red means blocked.</p>
+          <div class="agentViewControls">
+            <button id="agentDisplayToggleBtn" class="secondary" type="button" aria-pressed="false">Pixel office</button>
+            <button id="pixelFullscreenBtn" class="secondary hidden" type="button" aria-pressed="false">Full page</button>
+            <button id="agentAutoRefreshBtn" class="secondary" type="button" aria-pressed="false">Auto refresh off</button>
+            <button id="sessionDebugToggleBtn" class="secondary" type="button" aria-pressed="false">Session debug</button>
+            <button id="cronJobsToggleBtn" class="secondary" type="button" aria-pressed="false">Cron jobs</button>
+          </div>
+        </div>
+        <div class="summaryCards" id="agentSummary"></div>
+      </div>
+      <section class="sessionDebugPanel hidden" id="sessionDebugPanel" aria-label="Session selection debug"></section>
+      <section class="sessionDebugPanel hidden" id="cronJobsPanel" aria-label="Cron jobs debug"></section>
+      <div class="officeMap" id="officeMap" aria-label="2D office map of OpenClaw agents"></div>
+    </section>
+
+    <section class="browser hidden" id="folderView">
+      <nav class="breadcrumbs" id="breadcrumbs"></nav>
+      <form id="uploadForm" class="upload">
+        <input id="fileInput" name="files" type="file" multiple />
+        <button type="submit">Upload here</button>
+        <button id="newTextFileBtn" class="secondary" type="button">New text file</button>
+        <button id="newFolderBtn" class="secondary" type="button">New folder</button>
+      </form>
+      <div class="tableWrap">
+        <table><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead><tbody id="fileRows"></tbody></table>
+      </div>
+    </section>
+
+    <aside class="preview hidden" id="previewPanel" aria-hidden="true">
+      <div class="previewHeader">
+        <div><h2>Preview</h2><span id="previewName">No file selected</span></div>
+        <div class="previewActions">
+          <button id="fullscreenPreviewBtn" class="secondary" type="button" aria-pressed="false">Full page</button>
+          <button id="editPreviewBtn" class="secondary hidden" type="button">Edit</button>
+          <button id="closePreviewBtn" class="secondary" type="button">Close</button>
+        </div>
+      </div>
+      <div id="previewBody" class="previewBody empty">Select a text or image file.</div>
+    </aside>
+  </main>
+  <div id="toast" role="status"></div>
+  <script src="/scene-art.js"></script>
+  <script src="/furniture-art.js"></script>
+  <script src="/avatar-art.js"></script>
+  <script src="/session-auth.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

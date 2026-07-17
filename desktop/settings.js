@@ -15,6 +15,8 @@ const resetAvatarSizeButton = document.querySelector('#resetAvatarSize');
 const opacityInput = document.querySelector('#opacity');
 const opacityValue = document.querySelector('#opacityValue');
 const alwaysOnTopInput = document.querySelector('#alwaysOnTop');
+const hideDockIconField = document.querySelector('#hideDockIconField');
+const hideDockIconInput = document.querySelector('#hideDockIcon');
 const openCodeEnabledInput = document.querySelector('#openCodeEnabled');
 const openCodeGroupingField = document.querySelector('#openCodeGroupingField');
 const openCodeGroupingInput = document.querySelector('#openCodeGrouping');
@@ -120,6 +122,8 @@ async function initialize() {
   connectionModeInput.value = settings.connectionMode === 'remote' ? 'remote' : 'local';
   urlInput.value = settings.url || 'http://127.0.0.1:3000';
   alwaysOnTopInput.checked = settings.alwaysOnTop;
+  hideDockIconField.classList.toggle('hidden', !settings.dockIconSupported);
+  hideDockIconInput.checked = Boolean(settings.hideDockIcon);
   displayModeInput.value = settings.displayMode || 'office';
   opacityInput.value = String(Math.round((settings.opacity || 1) * 100));
   avatarWidthInput.value = String(settings.avatarWidth || 300);
@@ -169,6 +173,9 @@ async function initialize() {
 }
 
 window.clawOffice.onError(showError);
+window.clawOffice.onDockVisibilityChanged((hidden) => {
+  hideDockIconInput.checked = Boolean(hidden);
+});
 connectionModeInput.addEventListener('change', updateConnectionFields);
 displayModeInput.addEventListener('change', updateDisplayFields);
 opacityInput.addEventListener('input', updateOpacityLabel);
@@ -263,6 +270,7 @@ form.addEventListener('submit', async (event) => {
       token: tokenInput.value,
       password: passwordInput.value,
       alwaysOnTop: alwaysOnTopInput.checked,
+      hideDockIcon: hideDockIconInput.checked,
       displayMode: displayModeInput.value,
       selectedAgent: selectedAgentInput.value,
       opacity: Number(opacityInput.value) / 100,

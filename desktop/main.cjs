@@ -29,6 +29,7 @@ const {
   normalizeClaudeGrouping
 } = require('./providers/claude.cjs');
 const { normalizeLocalServerPort } = require('./local-server.cjs');
+const { normalizeAdditionalFolks } = require('./companion-state.cjs');
 
 const DEFAULT_BOUNDS = { width: 720, height: 500 };
 const DEFAULT_AVATAR_BOUNDS = { width: 300, height: 380 };
@@ -95,6 +96,7 @@ const runtimeAgentMenuSignatures = new Map();
 const companionWindows = new Map();
 const windowDrags = new Map();
 const mouseIgnoringWindows = new Set();
+const additionalFolkBoundsTimers = new Map();
 
 function companionWindowForSender(event) {
   for (const window of companionWindows.keys()) {
@@ -146,6 +148,10 @@ ipcMain.on('office-window-mouse:ignore', (event, requested) => {
 
 function displayMode(config = readConfig()) {
   return config.displayMode === 'avatar' ? 'avatar' : 'office';
+}
+
+function isAlwaysOnTopEnabled(config = readConfig()) {
+  return config.alwaysOnTop === undefined ? true : Boolean(config.alwaysOnTop);
 }
 
 function normalizedOpacity(value) {
@@ -409,6 +415,55 @@ function persistWindowState() {
   boundsTimer = setTimeout(saveWindowBounds, 300);
 }
 
+function savedAdditionalFolks(config = readConfig()) {
+  return normalizeAdditionalFolks(config.additionalFolks);
+}
+
+function saveAdditionalFolk(agentId, bounds) {
+  const id = String(agentId || '').trim();
+  if (!id) return;
+  const config = readConfig();
+  const additionalFolks = savedAdditionalFolks(config);
+  const existingIndex = additionalFolks.findIndex((folk) => folk.agentId === id);
+  const next = normalizeAdditionalFolks([{ agentId: id, bounds }])[0] || { agentId: id };
+  if (existingIndex >= 0) additionalFolks[existingIndex] = next;
+  else additionalFolks.push(next);
+  writeConfig({ ...config, additionalFolks });
+}
+
+function forgetAdditionalFolk(agentId) {
+  const id = String(agentId || '').trim();
+  if (!id) return;
+  const config = readConfig();
+  writeConfig({
+    ...config,
+    additionalFolks: savedAdditionalFolks(config).filter((folk) => folk.agentId !== id)
+  });
+}
+
+function saveAdditionalFolkBounds(targetWindow) {
+  const metadata = companionWindows.get(targetWindow);
+  if (!metadata || metadata.primary || !metadata.agentId || targetWindow.isDestroyed()
+    || targetWindow.isMinimized() || targetWindow.isMaximized()) return;
+  saveAdditionalFolk(metadata.agentId, targetWindow.getBounds());
+}
+
+function persistAdditionalFolkBounds(targetWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  clearTimeout(additionalFolkBoundsTimers.get(targetWindow));
+  additionalFolkBoundsTimers.set(targetWindow, setTimeout(() => {
+    additionalFolkBoundsTimers.delete(targetWindow);
+    saveAdditionalFolkBounds(targetWindow);
+  }, 300));
+}
+
+function removeAdditionalFolk(targetWindow) {
+  const metadata = companionWindows.get(targetWindow);
+  if (!metadata || metadata.primary) return;
+  forgetAdditionalFolk(metadata.agentId);
+  targetWindow.close();
+}
+
 function setAlwaysOnTop(enabled) {
   const config = readConfig();
   const alwaysOnTop = Boolean(enabled);
@@ -416,6 +471,39 @@ function setAlwaysOnTop(enabled) {
   for (const window of companionWindows.keys()) {
     if (!window.isDestroyed()) window.setAlwaysOnTop(alwaysOnTop, 'floating');
   }
+  rebuildMenus();
+}
+
+function applyDockVisibility(config = readConfig()) {
+  if (process.platform !== 'darwin' || !app.dock) return;
+  if (config.hideDockIcon) {
+    if (!tray || tray.isDestroyed()) {
+      tray = null;
+      createTray();
+    }
+    // Never remove the Dock entry unless the menu-bar fallback was created.
+    // This keeps Setup and Quit reachable if macOS rejects the status image.
+    if (tray) app.dock.hide();
+    else app.dock.show().catch(() => {});
+    return;
+  }
+
+  // Keep the status item until macOS confirms that the Dock entry is visible,
+  // so switching modes cannot briefly make Taskfolk unreachable.
+  app.dock.show().then(() => {
+    if (readConfig().hideDockIcon || !tray) return;
+    tray.destroy();
+    tray = null;
+    rebuildMenus();
+  }).catch(() => {});
+}
+
+function setHideDockIcon(enabled) {
+  const config = readConfig();
+  const hideDockIcon = Boolean(enabled);
+  writeConfig({ ...config, hideDockIcon });
+  applyDockVisibility({ ...config, hideDockIcon });
+  settingsWindow?.webContents.send('settings:dock-visibility', hideDockIcon);
   rebuildMenus();
 }
 
@@ -1014,6 +1102,7 @@ function reconcileAdditionalCompanionWindows() {
   ));
   const survivors = additionalWindows.filter(([window]) => !window.isDestroyed());
   for (const [window] of survivors.slice(allowedAdditionalCount)) window.close();
+  void restoreAdditionalCompanionWindows();
 }
 
 function additionalFolkMenuItems() {
@@ -1032,10 +1121,14 @@ async function setAdditionalWindowAgent(targetWindow, agentId) {
   const usedElsewhere = displayedAgentIds();
   usedElsewhere.delete(metadata.agentId);
   if (usedElsewhere.has(agentId)) return;
+  const previousAgentId = metadata.agentId;
   metadata.agentId = agentId;
   try {
     await targetWindow.loadURL(companionUrl(activeBaseUrl, readConfig(), agentId));
+    forgetAdditionalFolk(previousAgentId);
+    saveAdditionalFolk(agentId, targetWindow.getBounds());
   } catch (error) {
+    metadata.agentId = previousAgentId;
     console.warn(`Could not switch companion folk: ${error.message}`);
   }
   rebuildMenus();
@@ -1081,10 +1174,10 @@ function showCompanionContextMenu(targetWindow = officeWindow) {
     { label: 'Open Setup…', click: () => openSettingsWindow() },
     { label: 'Open Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
     { label: 'Reload', click: () => targetWindow.reload() },
-    { label: 'Always on Top', type: 'checkbox', checked: Boolean(config.alwaysOnTop), click: (item) => setAlwaysOnTop(item.checked) },
+    { label: 'Always on Top', type: 'checkbox', checked: isAlwaysOnTopEnabled(config), click: (item) => setAlwaysOnTop(item.checked) },
     { type: 'separator' },
     ...(additionalWindow
-      ? [{ label: 'Remove This Folk', click: () => targetWindow.close() }]
+      ? [{ label: 'Remove This Folk', click: () => removeAdditionalFolk(targetWindow) }]
       : [{ label: 'Hide', click: () => { targetWindow.hide(); rebuildMenus(); } }]),
     { role: 'quit' }
   ]);
@@ -1116,7 +1209,7 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
     show: false,
     resizable: true,
     movable: true,
-    alwaysOnTop: Boolean(config.alwaysOnTop),
+    alwaysOnTop: isAlwaysOnTopEnabled(config),
     title: 'Taskfolk',
     icon: APP_ICON_PATH,
     frame: false,
@@ -1152,14 +1245,21 @@ function secureCompanionNavigation(targetWindow, baseUrl) {
   });
 }
 
-async function createAdditionalCompanionWindow(agentId) {
+async function createAdditionalCompanionWindow(agentId, options = {}) {
   if (!activeBaseUrl || !availableAdditionalAgents().some((agent) => agent.id === agentId)) return;
   const config = readConfig();
   const referenceWindow = BrowserWindow.getFocusedWindow() || officeWindow;
-  const targetWindow = createCompanionBrowserWindow(cascadedAvatarBounds(referenceWindow), config);
+  const bounds = options.bounds
+    ? usableBounds(options.bounds, config.avatarBounds || DEFAULT_AVATAR_BOUNDS)
+    : cascadedAvatarBounds(referenceWindow);
+  const targetWindow = createCompanionBrowserWindow(bounds, config);
   companionWindows.set(targetWindow, { primary: false, agentId });
   secureCompanionNavigation(targetWindow, activeBaseUrl);
+  targetWindow.on('move', () => persistAdditionalFolkBounds(targetWindow));
+  targetWindow.on('resize', () => persistAdditionalFolkBounds(targetWindow));
   targetWindow.on('closed', () => {
+    clearTimeout(additionalFolkBoundsTimers.get(targetWindow));
+    additionalFolkBoundsTimers.delete(targetWindow);
     windowDrags.delete(targetWindow);
     mouseIgnoringWindows.delete(targetWindow);
     companionWindows.delete(targetWindow);
@@ -1169,11 +1269,22 @@ async function createAdditionalCompanionWindow(agentId) {
   targetWindow.setOpacity(normalizedOpacity(config.opacity));
   try {
     await targetWindow.loadURL(companionUrl(activeBaseUrl, config, agentId));
+    if (options.persist !== false) saveAdditionalFolk(agentId, targetWindow.getBounds());
   } catch (error) {
     console.warn(`Could not add companion folk: ${error.message}`);
     if (!targetWindow.isDestroyed()) targetWindow.destroy();
   }
   rebuildMenus();
+}
+
+async function restoreAdditionalCompanionWindows(config = readConfig()) {
+  const displayed = displayedAgentIds();
+  const availableIds = new Set(availableAgents.map((agent) => agent.id));
+  for (const folk of savedAdditionalFolks(config)) {
+    if (!availableIds.has(folk.agentId) || displayed.has(folk.agentId)) continue;
+    await createAdditionalCompanionWindow(folk.agentId, { bounds: folk.bounds, persist: false });
+    displayed.add(folk.agentId);
+  }
 }
 
 async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
@@ -1225,6 +1336,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   primaryWindow.setOpacity(normalizedOpacity(config.opacity));
 
   await primaryWindow.loadURL(companionUrl(normalizedUrl, config));
+  await restoreAdditionalCompanionWindows(config);
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
   startCodexAdapter();
@@ -1236,7 +1348,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
 
 function menuTemplate() {
   const config = readConfig();
-  const alwaysOnTop = Boolean(config.alwaysOnTop);
+  const alwaysOnTop = isAlwaysOnTopEnabled(config);
   return [
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
     {
@@ -1249,6 +1361,9 @@ function menuTemplate() {
         ...viewMenuItems(config),
         { type: 'separator' },
         { label: 'Always on Top', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
+        ...(process.platform === 'darwin'
+          ? [{ label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, click: (item) => setHideDockIcon(!item.checked) }]
+          : []),
         { type: 'separator' },
         { role: process.platform === 'darwin' ? 'close' : 'quit' }
       ]
@@ -1262,7 +1377,7 @@ function rebuildMenus() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate()));
   if (!tray) return;
   const config = readConfig();
-  const alwaysOnTop = Boolean(config.alwaysOnTop);
+  const alwaysOnTop = isAlwaysOnTopEnabled(config);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: officeWindow?.isVisible() ? 'Hide Office' : 'Show Office', click: toggleOffice },
     { label: 'Reload', enabled: Boolean(officeWindow), click: () => officeWindow?.reload() },
@@ -1270,6 +1385,9 @@ function rebuildMenus() {
     ...viewMenuItems(config),
     { type: 'separator' },
     { label: 'Always on Top', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
+    ...(process.platform === 'darwin'
+      ? [{ label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, click: (item) => setHideDockIcon(!item.checked) }]
+      : []),
     { label: 'Setup…', click: () => openSettingsWindow() },
     { label: 'Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
     { type: 'separator' },
@@ -1288,13 +1406,29 @@ function toggleOffice() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, '..', 'public', 'favicon.svg');
-  const icon = nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 });
-  if (icon.isEmpty()) return;
-  if (process.platform === 'darwin') icon.setTemplateImage(true);
+  if (tray && !tray.isDestroyed()) return;
+  const trayIconPath = process.platform === 'darwin'
+    ? APP_ICON_PATH
+    : path.join(__dirname, '..', 'public', 'favicon.png');
+  const fallbackIconPath = path.join(__dirname, '..', 'public', 'favicon.png');
+  let sourceIcon = nativeImage.createEmpty();
+  let fallbackIcon = nativeImage.createEmpty();
+  try {
+    sourceIcon = nativeImage.createFromBuffer(fs.readFileSync(trayIconPath));
+    fallbackIcon = sourceIcon.isEmpty()
+      ? nativeImage.createFromBuffer(fs.readFileSync(fallbackIconPath))
+      : sourceIcon;
+  } catch (error) {
+    console.warn(`Could not read the Taskfolk menu-bar icon: ${error.message}`);
+  }
+  if (fallbackIcon.isEmpty()) {
+    console.warn('Could not create the Taskfolk menu-bar icon.');
+    return;
+  }
+  const icon = fallbackIcon.resize({ width: 18, height: 18 });
   tray = new Tray(icon);
   tray.setToolTip('Taskfolk');
-  tray.on('click', toggleOffice);
+  if (process.platform !== 'darwin') tray.on('click', toggleOffice);
   rebuildMenus();
 }
 
@@ -1310,7 +1444,9 @@ ipcMain.handle('settings:load', () => {
       || credentials.token
       || credentials.password
     ),
-    alwaysOnTop: config.alwaysOnTop === undefined ? true : Boolean(config.alwaysOnTop),
+    alwaysOnTop: isAlwaysOnTopEnabled(config),
+    dockIconSupported: process.platform === 'darwin',
+    hideDockIcon: Boolean(config.hideDockIcon),
     displayMode: displayMode(config),
     selectedAgent: config.selectedAgent || '',
     opacity: normalizedOpacity(config.opacity),
@@ -1375,6 +1511,7 @@ ipcMain.handle('settings:import-config', async (event) => {
   }
 
   writeConfig(imported);
+  applyDockVisibility(imported);
   runtimeCredentials = savedCredentials(imported);
   runtimeOpenCodeCredentials = savedOpenCodeCredentials(imported);
   runtimeOpenClawUrl = '';
@@ -1475,6 +1612,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     ...config,
     connectionMode: mode,
     alwaysOnTop: Boolean(input.alwaysOnTop),
+    hideDockIcon: process.platform === 'darwin' && Boolean(input.hideDockIcon),
     displayMode: input.displayMode === 'avatar' ? 'avatar' : 'office',
     selectedAgent: String(input.selectedAgent || config.selectedAgent || ''),
     opacity: normalizedOpacity(input.opacity),
@@ -1503,6 +1641,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
 
   if (mode === 'local') {
     writeConfig(nextConfig);
+    applyDockVisibility(nextConfig);
     const local = await startLocalServer();
     runtimeCredentials = local.credentials;
     await createOfficeWindow(local.url, local.credentials);
@@ -1523,6 +1662,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
   const ses = session.fromPartition(PARTITION, { cache: true });
   await authenticate(url, credentials, ses);
   writeConfig(nextConfig);
+  applyDockVisibility(nextConfig);
   await createOfficeWindow(url, credentials, true);
   stopLocalServer();
   startupError = '';
@@ -1530,9 +1670,10 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
 });
 
 app.whenReady().then(async () => {
-  createTray();
-  rebuildMenus();
   const config = readConfig();
+  if (process.platform === 'darwin') applyDockVisibility(config);
+  else createTray();
+  rebuildMenus();
   const environmentUrl = String(process.env.TASKFOLK_URL || '').trim();
   const environmentCredentials = environmentUrl ? {
     token: String(process.env.TASKFOLK_TOKEN || ''),
@@ -1590,6 +1731,10 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   quitting = true;
+  saveWindowBounds();
+  for (const [window, metadata] of companionWindows) {
+    if (!metadata.primary) saveAdditionalFolkBounds(window);
+  }
   clearTimeout(openCodeTimer);
   clearTimeout(vsCodeCopilotTimer);
   clearTimeout(codexTimer);
