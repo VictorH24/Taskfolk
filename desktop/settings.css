@@ -100,6 +100,23 @@ button.secondaryButton {
   color: #dce4ec;
   font-size: 11px;
 }
+.configActions { display: flex; gap: 9px; }
+.configActions .secondaryButton { padding: 9px 12px; font-size: 12px; }
+.integrationButton { justify-self: start; }
+.integrationStatus {
+  display: none;
+  margin: 0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.integrationStatus.visible { display: block; }
+.integrationStatus.success { border: 1px solid rgba(75, 215, 164, .3); background: rgba(49, 185, 135, .08); color: #a8e9d1; }
+.integrationStatus.pending { border: 1px solid rgba(245, 190, 75, .35); background: rgba(245, 190, 75, .08); color: #f5d993; }
+.integrationStatus.error { border: 1px solid rgba(255, 109, 116, .35); background: rgba(255, 76, 87, .09); color: #ffadb1; }
 
 input:focus {
   border-color: #4bd7a4;
@@ -113,6 +130,18 @@ input:focus {
   margin: 2px 0;
 }
 .checkRow input { accent-color: #48d5a1; }
+.integrationLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.integrationIcon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+.integrationIconPixel { image-rendering: pixelated; }
 .integrationField {
   display: grid;
   gap: 10px;

@@ -23,9 +23,26 @@ const openCodeUrlInput = document.querySelector('#openCodeUrl');
 const openCodeAuthFields = document.querySelector('#openCodeAuthFields');
 const openCodeUsernameInput = document.querySelector('#openCodeUsername');
 const openCodePasswordInput = document.querySelector('#openCodePassword');
+const openClawEnabledInput = document.querySelector('#openClawEnabled');
+const openClawUrlField = document.querySelector('#openClawUrlField');
+const openClawUrlInput = document.querySelector('#openClawUrl');
+const openClawAuthFields = document.querySelector('#openClawAuthFields');
+const openClawTokenInput = document.querySelector('#openClawToken');
+const openClawPasswordInput = document.querySelector('#openClawPassword');
+const testOpenClawButton = document.querySelector('#testOpenClawButton');
+const openClawTestStatus = document.querySelector('#openClawTestStatus');
 const vsCodeCopilotEnabledInput = document.querySelector('#vsCodeCopilotEnabled');
 const vsCodeCopilotGroupingField = document.querySelector('#vsCodeCopilotGroupingField');
 const vsCodeCopilotGroupingInput = document.querySelector('#vsCodeCopilotGrouping');
+const codexEnabledInput = document.querySelector('#codexEnabled');
+const codexGroupingField = document.querySelector('#codexGroupingField');
+const codexGroupingInput = document.querySelector('#codexGrouping');
+const claudeEnabledInput = document.querySelector('#claudeEnabled');
+const claudeGroupingField = document.querySelector('#claudeGroupingField');
+const claudeGroupingInput = document.querySelector('#claudeGrouping');
+const importConfigButton = document.querySelector('#importConfigButton');
+const exportConfigButton = document.querySelector('#exportConfigButton');
+const configStatus = document.querySelector('#configStatus');
 const connectButton = document.querySelector('#connectButton');
 const message = document.querySelector('#message');
 const securityNote = document.querySelector('#securityNote');
@@ -34,6 +51,11 @@ let encryptionAvailable = false;
 function showError(value) {
   message.textContent = value || '';
   message.classList.toggle('visible', Boolean(value));
+}
+
+function showConfigStatus(kind = '', value = '') {
+  configStatus.textContent = value;
+  configStatus.className = `integrationStatus${value ? ` visible ${kind}` : ''}`;
 }
 
 function updateDisplayFields() {
@@ -56,6 +78,27 @@ function updateOpenCodeFields() {
 
 function updateVsCodeCopilotFields() {
   vsCodeCopilotGroupingField.classList.toggle('hidden', !vsCodeCopilotEnabledInput.checked);
+}
+
+function updateCodexFields() {
+  codexGroupingField.classList.toggle('hidden', !codexEnabledInput.checked);
+}
+
+function updateClaudeFields() {
+  claudeGroupingField.classList.toggle('hidden', !claudeEnabledInput.checked);
+}
+
+function updateOpenClawFields() {
+  openClawUrlField.classList.toggle('hidden', !openClawEnabledInput.checked);
+  openClawAuthFields.classList.toggle('hidden', !openClawEnabledInput.checked);
+  testOpenClawButton.classList.toggle('hidden', !openClawEnabledInput.checked);
+  openClawTestStatus.classList.toggle('hidden', !openClawEnabledInput.checked);
+  openClawUrlInput.required = openClawEnabledInput.checked;
+}
+
+function showOpenClawTestStatus(kind = '', value = '') {
+  openClawTestStatus.textContent = value;
+  openClawTestStatus.className = `integrationStatus${value ? ` visible ${kind}` : ''}`;
 }
 
 function updateConnectionFields() {
@@ -88,8 +131,21 @@ async function initialize() {
   openCodePasswordInput.placeholder = settings.openCodeCredentialsStored
     ? 'Saved securely — enter to replace'
     : 'Only if server auth is enabled';
+  openClawEnabledInput.checked = Boolean(settings.openClawEnabled);
+  openClawUrlInput.value = settings.openClawUrl || 'ws://127.0.0.1:18789';
+  openClawTokenInput.placeholder = settings.openClawCredentialsStored
+    ? 'Saved securely — enter to replace'
+    : 'Only if gateway token auth is enabled';
+  openClawPasswordInput.placeholder = settings.openClawCredentialsStored
+    ? 'Saved securely — enter to replace'
+    : 'Only if gateway password auth is enabled';
   vsCodeCopilotEnabledInput.checked = Boolean(settings.vsCodeCopilotEnabled);
   vsCodeCopilotGroupingInput.value = settings.vsCodeCopilotGrouping === 'single' ? 'single' : 'project';
+  codexEnabledInput.checked = Boolean(settings.codexEnabled);
+  codexGroupingInput.value = settings.codexGrouping === 'single' ? 'single' : 'project';
+  claudeEnabledInput.checked = Boolean(settings.claudeEnabled);
+  claudeGroupingInput.value = settings.claudeGrouping === 'single' ? 'single' : 'project';
+  while (selectedAgentInput.options.length > 2) selectedAgentInput.remove(2);
   for (const agent of settings.agents || []) {
     const option = document.createElement('option');
     option.value = agent.id;
@@ -97,10 +153,14 @@ async function initialize() {
     selectedAgentInput.append(option);
   }
   selectedAgentInput.value = settings.selectedAgent || '';
+  exportConfigButton.classList.toggle('hidden', !settings.hasSavedConfiguration);
   updateDisplayFields();
   updateOpacityLabel();
   updateOpenCodeFields();
+  updateOpenClawFields();
   updateVsCodeCopilotFields();
+  updateCodexFields();
+  updateClaudeFields();
   updateConnectionFields();
   tokenInput.placeholder = settings.credentialsStored
     ? 'Saved securely — enter a value to replace it'
@@ -113,10 +173,82 @@ connectionModeInput.addEventListener('change', updateConnectionFields);
 displayModeInput.addEventListener('change', updateDisplayFields);
 opacityInput.addEventListener('input', updateOpacityLabel);
 openCodeEnabledInput.addEventListener('change', updateOpenCodeFields);
+openClawEnabledInput.addEventListener('change', updateOpenClawFields);
 vsCodeCopilotEnabledInput.addEventListener('change', updateVsCodeCopilotFields);
+codexEnabledInput.addEventListener('change', updateCodexFields);
+claudeEnabledInput.addEventListener('change', updateClaudeFields);
 resetAvatarSizeButton.addEventListener('click', () => {
   avatarWidthInput.value = '300';
   avatarHeightInput.value = '380';
+});
+
+importConfigButton.addEventListener('click', async () => {
+  showConfigStatus();
+  importConfigButton.disabled = true;
+  try {
+    const result = await window.clawOffice.importConfig();
+    if (result.canceled) return;
+    await initialize();
+    showError('');
+    showConfigStatus('success', 'Configuration imported. Review the settings, then open the office to apply them.');
+  } catch (error) {
+    showConfigStatus('error', error.message || 'Could not import the configuration.');
+  } finally {
+    importConfigButton.disabled = false;
+  }
+});
+
+exportConfigButton.addEventListener('click', async () => {
+  showConfigStatus();
+  exportConfigButton.disabled = true;
+  try {
+    const result = await window.clawOffice.exportConfig();
+    if (!result.canceled) {
+      showConfigStatus('success', 'Configuration exported. Saved credentials remain encrypted and may need to be entered again on another computer.');
+    }
+  } catch (error) {
+    showConfigStatus('error', error.message || 'Could not export the configuration.');
+  } finally {
+    exportConfigButton.disabled = false;
+  }
+});
+
+testOpenClawButton.addEventListener('click', async () => {
+  if (!openClawUrlInput.reportValidity()) return;
+  showOpenClawTestStatus('pending', 'Connecting to the OpenClaw gateway and signing its device challenge…');
+  testOpenClawButton.disabled = true;
+  const previousLabel = testOpenClawButton.textContent;
+  testOpenClawButton.textContent = 'Testing…';
+  try {
+    const result = await window.clawOffice.testOpenClaw({
+      openClawUrl: openClawUrlInput.value,
+      openClawToken: openClawTokenInput.value,
+      openClawPassword: openClawPasswordInput.value
+    });
+    const device = result.deviceId ? `\nDevice: ${result.deviceId}` : '';
+    if (result.ok) {
+      showOpenClawTestStatus('success', `${result.message}\nGateway: ${result.gatewayUrl}${device}`);
+    } else if (result.pairingRequired) {
+      const approval = result.requestId
+        ? `openclaw devices approve ${result.requestId}`
+        : 'openclaw devices list\nopenclaw devices approve <requestId>';
+      showOpenClawTestStatus(
+        'pending',
+        `Pairing request created. On the OpenClaw host run:\n${approval}\n\nAfter approval, press this test button again.${device}`
+      );
+    } else {
+      const diagnostic = [result.stage, result.gatewayCode, result.detailsCode].filter(Boolean).join(' / ');
+      showOpenClawTestStatus(
+        'error',
+        `${result.message}${diagnostic ? `\nStage: ${diagnostic}` : ''}\nGateway: ${result.gatewayUrl || openClawUrlInput.value}${device}`
+      );
+    }
+  } catch (error) {
+    showOpenClawTestStatus('error', error.message || 'Could not test the OpenClaw connection.');
+  } finally {
+    testOpenClawButton.disabled = false;
+    testOpenClawButton.textContent = previousLabel;
+  }
 });
 
 form.addEventListener('submit', async (event) => {
@@ -141,8 +273,16 @@ form.addEventListener('submit', async (event) => {
       openCodeUrl: openCodeUrlInput.value,
       openCodeUsername: openCodeUsernameInput.value,
       openCodePassword: openCodePasswordInput.value,
+      openClawEnabled: openClawEnabledInput.checked,
+      openClawUrl: openClawUrlInput.value,
+      openClawToken: openClawTokenInput.value,
+      openClawPassword: openClawPasswordInput.value,
       vsCodeCopilotEnabled: vsCodeCopilotEnabledInput.checked,
-      vsCodeCopilotGrouping: vsCodeCopilotGroupingInput.value
+      vsCodeCopilotGrouping: vsCodeCopilotGroupingInput.value,
+      codexEnabled: codexEnabledInput.checked,
+      codexGrouping: codexGroupingInput.value,
+      claudeEnabled: claudeEnabledInput.checked,
+      claudeGrouping: claudeGroupingInput.value
     });
   } catch (error) {
     showError(error.message || 'Could not connect to Taskfolk.');

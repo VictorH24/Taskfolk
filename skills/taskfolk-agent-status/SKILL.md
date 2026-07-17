@@ -1,6 +1,6 @@
 ---
 name: taskfolk-agent-status
-description: Use this skill when an agent should publish its current Taskfolk avatar status through the agent status API, especially from SOUL.MD instructions that require setting Working before a task and Sleeping before finishing.
+description: Use this skill when an agent should publish its current Taskfolk avatar status through the agent status API, especially from SOUL.MD instructions that require setting Working before a task and Success before finishing.
 ---
 
 # Taskfolk Agent Status
@@ -20,7 +20,7 @@ Never invent or expose a token. If no token is configured, continue the task and
 
 Before starting any user task, update the agent to `Working`.
 
-Before sending the final response, update the agent to `Sleeping`.
+Before sending the final response after completing the task, update the agent to `Success`.
 
 If the task becomes blocked, update to `Blocked` with a short task/message explaining the blocker.
 
@@ -29,6 +29,7 @@ If the task becomes blocked, update to `Blocked` with a short task/message expla
 Only send one of these states:
 
 - `Working`
+- `Success`
 - `Blocked`
 - `Sleeping`
 - `Reading`
@@ -72,7 +73,7 @@ The `task` field is optional but recommended. Keep it short because it appears i
 1. At task start, call the API with `state: "Working"` and a concise `task`. Use `scripts/update_status.py` if Python is available.
 2. Do the requested work.
 3. If blocked, call the API with `state: "Blocked"` and describe the blocker.
-4. Before the final response, call the API with `state: "Sleeping"` and a task like `Task complete`.
+4. Before the final response, call the API with `state: "Success"` and a task like `Task complete`.
 
 ## Minimal helpers
 
@@ -85,7 +86,7 @@ python3 skills/taskfolk-agent-status/scripts/update_status.py --state Working --
 Then before finishing:
 
 ```bash
-python3 skills/taskfolk-agent-status/scripts/update_status.py --state Sleeping --task "Task complete"
+python3 skills/taskfolk-agent-status/scripts/update_status.py --state Success --task "Task complete"
 ```
 
 Curl fallback:
@@ -103,7 +104,7 @@ Then before finishing:
 status_url="${TASKFOLK_AGENT_STATUS_URL:-http://localhost:3000/api/agent-state}"
 curl -sS -X POST "$status_url" \
   -H "Content-Type: application/json" \
-  -d '{"token":"'"$TASKFOLK_AGENT_TOKEN"'","state":"Sleeping","task":"Task complete"}'
+  -d '{"token":"'"$TASKFOLK_AGENT_TOKEN"'","state":"Success","task":"Task complete"}'
 ```
 
 If the API call fails, do not retry endlessly and do not let status updates prevent completion of the user task.

@@ -1,6 +1,6 @@
 # Taskfolk
 
-Taskfolk is a desktop companion that turns your AI coding sessions into a live pixel office. Keep it beside your editor to see which agents are working, idle, or blocked without opening another dashboard.
+Taskfolk is a desktop companion that turns your AI coding sessions into a live pixel office. Keep it beside your editor to see which agents are working, successful, idle, or blocked without opening another dashboard.
 
 ![Taskfolk desktop companion showing four live agents in a pixel office](docs/taskfolk_day.gif)
 
@@ -13,7 +13,7 @@ npm run desktop
 
 On first launch, choose how the companion gets its data:
 
-- **Run in this app** starts a private Taskfolk server automatically. No separate server is required. This mode supports local OpenCode and Visual Studio Code Copilot activity.
+- **Run in this app** starts a private Taskfolk server automatically. No separate server is required. This mode supports local or remote OpenClaw gateways, OpenCode, Codex, and Visual Studio Code Copilot activity.
 - **Connect to a remote server** connects the companion to an existing Taskfolk instance using its URL and gateway credentials.
 
 The companion can display the complete office or one live avatar on a transparent background. Drag it anywhere, resize it, adjust its opacity, keep it above other windows, or leave it running from the tray or menu bar. Window settings are remembered between launches.
@@ -32,7 +32,7 @@ Use **Add Another Folk** from the right-click menu to place multiple independent
 
 These avatars animate in the companion as their live state changes:
 
-| Variant 0 | Robot | Working | Coffee break |
+| Reading | Working Robot | Working Cat | Coffee break |
 | :---: | :---: | :---: | :---: |
 | <img src="docs/taskfolk-avatar-reading.gif" alt="Animated Taskfolk avatar variant 0 working at a desk" width="180"> | <img src="docs/taskfolk-avatar-robot.gif" alt="Animated Taskfolk robot avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-working.gif" alt="Animated Taskfolk cat avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-coffee.gif" alt="Animated Taskfolk avatar taking a coffee break" width="180"> |
 
@@ -40,6 +40,8 @@ These avatars animate in the companion as their live state changes:
 
 - **OpenCode Desktop and terminal sessions** — detects projects, session state, model, agent, and activity timestamps. For terminal sessions, run `opencode --port 4096` so the companion can connect.
 - **Visual Studio Code Copilot chats** — detects active chats in VS Code and VS Code Insiders without an extra extension, server, or Copilot token.
+- **Codex Desktop and CLI tasks** — detects active Codex work from its local, read-only task index and lifecycle event metadata without an API token.
+- **OpenClaw gateway** — connects to a local or remote OpenClaw instance and reads configured agents plus safe session metadata over the gateway's read-only RPCs.
 - **OpenClaw and manual agents** — connect to a remote Taskfolk server to display configured OpenClaw agents or agents that publish their own status through the API.
 
 Taskfolk reads only the local metadata needed to represent activity. It does not read or publish prompts, response text, tool output, attachments, or credentials. See [Companion app reference](#companion-app-reference) for setup options, privacy details, window controls, and packaging.
@@ -52,7 +54,7 @@ The same live office is available as a browser dashboard with configuration, sha
 
 ### Dashboard features
 
-- At-a-glance active, idle, and blocked agent states.
+- At-a-glance active, success, idle, and blocked agent states.
 - Live agent refreshes from OpenClaw, desktop connectors, manual agents, or `OPENCLAW_AGENTS_JSON`.
 - Light, dark, and system themes.
 - Upload, download, preview, edit, and archive tools in the folder view.
@@ -74,7 +76,7 @@ The packaged desktop app uses the universal digital-agent icon at `desktop/icon.
 
 Choose one of two office sources:
 
-- **Run in this app** starts a private Taskfolk server bound to a random loopback port. It requires no separately running server and currently offers local OpenCode and VS Code Copilot agents only. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
+- **Run in this app** starts a private Taskfolk server on a loopback port selected during the first launch and saved for reuse on later launches. It requires no separately running Taskfolk server and offers local OpenClaw, OpenCode, Codex, and VS Code Copilot agents. The folder-view module is disabled by default in this mode. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
 - **Connect to a remote server** uses a running Taskfolk URL (for example `http://127.0.0.1:3000`), its gateway token, and optional gateway password. The companion exchanges those credentials for the normal Taskfolk session cookie.
 
 Remote credentials are never placed in the URL and are encrypted with Electron `safeStorage` when operating-system encryption is available. You can switch office sources later from **Setup**.
@@ -105,11 +107,33 @@ Each OpenCode project gets its own stable avatar configuration key, so it keeps 
 
 If the OpenCode server uses HTTP Basic authentication, enter its username and password in Setup. The default username is `opencode`. The password is encrypted with Electron `safeStorage` when operating-system encryption is available. Managed launches can provide `OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` instead.
 
+### Connect an OpenClaw instance
+
+In **Setup**, enable **Connect to an OpenClaw instance** and enter the gateway URL. The default is `ws://127.0.0.1:18789`; `http://` and `https://` inputs are converted to their WebSocket equivalents. Remote gateways should use `wss://`. Plain `ws://` is also accepted for loopback and Tailscale's encrypted `100.64.0.0/10` address range.
+
+Remote gateways require OpenClaw device pairing. Taskfolk creates and securely stores a stable Ed25519 device identity. Use **Test connection / request approval** in Setup to submit the pairing request before opening the office. Setup reports the connection stage, device ID, gateway error codes, and exact request ID. On the OpenClaw host, verify the pending **Taskfolk** request and approve it with the displayed `openclaw devices approve <requestId>` command, then test again. The approved device token is stored with the operating system's secure storage and reused for that gateway.
+
+Taskfolk requests `agents.list` and `sessions.list` with the `operator.read` scope, then publishes configured agents, current status, session title, model, workspace, and timestamps into the office. It does not request transcript messages, prompts, tool output, or configuration writes. Gateway tokens and passwords are encrypted with Electron `safeStorage` when available. Managed launches can provide `OPENCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_TOKEN`, and `OPENCLAW_GATEWAY_PASSWORD`.
+
 ### Track Visual Studio Code Copilot chats
 
 The desktop companion can also publish GitHub Copilot chat activity from Visual Studio Code and Visual Studio Code Insiders. In **Setup**, enable **Track Visual Studio Code Copilot chats**, then choose **One agent per project** or **One agent for all projects**. No Copilot server, token, or additional VS Code extension is required.
 
 This connector reads VS Code's local, machine-scoped chat index and session file timestamps in read-only mode. It uses only the workspace identity, session title, empty-session flag, and timestamps needed to build Taskfolk agents. It does not load or publish prompt bodies, response text, tool output, attachments, or Copilot credentials. Sessions are shown only while VS Code is running, empty chats are ignored, and each workspace keeps a stable avatar configuration key across chat sessions and restarts.
+
+### Track Codex Desktop and CLI tasks
+
+In **Setup**, enable **Track Codex Desktop and CLI tasks**, then choose **One agent per project** or **One agent for all projects**. No OpenAI API key, ChatGPT credential, server, or extra extension is required. Taskfolk automatically discovers the local Codex state database under `CODEX_HOME` or `~/.codex` and shows sessions only while Codex Desktop or the Codex CLI is running.
+
+The connector opens Codex's task index read-only and uses task title, project path, model, client type, timestamps, and lifecycle event kinds to build Taskfolk agents. It inspects only the tail of each current rollout to distinguish started, completed, aborted, and failed work. Prompt bodies, response text, reasoning, tool inputs and outputs, attachments, and credentials are not published. Each project keeps a stable avatar configuration key across Codex tasks and restarts.
+
+### Track Claude Cowork and Claude Code tasks
+
+In **Setup**, enable **Track Claude Cowork and Claude Code tasks**, then choose **One agent per project** or **One agent for all projects**. No Anthropic API key, Claude credential, server, or extra extension is required. Taskfolk discovers Claude's local project transcripts under `CLAUDE_CONFIG_DIR` or `~/.claude/projects` and shows sessions only while Claude Desktop or the Claude Code CLI is running.
+
+The connector reads transcript tails in read-only mode and retains only working directory, session ID, generated/custom title, model, timestamp, and lifecycle metadata. Prompt bodies, responses, reasoning, tool inputs and outputs, attachments, and credentials are not published. Each project keeps a stable avatar configuration key across Claude sessions and restarts.
+
+Claude Cowork can run remotely and continue after Claude Desktop closes. Anthropic does not currently expose those cloud sessions through a local consumer status API, so Taskfolk can track local Claude Code sessions (including Code launched from Claude Desktop), but not remote-only Cowork execution. Such sessions are omitted rather than shown with a guessed status.
 
 The Taskfolk server keeps desktop-published runtime agents in memory and expires them after 90 seconds without an update. Override this with `RUNTIME_AGENT_TTL_MS` if needed.
 
@@ -134,6 +158,19 @@ npm run desktop:dist
 ```
 
 Installers are written to `dist/`, which is gitignored.
+
+For a macOS test installer without a Developer ID certificate, produce a complete
+ad-hoc signature instead of leaving the Electron bundle partially signed:
+
+```bash
+npm run desktop:dist:test
+```
+
+macOS will still block this test build because its developer is unidentified. A
+tester should be able to attempt to open it once, then approve it from **System
+Settings → Privacy & Security → Open Anyway**. Ad-hoc signatures are not trusted
+for distribution, so behavior can vary by macOS version. Public releases should
+use Developer ID signing and Apple notarization instead.
 
 ## Run in docker
 
@@ -186,7 +223,7 @@ For local demos or overrides, set `OPENCLAW_AGENTS_JSON` to an array:
 ]
 ```
 
-`status` can be `active`, `idle`, or `blocked`. If no config or logs are available, the UI falls back to sample agents.
+`status` can be `active`, `success`, `idle`, or `blocked`. If no config or logs are available, the UI falls back to sample agents.
 
 The office scene config can include `emptyDesks` to reserve desk slots in the pixel office. Manage it from the Config page's Pixel office controls, or set it in the saved avatar scene config:
 
@@ -219,7 +256,7 @@ curl -X POST http://localhost:3000/api/agent-state \
   -d '{"token":"generated-token","state":"Working","task":"Handling queue item 42"}'
 ```
 
-You can also pass the token as `X-Agent-Token` and omit `token` from the JSON body. The accepted states are `Working`, `Blocked`, `Sleeping`, `Reading`, `Gaming`, `Coffee break`, `Listening`, and `Walking`. API calls update `state.json` in `CONFIG_DIR` (default `/config/state.json`), and `/api/agents` merges that file into the office view so manual agents appear beside detected agents.
+You can also pass the token as `X-Agent-Token` and omit `token` from the JSON body. The accepted states are `Working`, `Success`, `Blocked`, `Sleeping`, `Reading`, `Gaming`, `Coffee break`, `Listening`, and `Walking`. API calls update `state.json` in `CONFIG_DIR` (default `/config/state.json`), and `/api/agents` merges that file into the office view so manual agents appear beside detected agents.
 
 ### Agent status skill
 
@@ -228,7 +265,7 @@ This repo includes a reusable skill at `skills/taskfolk-agent-status/SKILL.md` f
 Add this to the agent's `SOUL.MD`:
 
 ```md
-Use the `taskfolk-agent-status` skill for every task. Set your Taskfolk status to Working before beginning work, and set it to Sleeping before sending the final response.
+Use the `taskfolk-agent-status` skill for every task. Set your Taskfolk status to Working before beginning work, and set it to Success before sending the final response.
 ```
 
 ### Status calculation
@@ -240,6 +277,7 @@ Taskfolk starts from configured agents in `openclaw.json` and overlays matching 
 - Mounted `sessions.json` files are matched by their path, `agentId` fields, or session keys like `agent:<id>:...`; the newest available session timestamp (including nested message/run metadata and file modification time) becomes the agent's last activity.
 - Log lines are matched by fields like `agentId`, `agent_id`, `agent`, `agentName`, `sessionKey`, `session`, `label`, or `name`.
 - `active`: latest matching session or log timestamp is within `AGENT_ACTIVE_MS` (default 2 minutes).
+- `success`: a completed session remains in its success animation for `AGENT_SUCCESS_MS` (default 2 minutes).
 - `idle`: configured agent has no matching runtime activity, or latest activity is older than the active window.
 - `blocked`: latest task/log text contains `error`, `failed`, `failure`, `exception`, `blocked`, or `fatal`.
 

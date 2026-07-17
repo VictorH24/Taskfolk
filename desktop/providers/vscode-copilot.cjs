@@ -9,6 +9,7 @@ const DEFAULT_MAX_AGENTS = 24;
 const VSCODE_COPILOT_GROUPING_PROJECT = 'project';
 const VSCODE_COPILOT_GROUPING_SINGLE = 'single';
 const CHAT_INDEX_KEY = 'chat.ChatSessionStore.index';
+const SESSION_TAIL_BYTES = 256 * 1024;
 
 function defaultVsCodeWorkspaceStorageRoots({
   platform = process.platform,
@@ -107,6 +108,77 @@ function sessionFileMtime(workspaceStoragePath, sessionId) {
   return 0;
 }
 
+function latestSessionModelState(workspaceStoragePath, sessionId) {
+  let sessionPath = '';
+  for (const extension of ['jsonl', 'json']) {
+    const candidate = path.join(workspaceStoragePath, 'chatSessions', `${sessionId}.${extension}`);
+    if (fs.existsSync(candidate)) {
+      sessionPath = candidate;
+      break;
+    }
+  }
+  if (!sessionPath) return null;
+
+  let handle;
+  try {
+    handle = fs.openSync(sessionPath, 'r');
+    const size = fs.fstatSync(handle).size;
+    const length = Math.min(size, SESSION_TAIL_BYTES);
+    if (!length) return null;
+    const buffer = Buffer.alloc(length);
+    fs.readSync(handle, buffer, 0, length, size - length);
+    const lines = buffer.toString('utf8').split(/\r?\n/);
+    let latestRequest = -1;
+    let latestState = null;
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let record;
+      try { record = JSON.parse(line); } catch { continue; }
+
+      if (record?.kind === 0 && Array.isArray(record?.v?.requests)) {
+        const index = record.v.requests.length - 1;
+        const state = record.v.requests[index]?.modelState;
+        if (index >= latestRequest && state && typeof state === 'object') {
+          latestRequest = index;
+          latestState = state;
+        }
+      }
+
+      const key = record?.k;
+      if (record?.kind === 2 && Array.isArray(key) && key.length === 1
+        && key[0] === 'requests' && Array.isArray(record.v) && record.v.length) {
+        latestRequest += record.v.length;
+        latestState = null;
+        continue;
+      }
+      if (!Array.isArray(key) || key[0] !== 'requests' || !Number.isInteger(key[1])) continue;
+      const requestIndex = key[1];
+      if (requestIndex < latestRequest) continue;
+      if (requestIndex > latestRequest) {
+        latestRequest = requestIndex;
+        latestState = null;
+      }
+      if (key[2] === 'modelState' && key.length === 3 && record.v && typeof record.v === 'object') {
+        latestState = record.v;
+      } else if (key[2] === 'modelState' && key[3] === 'completedAt') {
+        latestState = { ...(latestState || {}), completedAt: record.v };
+      }
+    }
+    return latestState;
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
+}
+
+function sessionCompletionStatus(workspaceStoragePath, sessionId) {
+  const state = latestSessionModelState(workspaceStoragePath, sessionId);
+  if (!state) return null;
+  return state.completedAt ? 'idle' : 'active';
+}
+
 function projectIdentity(reference) {
   const normalized = String(reference || '').trim();
   const digest = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 20);
@@ -122,7 +194,8 @@ function normalizeSession(entry, reference, workspaceStoragePath, nowMs) {
   const lastMessageMs = Number(entry?.lastMessageDate) || 0;
   const fileMtimeMs = sessionFileMtime(workspaceStoragePath, sessionId);
   const updatedAt = Math.max(lastMessageMs, fileMtimeMs);
-  const status = updatedAt > 0 && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS ? 'active' : 'idle';
+  const explicitStatus = sessionCompletionStatus(workspaceStoragePath, sessionId);
+  const status = explicitStatus || (updatedAt > 0 && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS ? 'active' : 'idle');
   const workspace = workspaceDetails(reference);
   const project = projectIdentity(reference);
   const title = String(entry?.title || '').trim();
@@ -217,6 +290,7 @@ module.exports = {
   normalizeSession,
   normalizeVsCodeCopilotGrouping,
   projectIdentity,
+  sessionCompletionStatus,
   singleVsCodeCopilotAgent,
   workspaceDetails
 };

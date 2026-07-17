@@ -10,7 +10,8 @@
     "dev": "node --watch server.js",
     "test": "node --test test/*.test.cjs",
     "desktop": "electron .",
-    "desktop:dist": "electron-builder"
+    "desktop:dist": "electron-builder",
+    "desktop:dist:test": "electron-builder --mac -c.mac.identity=- -c.mac.hardenedRuntime=false"
   },
   "dependencies": {
     "express": "^4.18.3",

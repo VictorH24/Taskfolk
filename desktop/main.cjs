@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray } = require('electron');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -11,9 +11,24 @@ const {
 } = require('./providers/opencode.cjs');
 const { fetchOpenCodeDesktopAgents } = require('./providers/opencode-desktop.cjs');
 const {
+  DEFAULT_OPENCLAW_URL,
+  createOpenClawDeviceIdentity,
+  fetchOpenClawAgents,
+  normalizeOpenClawUrl
+} = require('./providers/openclaw.cjs');
+const {
   fetchVsCodeCopilotAgents,
   normalizeVsCodeCopilotGrouping
 } = require('./providers/vscode-copilot.cjs');
+const {
+  fetchCodexAgents,
+  normalizeCodexGrouping
+} = require('./providers/codex.cjs');
+const {
+  fetchClaudeAgents,
+  normalizeClaudeGrouping
+} = require('./providers/claude.cjs');
+const { normalizeLocalServerPort } = require('./local-server.cjs');
 
 const DEFAULT_BOUNDS = { width: 720, height: 500 };
 const DEFAULT_AVATAR_BOUNDS = { width: 300, height: 380 };
@@ -31,6 +46,9 @@ const MOST_RECENT_AGENT_ID = '__latest__';
 const OPENCODE_REFRESH_MS = 5_000;
 const OPENCODE_REQUEST_TIMEOUT_MS = 2_500;
 const VSCODE_COPILOT_REFRESH_MS = 5_000;
+const CODEX_REFRESH_MS = 5_000;
+const CLAUDE_REFRESH_MS = 5_000;
+const OPENCLAW_REFRESH_MS = 5_000;
 const LOCAL_SERVER_START_TIMEOUT_MS = 12_000;
 
 app.setName('Taskfolk');
@@ -49,6 +67,14 @@ let openCodeSyncInFlight = false;
 let openCodePublished = false;
 let openCodeLastError = '';
 let runtimeOpenCodeCredentials = null;
+let openClawTimer = null;
+let openClawSyncInFlight = false;
+let openClawPublished = false;
+let openClawLastError = '';
+let runtimeOpenClawCredentials = null;
+let runtimeOpenClawCredentialsUrl = '';
+let runtimeOpenClawUrl = '';
+let runtimeOpenClawDeviceIdentity = null;
 let localServerProcess = null;
 let localServerUrl = '';
 let localServerCredentials = null;
@@ -56,6 +82,14 @@ let vsCodeCopilotTimer = null;
 let vsCodeCopilotSyncInFlight = false;
 let vsCodeCopilotPublished = false;
 let vsCodeCopilotLastError = '';
+let codexTimer = null;
+let codexSyncInFlight = false;
+let codexPublished = false;
+let codexLastError = '';
+let claudeTimer = null;
+let claudeSyncInFlight = false;
+let claudePublished = false;
+let claudeLastError = '';
 let quitting = false;
 const runtimeAgentMenuSignatures = new Map();
 const companionWindows = new Map();
@@ -136,6 +170,15 @@ function writeConfig(next) {
   fs.writeFileSync(configPath(), `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
 }
 
+function hasSavedConfig() {
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath(), 'utf8'));
+    return Boolean(config && typeof config === 'object' && !Array.isArray(config) && Object.keys(config).length);
+  } catch {
+    return false;
+  }
+}
+
 function ensureRuntimeSourceId(config = readConfig()) {
   if (config.runtimeSourceId) return config.runtimeSourceId;
   const runtimeSourceId = `desktop-${crypto.randomUUID()}`;
@@ -171,6 +214,52 @@ function savedOpenCodeCredentials(config = readConfig()) {
   };
 }
 
+function savedOpenClawCredentials(config = readConfig(), baseUrl = '') {
+  const normalizedUrl = baseUrl ? normalizeOpenClawUrl(baseUrl) : '';
+  const credentialsUrl = config.openClawCredentialsUrl || config.openClawUrl || '';
+  const credentialsMatch = !normalizedUrl || !credentialsUrl
+    || normalizeOpenClawUrl(credentialsUrl) === normalizedUrl;
+  return {
+    token: credentialsMatch ? decrypt(config.encryptedOpenClawToken) : '',
+    password: credentialsMatch ? decrypt(config.encryptedOpenClawPassword) : '',
+    deviceToken: normalizedUrl && config.openClawDeviceTokenUrl === normalizedUrl
+      ? decrypt(config.encryptedOpenClawDeviceToken)
+      : ''
+  };
+}
+
+function ensureOpenClawDeviceIdentity(config = readConfig()) {
+  if (runtimeOpenClawDeviceIdentity) return runtimeOpenClawDeviceIdentity;
+  const saved = {
+    deviceId: String(config.openClawDeviceId || ''),
+    publicKey: String(config.openClawDevicePublicKey || ''),
+    privateKey: decrypt(config.encryptedOpenClawDevicePrivateKey)
+  };
+  if (saved.deviceId && saved.publicKey && saved.privateKey) {
+    runtimeOpenClawDeviceIdentity = saved;
+    return saved;
+  }
+  runtimeOpenClawDeviceIdentity = createOpenClawDeviceIdentity();
+  writeConfig({
+    ...config,
+    openClawDeviceId: runtimeOpenClawDeviceIdentity.deviceId,
+    openClawDevicePublicKey: runtimeOpenClawDeviceIdentity.publicKey,
+    encryptedOpenClawDevicePrivateKey: encrypt(runtimeOpenClawDeviceIdentity.privateKey)
+  });
+  return runtimeOpenClawDeviceIdentity;
+}
+
+function rememberOpenClawDeviceToken(baseUrl, token, scopes = []) {
+  if (!token) return;
+  const config = readConfig();
+  writeConfig({
+    ...config,
+    openClawDeviceTokenUrl: normalizeOpenClawUrl(baseUrl),
+    encryptedOpenClawDeviceToken: encrypt(token),
+    openClawDeviceTokenScopes: Array.isArray(scopes) ? scopes.map(String) : []
+  });
+}
+
 function connectionMode(config = readConfig()) {
   if (config.connectionMode === 'local') return 'local';
   if (config.connectionMode === 'remote') return 'remote';
@@ -183,7 +272,6 @@ function localServerPaths() {
     root,
     shared: path.join(root, 'shared'),
     config: path.join(root, 'config'),
-    tasks: path.join(root, 'tasks'),
     fixture: path.join(root, 'test-agents.json')
   };
 }
@@ -203,9 +291,10 @@ async function startLocalServer() {
 
   stopLocalServer();
   const paths = localServerPaths();
-  for (const directory of [paths.root, paths.shared, paths.config, paths.tasks]) {
+  for (const directory of [paths.root, paths.shared, paths.config]) {
     fs.mkdirSync(directory, { recursive: true });
   }
+  const configuredPort = normalizeLocalServerPort(readConfig().localServerPort);
   const token = crypto.randomBytes(32).toString('base64url');
   const child = spawn(process.execPath, [path.join(app.getAppPath(), 'server.js')], {
     cwd: paths.root,
@@ -213,11 +302,10 @@ async function startLocalServer() {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       HOST: '127.0.0.1',
-      PORT: '0',
+      PORT: String(configuredPort),
       LOCAL_DESKTOP_MODE: 'true',
       SHARED_DIR: paths.shared,
       CONFIG_DIR: paths.config,
-      TASKS_DIR: paths.tasks,
       OPENCLAW_CONFIG_PATH: path.join(paths.config, 'openclaw.json'),
       OPENCLAW_LOG_DIR: path.join(paths.root, 'openclaw-logs'),
       OPENCLAW_SESSIONS_DIR: path.join(paths.root, 'openclaw-agents'),
@@ -241,6 +329,11 @@ async function startLocalServer() {
         if (localServerProcess === child) stopLocalServer();
         reject(error);
         return;
+      }
+      const listeningPort = normalizeLocalServerPort(new URL(url).port);
+      if (listeningPort && listeningPort !== configuredPort) {
+        const config = readConfig();
+        writeConfig({ ...config, localServerPort: listeningPort });
       }
       localServerUrl = url;
       localServerCredentials = { token, password: '' };
@@ -618,6 +711,144 @@ function startVsCodeCopilotAdapter() {
   void syncVsCodeCopilotAdapter();
 }
 
+function scheduleCodexSync() {
+  clearTimeout(codexTimer);
+  codexTimer = null;
+  if (readConfig().codexEnabled || codexPublished) {
+    codexTimer = setTimeout(syncCodexAdapter, CODEX_REFRESH_MS);
+  }
+}
+
+async function syncCodexAdapter() {
+  if (codexSyncInFlight) return;
+  codexSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.codexEnabled) {
+      if (codexPublished) await publishRuntimeAgents('codex', [], config);
+      codexPublished = false;
+      codexLastError = '';
+      return;
+    }
+    const agents = await fetchCodexAgents({ grouping: normalizeCodexGrouping(config.codexGrouping) });
+    await publishRuntimeAgents('codex', agents, config);
+    codexPublished = agents.length > 0;
+    codexLastError = '';
+  } catch (error) {
+    const message = error?.message || 'Could not read Codex activity.';
+    if (message !== codexLastError) console.warn(`Codex adapter: ${message}`);
+    codexLastError = message;
+    if (codexPublished) {
+      try { await publishRuntimeAgents('codex', []); } catch {}
+      codexPublished = false;
+    }
+  } finally {
+    codexSyncInFlight = false;
+    scheduleCodexSync();
+  }
+}
+
+function startCodexAdapter() {
+  clearTimeout(codexTimer);
+  codexTimer = null;
+  void syncCodexAdapter();
+}
+
+function scheduleClaudeSync() {
+  clearTimeout(claudeTimer);
+  claudeTimer = null;
+  if (readConfig().claudeEnabled || claudePublished) {
+    claudeTimer = setTimeout(syncClaudeAdapter, CLAUDE_REFRESH_MS);
+  }
+}
+
+async function syncClaudeAdapter() {
+  if (claudeSyncInFlight) return;
+  claudeSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.claudeEnabled) {
+      if (claudePublished) await publishRuntimeAgents('claude', [], config);
+      claudePublished = false;
+      claudeLastError = '';
+      return;
+    }
+    const agents = await fetchClaudeAgents({ grouping: normalizeClaudeGrouping(config.claudeGrouping) });
+    await publishRuntimeAgents('claude', agents, config);
+    claudePublished = agents.length > 0;
+    claudeLastError = '';
+  } catch (error) {
+    const message = error?.message || 'Could not read Claude activity.';
+    if (message !== claudeLastError) console.warn(`Claude adapter: ${message}`);
+    claudeLastError = message;
+    if (claudePublished) {
+      try { await publishRuntimeAgents('claude', []); } catch {}
+      claudePublished = false;
+    }
+  } finally {
+    claudeSyncInFlight = false;
+    scheduleClaudeSync();
+  }
+}
+
+function startClaudeAdapter() {
+  clearTimeout(claudeTimer);
+  claudeTimer = null;
+  void syncClaudeAdapter();
+}
+
+function scheduleOpenClawSync() {
+  clearTimeout(openClawTimer);
+  openClawTimer = null;
+  if (readConfig().openClawEnabled || openClawPublished) {
+    openClawTimer = setTimeout(syncOpenClawAdapter, OPENCLAW_REFRESH_MS);
+  }
+}
+
+async function syncOpenClawAdapter() {
+  if (openClawSyncInFlight) return;
+  openClawSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.openClawEnabled) {
+      if (openClawPublished) await publishRuntimeAgents('openclaw', [], config);
+      openClawPublished = false;
+      openClawLastError = '';
+      return;
+    }
+    const baseUrl = runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL;
+    const agents = await fetchOpenClawAgents({
+      baseUrl,
+      ...savedOpenClawCredentials(config, baseUrl),
+      ...(runtimeOpenClawCredentials && runtimeOpenClawCredentialsUrl === normalizeOpenClawUrl(baseUrl)
+        ? runtimeOpenClawCredentials
+        : {}),
+      deviceIdentity: ensureOpenClawDeviceIdentity(config),
+      onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes)
+    });
+    await publishRuntimeAgents('openclaw', agents, config);
+    openClawPublished = agents.length > 0;
+    openClawLastError = '';
+  } catch (error) {
+    const message = error?.message || 'Could not read OpenClaw gateway activity.';
+    if (message !== openClawLastError) console.warn(`OpenClaw adapter: ${message}`);
+    openClawLastError = message;
+    if (openClawPublished) {
+      try { await publishRuntimeAgents('openclaw', []); } catch {}
+      openClawPublished = false;
+    }
+  } finally {
+    openClawSyncInFlight = false;
+    scheduleOpenClawSync();
+  }
+}
+
+function startOpenClawAdapter() {
+  clearTimeout(openClawTimer);
+  openClawTimer = null;
+  void syncOpenClawAdapter();
+}
+
 function companionUrl(baseUrl = activeBaseUrl, config = readConfig(), agentId = '') {
   const url = new URL(endpoint(baseUrl, '/index.html'));
   url.searchParams.set('companion', '1');
@@ -897,6 +1128,9 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Companion windows must continue polling and animating while another app
+      // has focus. Electron otherwise throttles background renderer timers.
+      backgroundThrottling: false,
       devTools: !app.isPackaged
     }
   });
@@ -949,6 +1183,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
     runtimeAgentMenuSignatures.clear();
     openCodePublished = false;
     vsCodeCopilotPublished = false;
+    openClawPublished = false;
   }
   activeBaseUrl = normalizedUrl;
   let config = readConfig();
@@ -992,6 +1227,9 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   await primaryWindow.loadURL(companionUrl(normalizedUrl, config));
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
+  startCodexAdapter();
+  startClaudeAdapter();
+  startOpenClawAdapter();
   settingsWindow?.close();
   rebuildMenus();
 }
@@ -1085,10 +1323,129 @@ ipcMain.handle('settings:load', () => {
     openCodeCredentialsStored: Boolean(runtimeOpenCodeCredentials?.password || decrypt(config.encryptedOpenCodePassword)),
     vsCodeCopilotEnabled: config.vsCodeCopilotEnabled === undefined ? mode === 'local' : Boolean(config.vsCodeCopilotEnabled),
     vsCodeCopilotGrouping: normalizeVsCodeCopilotGrouping(config.vsCodeCopilotGrouping),
+    codexEnabled: config.codexEnabled === undefined ? mode === 'local' : Boolean(config.codexEnabled),
+    codexGrouping: normalizeCodexGrouping(config.codexGrouping),
+    claudeEnabled: config.claudeEnabled === undefined ? mode === 'local' : Boolean(config.claudeEnabled),
+    claudeGrouping: normalizeClaudeGrouping(config.claudeGrouping),
+    openClawEnabled: Boolean(config.openClawEnabled),
+    openClawUrl: runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL,
+    openClawCredentialsStored: Boolean(
+      (runtimeOpenClawCredentialsUrl === (runtimeOpenClawUrl || config.openClawUrl)
+        && (runtimeOpenClawCredentials?.token || runtimeOpenClawCredentials?.password))
+      || savedOpenClawCredentials(config, runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL).token
+      || savedOpenClawCredentials(config, runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL).password
+    ),
     agents: availableAgents,
+    hasSavedConfiguration: hasSavedConfig(),
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
     error: startupError
   };
+});
+
+ipcMain.handle('settings:import-config', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(owner, {
+    title: 'Import Taskfolk Configuration',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Taskfolk configuration', extensions: ['json'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || !result.filePaths[0]) return { canceled: true };
+
+  const filePath = result.filePaths[0];
+  const stat = fs.statSync(filePath);
+  if (stat.size > 1024 * 1024) throw new Error('That configuration file is larger than 1 MB.');
+  let imported;
+  try {
+    imported = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    throw new Error('The selected file is not valid JSON.');
+  }
+  if (!imported || typeof imported !== 'object' || Array.isArray(imported)) {
+    throw new Error('The selected file is not a Taskfolk configuration object.');
+  }
+
+  let importedOpenClawUrl;
+  try {
+    importedOpenClawUrl = normalizeOpenClawUrl(imported.openClawUrl || DEFAULT_OPENCLAW_URL);
+  } catch (error) {
+    throw new Error(`The configuration has an invalid OpenClaw URL: ${error.message}`);
+  }
+
+  writeConfig(imported);
+  runtimeCredentials = savedCredentials(imported);
+  runtimeOpenCodeCredentials = savedOpenCodeCredentials(imported);
+  runtimeOpenClawUrl = '';
+  runtimeOpenClawCredentialsUrl = importedOpenClawUrl;
+  runtimeOpenClawCredentials = savedOpenClawCredentials(imported, runtimeOpenClawCredentialsUrl);
+  runtimeOpenClawDeviceIdentity = null;
+  return { canceled: false };
+});
+
+ipcMain.handle('settings:export-config', async (event) => {
+  if (!hasSavedConfig()) throw new Error('There is no saved configuration to export yet.');
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showSaveDialog(owner, {
+    title: 'Export Taskfolk Configuration',
+    defaultPath: path.join(app.getPath('documents'), 'taskfolk-config.json'),
+    filters: [{ name: 'Taskfolk configuration', extensions: ['json'] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  fs.copyFileSync(configPath(), result.filePath);
+  return { canceled: false };
+});
+
+ipcMain.handle('settings:openclaw-test', async (_event, input = {}) => {
+  const config = readConfig();
+  let baseUrl;
+  try {
+    baseUrl = normalizeOpenClawUrl(input.openClawUrl || DEFAULT_OPENCLAW_URL);
+  } catch (error) {
+    return { ok: false, stage: 'url', message: error.message };
+  }
+  const enteredToken = String(input.openClawToken || '').trim();
+  const enteredPassword = String(input.openClawPassword || '');
+  const hasEnteredCredentials = Boolean(enteredToken || enteredPassword);
+  const credentials = hasEnteredCredentials
+    ? { token: enteredToken, password: enteredPassword, deviceToken: '' }
+    : (runtimeOpenClawCredentialsUrl === baseUrl ? runtimeOpenClawCredentials : null)
+      || savedOpenClawCredentials(config, baseUrl);
+  const deviceIdentity = ensureOpenClawDeviceIdentity(config);
+  if (hasEnteredCredentials) {
+    runtimeOpenClawCredentials = credentials;
+    runtimeOpenClawCredentialsUrl = baseUrl;
+  }
+
+  try {
+    const agents = await fetchOpenClawAgents({
+      baseUrl,
+      ...(credentials || {}),
+      deviceIdentity,
+      onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes)
+    });
+    return {
+      ok: true,
+      stage: 'connected',
+      gatewayUrl: baseUrl,
+      deviceId: deviceIdentity.deviceId,
+      agentCount: agents.length,
+      message: `Connected to OpenClaw and read ${agents.length} configured agent${agents.length === 1 ? '' : 's'}.`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      stage: error.pairingRequired ? 'pairing' : error.gatewayCode ? 'gateway' : 'transport',
+      gatewayUrl: baseUrl,
+      deviceId: deviceIdentity.deviceId,
+      pairingRequired: Boolean(error.pairingRequired),
+      requestId: error.requestId || '',
+      gatewayCode: error.gatewayCode || '',
+      detailsCode: error.detailsCode || '',
+      message: error.message || 'Could not connect to OpenClaw.'
+    };
+  }
 });
 
 ipcMain.handle('settings:connect', async (_event, input = {}) => {
@@ -1097,12 +1454,23 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
   const avatarWidth = Math.min(1200, Math.max(120, Math.round(Number(input.avatarWidth) || DEFAULT_AVATAR_BOUNDS.width)));
   const avatarHeight = Math.min(1200, Math.max(150, Math.round(Number(input.avatarHeight) || DEFAULT_AVATAR_BOUNDS.height)));
   const openCodeUrl = normalizeOpenCodeUrl(input.openCodeUrl || DEFAULT_OPENCODE_URL);
+  const openClawUrl = normalizeOpenClawUrl(input.openClawUrl || DEFAULT_OPENCLAW_URL);
+  runtimeOpenClawUrl = openClawUrl;
   const savedOpenCode = savedOpenCodeCredentials(config);
   const replaceOpenCodeCredentials = Boolean(String(input.openCodePassword || ''));
   runtimeOpenCodeCredentials = replaceOpenCodeCredentials
     ? { username: String(input.openCodeUsername || 'opencode').trim() || 'opencode', password: String(input.openCodePassword) }
     : (runtimeOpenCodeCredentials || savedOpenCode);
   runtimeOpenCodeCredentials.username = String(input.openCodeUsername || runtimeOpenCodeCredentials.username || 'opencode').trim() || 'opencode';
+  const savedOpenClaw = savedOpenClawCredentials(config, openClawUrl);
+  const replaceOpenClawCredentials = Boolean(
+    String(input.openClawToken || '').trim() || String(input.openClawPassword || '')
+  );
+  runtimeOpenClawCredentials = replaceOpenClawCredentials
+    ? { token: String(input.openClawToken || '').trim(), password: String(input.openClawPassword || '') }
+    : (runtimeOpenClawCredentialsUrl === openClawUrl ? runtimeOpenClawCredentials : null) || savedOpenClaw;
+  runtimeOpenClawCredentialsUrl = openClawUrl;
+  const openClawDeviceIdentity = ensureOpenClawDeviceIdentity(config);
   const nextConfig = {
     ...config,
     connectionMode: mode,
@@ -1118,7 +1486,19 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     openCodeUsername: runtimeOpenCodeCredentials.username,
     encryptedOpenCodePassword: encrypt(runtimeOpenCodeCredentials.password),
     vsCodeCopilotEnabled: Boolean(input.vsCodeCopilotEnabled),
-    vsCodeCopilotGrouping: normalizeVsCodeCopilotGrouping(input.vsCodeCopilotGrouping)
+    vsCodeCopilotGrouping: normalizeVsCodeCopilotGrouping(input.vsCodeCopilotGrouping),
+    codexEnabled: Boolean(input.codexEnabled),
+    codexGrouping: normalizeCodexGrouping(input.codexGrouping),
+    claudeEnabled: Boolean(input.claudeEnabled),
+    claudeGrouping: normalizeClaudeGrouping(input.claudeGrouping),
+    openClawEnabled: Boolean(input.openClawEnabled),
+    openClawUrl,
+    openClawCredentialsUrl: openClawUrl,
+    encryptedOpenClawToken: encrypt(runtimeOpenClawCredentials.token),
+    encryptedOpenClawPassword: encrypt(runtimeOpenClawCredentials.password),
+    openClawDeviceId: openClawDeviceIdentity.deviceId,
+    openClawDevicePublicKey: openClawDeviceIdentity.publicKey,
+    encryptedOpenClawDevicePrivateKey: encrypt(openClawDeviceIdentity.privateKey)
   };
 
   if (mode === 'local') {
@@ -1166,6 +1546,16 @@ app.whenReady().then(async () => {
         password: String(process.env.OPENCODE_SERVER_PASSWORD)
       }
     : savedOpenCodeCredentials(config);
+  runtimeOpenClawCredentials = process.env.OPENCLAW_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_PASSWORD
+    ? {
+        token: String(process.env.OPENCLAW_GATEWAY_TOKEN || ''),
+        password: String(process.env.OPENCLAW_GATEWAY_PASSWORD || '')
+      }
+    : savedOpenClawCredentials(config, runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL);
+  runtimeOpenClawUrl = process.env.OPENCLAW_GATEWAY_URL
+    ? normalizeOpenClawUrl(process.env.OPENCLAW_GATEWAY_URL)
+    : '';
+  runtimeOpenClawCredentialsUrl = runtimeOpenClawUrl || normalizeOpenClawUrl(config.openClawUrl || DEFAULT_OPENCLAW_URL);
   const startupUrl = environmentUrl || config.url;
   const startupMode = environmentUrl ? 'remote' : connectionMode(config);
 
@@ -1202,5 +1592,8 @@ app.on('before-quit', () => {
   quitting = true;
   clearTimeout(openCodeTimer);
   clearTimeout(vsCodeCopilotTimer);
+  clearTimeout(codexTimer);
+  clearTimeout(claudeTimer);
+  clearTimeout(openClawTimer);
   stopLocalServer();
 });

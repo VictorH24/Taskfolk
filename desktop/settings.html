@@ -22,7 +22,7 @@
           <option value="remote">Connect to a remote server</option>
         </select>
       </label>
-      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. For now, local agents can come from OpenCode and VS Code Copilot.</p>
+      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. Agents can come from local or remote OpenClaw, OpenCode, VS Code Copilot, Codex, and Claude.</p>
       <div id="remoteConnectionFields" class="remoteConnectionFields">
         <label>
           <span>Taskfolk URL</span>
@@ -81,7 +81,7 @@
       <section class="integrationField">
         <label class="checkRow">
           <input id="openCodeEnabled" name="openCodeEnabled" type="checkbox" />
-          <span>Track OpenCode Desktop and terminal sessions</span>
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/opencode.svg" alt="" />Track OpenCode Desktop and terminal sessions</span>
         </label>
         <label id="openCodeGroupingField">
           <span>OpenCode agents</span>
@@ -109,8 +109,32 @@
       </section>
       <section class="integrationField">
         <label class="checkRow">
+          <input id="openClawEnabled" name="openClawEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon integrationIconPixel" src="./assets/openclaw.svg" alt="" />Connect to an OpenClaw instance</span>
+        </label>
+        <label id="openClawUrlField">
+          <span>OpenClaw gateway URL</span>
+          <input id="openClawUrl" name="openClawUrl" type="url" value="ws://127.0.0.1:18789" />
+          <small>Use wss:// for remote gateways, or ws:// with a loopback/Tailscale 100.x address.</small>
+        </label>
+        <div id="openClawAuthFields" class="displayGrid">
+          <label>
+            <span>Gateway token <small>optional</small></span>
+            <input id="openClawToken" name="openClawToken" type="password" autocomplete="off" />
+          </label>
+          <label>
+            <span>Gateway password <small>optional</small></span>
+            <input id="openClawPassword" name="openClawPassword" type="password" autocomplete="off" />
+          </label>
+        </div>
+        <button id="testOpenClawButton" class="secondaryButton integrationButton" type="button">Test connection / request approval</button>
+        <p id="openClawTestStatus" class="integrationStatus" role="status"></p>
+        <small>Remote gateways require one-time device approval. After connecting, run <code>openclaw devices list</code> and <code>openclaw devices approve &lt;requestId&gt;</code> on the OpenClaw host.</small>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
           <input id="vsCodeCopilotEnabled" name="vsCodeCopilotEnabled" type="checkbox" />
-          <span>Track Visual Studio Code Copilot chats</span>
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/vscode.svg" alt="" />Track Visual Studio Code Copilot chats</span>
         </label>
         <label id="vsCodeCopilotGroupingField">
           <span>VS Code Copilot agents</span>
@@ -121,6 +145,39 @@
           <small>Reads local VS Code chat metadata only. Prompts, responses, tool output, and credentials stay private.</small>
         </label>
       </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="codexEnabled" name="codexEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/codex.svg" alt="" />Track Codex Desktop and CLI tasks</span>
+        </label>
+        <label id="codexGroupingField">
+          <span>Codex agents</span>
+          <select id="codexGrouping" name="codexGrouping">
+            <option value="project">One agent per project</option>
+            <option value="single">One agent for all projects</option>
+          </select>
+          <small>Reads local task titles, project paths, models, timestamps, and lifecycle event kinds only. Prompt bodies, responses, tool output, and credentials stay private.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="claudeEnabled" name="claudeEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/claude.svg" alt="" />Track Claude Cowork and Claude Code tasks</span>
+        </label>
+        <label id="claudeGroupingField">
+          <span>Claude agents</span>
+          <select id="claudeGrouping" name="claudeGrouping">
+            <option value="project">One agent per project</option>
+            <option value="single">One agent for all projects</option>
+          </select>
+          <small>Reads local Claude session metadata only. Cloud-only Cowork sessions are not visible because Anthropic does not expose their live status locally.</small>
+        </label>
+      </section>
+      <div class="configActions" aria-label="Configuration file actions">
+        <button id="importConfigButton" class="secondaryButton" type="button">Import Conf</button>
+        <button id="exportConfigButton" class="secondaryButton hidden" type="button">Export Conf</button>
+      </div>
+      <p id="configStatus" class="integrationStatus" role="status"></p>
       <button id="connectButton" type="submit">Run and open office</button>
     </form>
 

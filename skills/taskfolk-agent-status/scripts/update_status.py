@@ -13,6 +13,7 @@ import urllib.request
 
 ACCEPTED_STATES = {
     "Working",
+    "Success",
     "Blocked",
     "Sleeping",
     "Reading",

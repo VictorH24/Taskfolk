@@ -11,7 +11,6 @@ services:
       PORT: 3000
       SHARED_DIR: /shared
       CONFIG_DIR: /config
-      TASKS_DIR: /tasks
       MAX_UPLOAD_MB: 100
       MAX_TEXT_PREVIEW_BYTES: 524288
       OPENCLAW_SESSIONS_DIR: /openclaw-agents
@@ -45,9 +44,8 @@ services:
       - ~/.openclaw/agents/researcher/sessions:/openclaw-agents/researcher/sessions:ro
       - ~/.openclaw/agents/legal/sessions:/openclaw-agents/legal/sessions:ro
       - ~/.openclaw/agents/rogueworker/sessions:/openclaw-agents/rogueworker/sessions:ro
-      #config and taks folders
+      # config folder
       - ./config:/config
-      - ./tasks:/tasks
     security_opt:
       - no-new-privileges:true
     cap_drop:

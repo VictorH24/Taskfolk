@@ -14,7 +14,6 @@ const HOST = String(process.env.HOST || '0.0.0.0');
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SHARED_DIR = path.resolve(process.env.SHARED_DIR || '/shared');
 const CONFIG_DIR = path.resolve(process.env.CONFIG_DIR || '/config');
-const TASKS_DIR = path.resolve(process.env.TASKS_DIR || '/tasks');
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 100);
 const MAX_TEXT_PREVIEW_BYTES = Number(process.env.MAX_TEXT_PREVIEW_BYTES || 512 * 1024);
 const OPENCLAW_CONFIG_PATH = path.resolve(process.env.OPENCLAW_CONFIG_PATH || '/config/openclaw.json');
@@ -25,19 +24,16 @@ const OPENCLAW_STATE_DB_PATH = path.resolve(process.env.OPENCLAW_STATE_DB_PATH |
 const AVATAR_ASSIGNMENTS_PATH = path.resolve(process.env.AVATAR_ASSIGNMENTS_PATH || path.join(CONFIG_DIR, 'avatar-assignments.json'));
 const AGENT_STATE_PATH = path.resolve(process.env.AGENT_STATE_PATH || path.join(CONFIG_DIR, 'state.json'));
 const OFFICE_FIXTURE_PATH = path.resolve(process.env.OFFICE_FIXTURE_PATH || path.join(SERVER_DIR, 'public', 'test-agents.json'));
-const TASKS_PATH = path.join(TASKS_DIR, 'tasks.json');
-const TASK_AGENTS_PATH = path.join(TASKS_DIR, 'agents.json');
-const TASK_EVENTS_PATH = path.join(TASKS_DIR, 'task-events.jsonl');
-const PROCESSED_EVENTS_PATH = path.join(TASKS_DIR, 'processed-events.json');
-const TASK_ARCHIVE_PATH = path.join(TASKS_DIR, 'archive.jsonl');
-const AVATAR_VARIANTS = [0, ...Array.from({ length: 22 }, (_, index) => `v${index + 1}_gif`)];
+const LOCAL_DESKTOP_MODE = String(process.env.LOCAL_DESKTOP_MODE || '').trim().toLowerCase() === 'true';
+const AVATAR_VARIANTS = [0, ...Array.from({ length: 23 }, (_, index) => `v${index + 1}_gif`)];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
-const MANUAL_AGENT_STATES = ['Working', 'Blocked', 'Sleeping', 'Reading', 'Gaming', 'Coffee break', 'Listening', 'Walking'];
+const MANUAL_AGENT_STATES = ['Working', 'Success', 'Blocked', 'Sleeping', 'Reading', 'Gaming', 'Coffee break', 'Listening', 'Walking'];
 const MANUAL_AGENT_STATE_LOOKUP = new Map(MANUAL_AGENT_STATES.map((state) => [agentKey(state), state]));
 const MANUAL_AGENT_POSES = {
   Working: 'working',
+  Success: 'success',
   Blocked: 'blocked',
   Sleeping: 'sleeping',
   Reading: 'reading',
@@ -47,13 +43,11 @@ const MANUAL_AGENT_POSES = {
   Walking: 'walking'
 };
 const DEFAULT_OFFICE_SCENE = { floor: 'wood', windowView: 'sf', poster: 0, emptyDesks: 0 };
-const DEFAULT_MODULES = { tasks: { enabled: false }, folderView: { enabled: true } };
-const TASK_STATUSES = ['backlog', 'ready', 'assigned', 'in_progress', 'blocked', 'review', 'done', 'failed'];
-const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent'];
+const DEFAULT_MODULES = { folderView: { enabled: !LOCAL_DESKTOP_MODE } };
 const AGENT_ACTIVE_MS = Number(process.env.AGENT_ACTIVE_MS || 2 * 60 * 1000);
+const AGENT_SUCCESS_MS = Number(process.env.AGENT_SUCCESS_MS || 2 * 60 * 1000);
 const AGENT_IDLE_MS = Number(process.env.AGENT_IDLE_MS || 30 * 60 * 1000);
 const RUNTIME_AGENT_TTL_MS = Number(process.env.RUNTIME_AGENT_TTL_MS || 90 * 1000);
-const LOCAL_DESKTOP_MODE = String(process.env.LOCAL_DESKTOP_MODE || '').trim().toLowerCase() === 'true';
 const GATEWAY_AUTH_TOKEN_ENV = String(process.env.GATEWAY_AUTH_TOKEN || '').trim();
 const GATEWAY_AUTH_PASSWORD_ENV = String(process.env.GATEWAY_AUTH_PASSWORD || '').trim();
 const GATEWAY_AUTH_SECURE_COOKIE = String(process.env.GATEWAY_AUTH_SECURE_COOKIE || '').trim().toLowerCase() === 'true';
@@ -67,7 +61,6 @@ const PROTECTED_NAMES = new Set(
 );
 
 await fs.mkdir(SHARED_DIR, { recursive: true });
-await fs.mkdir(TASKS_DIR, { recursive: true });
 
 const DEFAULT_AGENTS = [
   { id: 'main', name: 'Main Agent', role: 'Coordinator', status: 'active', task: 'Watching heartbeat checks', x: 18, y: 58 },
@@ -82,31 +75,47 @@ function cleanRuntimeText(value, maxLength = 240) {
   return String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
-function normalizeRuntimeAgent(agent, provider, index) {
+function normalizeRuntimeAgent(agent, provider, index, previousAgent = null) {
   const rawId = cleanRuntimeText(agent?.id, 160);
   if (!rawId) return null;
   const id = rawId.startsWith(`${provider}:`) ? rawId : `${provider}:${rawId}`;
-  const status = ['active', 'idle', 'blocked'].includes(agent?.status) ? agent.status : 'idle';
-  const lastSeenMs = timestampMs(agent?.lastSeen, agent?.activity?.updatedAt) || Date.now();
+  const nowMs = Date.now();
+  const reportedLastSeenMs = timestampMs(agent?.lastSeen, agent?.activity?.updatedAt);
+  const configuredWithoutActivity = provider === 'openclaw'
+    && cleanRuntimeText(agent?.activity?.status, 80).toLowerCase() === 'configured'
+    && !reportedLastSeenMs;
+  const lastSeenMs = reportedLastSeenMs || (configuredWithoutActivity ? 0 : nowMs);
+  const reportedStatus = ['active', 'success', 'idle', 'blocked'].includes(agent?.status) ? agent.status : 'idle';
+  const completed = /\b(done|complete|completed|finished|success|succeeded)\b/i.test(String(agent?.activity?.status || ''));
+  const previousSuccessAt = timestampMs(previousAgent?.activity?.successAt);
+  const transitionedToIdle = previousAgent?.status === 'active' && reportedStatus === 'idle';
+  const successAt = transitionedToIdle
+    ? nowMs
+    : previousSuccessAt || ((reportedStatus === 'success' || completed) ? lastSeenMs : 0);
+  const successIsCurrent = successAt > 0 && nowMs - successAt <= AGENT_SUCCESS_MS;
+  const status = ['active', 'blocked'].includes(reportedStatus)
+    ? reportedStatus
+    : successIsCurrent ? 'success' : 'idle';
   const activity = agent?.activity && typeof agent.activity === 'object' && !Array.isArray(agent.activity)
     ? {
         provider,
         status: cleanRuntimeText(agent.activity.status, 80) || null,
         derivedStatus: status,
-        updatedAt: timestampMs(agent.activity.updatedAt) || lastSeenMs,
+        updatedAt: timestampMs(agent.activity.updatedAt) || lastSeenMs || null,
+        successAt: successAt || null,
         sessionLabel: cleanRuntimeText(agent.activity.sessionLabel, 120) || null,
         sessionKeyShort: cleanRuntimeText(agent.activity.sessionKeyShort, 160) || null,
         model: cleanRuntimeText(agent.activity.model, 120) || null,
         agent: cleanRuntimeText(agent.activity.agent, 120) || null
       }
-    : { provider, derivedStatus: status, updatedAt: lastSeenMs };
+    : { provider, derivedStatus: status, updatedAt: lastSeenMs || null, successAt: successAt || null };
   return normalizeAgent({
     id,
     name: cleanRuntimeText(agent?.name, 120) || provider,
     role: cleanRuntimeText(agent?.role, 160) || provider,
     status,
     task: cleanRuntimeText(agent?.task) || `${provider} session`,
-    lastSeen: new Date(lastSeenMs).toISOString(),
+    lastSeen: lastSeenMs ? new Date(lastSeenMs).toISOString() : null,
     source: provider,
     workspacePath: cleanRuntimeText(agent?.workspacePath, 1024) || null,
     activity,
@@ -163,7 +172,7 @@ function workspacePathFromValue(value) {
 }
 
 function normalizeAgent(agent, index) {
-  const status = ['active', 'idle', 'blocked'].includes(agent.status) ? agent.status : 'idle';
+  const status = ['active', 'success', 'idle', 'blocked'].includes(agent.status) ? agent.status : 'idle';
   return {
     id: String(agent.id || `agent-${index + 1}`),
     name: String(agent.name || agent.label || `Agent ${index + 1}`),
@@ -315,7 +324,7 @@ function normalizeAvatarVariant(value) {
   if (raw === 'v0_gif') return 0;
   if (/^v\d+_gif$/.test(raw) && AVATAR_VARIANTS.includes(raw)) return raw;
   const variant = Number(value);
-  if (!Number.isInteger(variant) || variant < 0 || variant > 22) return 0;
+  if (!Number.isInteger(variant) || variant < 0 || variant > 23) return 0;
   return variant === 0 ? 0 : `v${variant}_gif`;
 }
 
@@ -383,48 +392,15 @@ function normalizeManualAgents(value) {
   return [...byId.values()];
 }
 
-function normalizeTaskAgentSettings(value) {
-  const source = value?.taskAgents && typeof value.taskAgents === 'object' && !Array.isArray(value.taskAgents)
-    ? value.taskAgents
-    : {};
-  const settings = {};
-  for (const [agentId, config] of Object.entries(source)) {
-    const id = String(agentId || '')
-      .trim()
-      .replace(/[\u0000-\u001f]/g, '')
-      .replace(/[^a-zA-Z0-9._:-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 80);
-    if (!id) continue;
-    const agentConfig = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
-    const allowedTaskTags = Array.isArray(agentConfig.allowedTaskTags)
-      ? [...new Set(agentConfig.allowedTaskTags.map((tag) => cleanText(tag, '', 40)).filter(Boolean))].slice(0, 24)
-      : [];
-    settings[id] = {
-      enabled: agentConfig.enabled !== false,
-      workspacePath: cleanText(agentConfig.workspacePath, '', 400),
-      allowedTaskTags
-    };
-  }
-  return settings;
-}
-
 function normalizeModules(value) {
   const source = value?.modules && typeof value.modules === 'object' && !Array.isArray(value.modules)
     ? value.modules
     : {};
-  const tasks = source.tasks && typeof source.tasks === 'object' && !Array.isArray(source.tasks)
-    ? source.tasks
-    : {};
   const folderView = source.folderView && typeof source.folderView === 'object' && !Array.isArray(source.folderView)
     ? source.folderView
     : {};
-  const hasTasksEnabled = Object.prototype.hasOwnProperty.call(tasks, 'enabled');
   const hasFolderViewEnabled = Object.prototype.hasOwnProperty.call(folderView, 'enabled');
   return {
-    tasks: {
-      enabled: hasTasksEnabled ? tasks.enabled !== false : DEFAULT_MODULES.tasks.enabled
-    },
     folderView: {
       enabled: hasFolderViewEnabled ? folderView.enabled !== false : DEFAULT_MODULES.folderView.enabled
     }
@@ -440,405 +416,6 @@ function normalizeOfficeScene(value) {
   return { floor, windowView, poster, emptyDesks };
 }
 
-function cleanText(value, fallback = '', max = 500) {
-  return String(value ?? fallback)
-    .replace(/[\u0000-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, max);
-}
-
-function cleanMultilineText(value, fallback = '', max = 3000) {
-  return String(value ?? fallback)
-    .replace(/\r\n/g, '\n')
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ' ')
-    .trim()
-    .slice(0, max);
-}
-
-function cleanId(value, fallbackPrefix = 'item') {
-  const cleaned = String(value || '')
-    .trim()
-    .replace(/[\u0000-\u001f]/g, '')
-    .replace(/[^a-zA-Z0-9._:-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80);
-  return cleaned || `${fallbackPrefix}_${crypto.randomUUID().slice(0, 8)}`;
-}
-
-function normalizeTaskStatus(value, fallback = 'backlog') {
-  return TASK_STATUSES.includes(value) ? value : fallback;
-}
-
-function normalizeTaskPriority(value, fallback = 'normal') {
-  return TASK_PRIORITIES.includes(value) ? value : fallback;
-}
-
-function normalizeTask(task, existing = null) {
-  const now = new Date().toISOString();
-  const id = cleanId(task?.id || existing?.id, 'task');
-  const title = cleanText(task?.title || existing?.title, `Task ${id}`, 140) || `Task ${id}`;
-  const currentStatus = normalizeTaskStatus(existing?.status, 'backlog');
-  const status = normalizeTaskStatus(task?.status, currentStatus);
-  const tags = Array.isArray(task?.tags || existing?.tags)
-    ? [...new Set((task?.tags || existing?.tags).map((tag) => cleanText(tag, '', 40)).filter(Boolean))].slice(0, 12)
-    : [];
-  const noteSource = Array.isArray(task?.notes) ? task.notes : Array.isArray(existing?.notes) ? existing.notes : [];
-  const notes = noteSource
-    .map((note) => ({
-      noteId: cleanId(note?.noteId, 'note'),
-      agentId: note?.agentId === null ? null : cleanText(note?.agentId, '', 80) || null,
-      note: cleanText(note?.note, '', 1000),
-      createdAt: cleanText(note?.createdAt, now, 40) || now
-    }))
-    .filter((note) => note.note)
-    .slice(-100);
-  const lastNote = cleanText(task?.lastNote ?? existing?.lastNote, '', 500);
-  const lastNoteAgentId = task?.lastNoteAgentId === null ? null : cleanText(task?.lastNoteAgentId ?? existing?.lastNoteAgentId, '', 80) || null;
-  if (lastNote && !notes.some((note) => note.note === lastNote && note.agentId === lastNoteAgentId)) {
-    notes.push({
-      noteId: `note_${crypto.createHash('sha1').update(`${id}:${lastNote}:${lastNoteAgentId || ''}`).digest('hex').slice(0, 12)}`,
-      agentId: lastNoteAgentId,
-      note: lastNote,
-      createdAt: cleanText(task?.updatedAt || existing?.updatedAt || now, now, 40) || now
-    });
-  }
-  return {
-    id,
-    title,
-    description: cleanMultilineText(task?.description ?? existing?.description, '', 3000),
-    status,
-    priority: normalizeTaskPriority(task?.priority ?? existing?.priority),
-    tags,
-    assignedAgentId: task?.assignedAgentId === null ? null : cleanText(task?.assignedAgentId ?? existing?.assignedAgentId, '', 80) || null,
-    lastNote,
-    lastNoteAgentId,
-    notes,
-    createdAt: existing?.createdAt || cleanText(task?.createdAt, now, 40) || now,
-    updatedAt: cleanText(task?.updatedAt, now, 40) || now
-  };
-}
-
-function addTaskNote(task, note, agentId = null, createdAt = new Date().toISOString()) {
-  const text = cleanText(note, '', 1000);
-  if (!text) return normalizeTask(task);
-  const author = agentId === null ? null : cleanText(agentId, '', 80) || null;
-  const timestamp = cleanText(createdAt, new Date().toISOString(), 40) || new Date().toISOString();
-  const notes = Array.isArray(task.notes) ? task.notes.slice() : [];
-  notes.push({
-    noteId: `note_${crypto.randomUUID().slice(0, 8)}`,
-    agentId: author,
-    note: text,
-    createdAt: timestamp
-  });
-  return normalizeTask({
-    ...task,
-    notes,
-    lastNote: text,
-    lastNoteAgentId: author,
-    updatedAt: timestamp
-  }, task);
-}
-
-function normalizeTaskAgent(agent, existing = null) {
-  const now = new Date().toISOString();
-  const id = cleanId(agent?.id || existing?.id, 'agent');
-  const allowedTaskTags = Array.isArray(agent?.allowedTaskTags || existing?.allowedTaskTags)
-    ? [...new Set((agent?.allowedTaskTags || existing?.allowedTaskTags).map((tag) => cleanText(tag, '', 40)).filter(Boolean))].slice(0, 24)
-    : [];
-  return {
-    id,
-    name: cleanText(agent?.name || existing?.name, id, 120) || id,
-    role: cleanText(agent?.role || existing?.role, 'agent', 80) || 'agent',
-    workspacePath: cleanText(agent?.workspacePath || existing?.workspacePath, '', 400),
-    status: ['idle', 'working', 'blocked', 'offline'].includes(agent?.status) ? agent.status : existing?.status || 'idle',
-    currentTaskId: agent?.currentTaskId === null ? null : cleanText(agent?.currentTaskId ?? existing?.currentTaskId, '', 80) || null,
-    lastSeenAt: cleanText(agent?.lastSeenAt || existing?.lastSeenAt, now, 40) || now,
-    allowedTaskTags
-  };
-}
-
-async function readJsonArray(filePath) {
-  const value = await readJsonIfPresent(filePath);
-  return Array.isArray(value) ? value : [];
-}
-
-async function readTasksFile() {
-  const tasks = await readJsonArray(TASKS_PATH);
-  return tasks.map((task) => normalizeTask(task));
-}
-
-async function writeTasksFile(tasks) {
-  const normalized = tasks.map((task) => normalizeTask(task));
-  await fs.writeFile(TASKS_PATH, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
-  return normalized;
-}
-
-async function readTaskAgentsFile() {
-  const [legacyAgents, avatarConfig, configured] = await Promise.all([
-    readJsonArray(TASK_AGENTS_PATH),
-    readAvatarConfig(),
-    configuredAgents()
-  ]);
-  const legacyById = new Map(legacyAgents.map((agent) => {
-    const normalized = normalizeTaskAgent(agent);
-    return [normalized.id, normalized];
-  }));
-  const stateFile = await readAgentState();
-  const byId = new Map();
-  for (const agent of configured.agents || []) byId.set(agent.id, agent);
-  for (const manualAgent of manualAgentsFromConfig(
-    { ...avatarConfig, manualAgents: avatarConfig.manualAgents.map((agent) => ({ ...agent, enabled: true })) },
-    stateFile
-  )) {
-    byId.set(manualAgent.id, manualAgent);
-  }
-
-  return [...byId.values()]
-    .map((agent) => {
-      const settings = avatarConfig.taskAgents[agent.id] || {};
-      const legacy = legacyById.get(agent.id);
-      return normalizeTaskAgent({
-        ...legacy,
-        id: agent.id,
-        name: agent.name || legacy?.name,
-        role: agent.role || legacy?.role,
-        workspacePath: settings.workspacePath || agent.workspacePath || legacy?.workspacePath || '',
-        status: legacy?.status || (agent.status === 'blocked' ? 'blocked' : agent.status === 'active' ? 'working' : 'idle'),
-        currentTaskId: legacy?.currentTaskId || null,
-        lastSeenAt: legacy?.lastSeenAt || agent.lastSeen || new Date().toISOString(),
-        allowedTaskTags: settings.allowedTaskTags?.length ? settings.allowedTaskTags : legacy?.allowedTaskTags || []
-      });
-    })
-    .filter((agent) => avatarConfig.taskAgents[agent.id]?.enabled !== false);
-}
-
-async function writeTaskAgentsFile(agents) {
-  const normalized = agents.map((agent) => normalizeTaskAgent(agent));
-  await fs.writeFile(TASK_AGENTS_PATH, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
-  return normalized;
-}
-
-async function readProcessedEvents() {
-  const value = await readJsonIfPresent(PROCESSED_EVENTS_PATH);
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-async function writeProcessedEvents(value) {
-  await fs.writeFile(PROCESSED_EVENTS_PATH, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
-
-async function appendTaskEvent(event) {
-  const accepted = {
-    eventId: cleanId(event.eventId, 'evt'),
-    taskId: cleanText(event.taskId, '', 80),
-    agentId: event.agentId ? cleanText(event.agentId, '', 80) : null,
-    type: cleanText(event.type, 'note', 60) || 'note',
-    ...(event.fromStatus ? { fromStatus: normalizeTaskStatus(event.fromStatus, event.fromStatus) } : {}),
-    ...(event.toStatus || event.status ? { toStatus: normalizeTaskStatus(event.toStatus || event.status, event.toStatus || event.status) } : {}),
-    ...(event.status ? { status: normalizeTaskStatus(event.status, event.status) } : {}),
-    note: cleanText(event.note, '', 1000),
-    createdAt: cleanText(event.createdAt, new Date().toISOString(), 40) || new Date().toISOString()
-  };
-  await fs.appendFile(TASK_EVENTS_PATH, `${JSON.stringify(accepted)}\n`, 'utf8');
-  return accepted;
-}
-
-async function appendTaskArchive(record) {
-  const archived = {
-    archiveId: cleanId(record.archiveId, 'archive'),
-    type: record.type === 'restored' ? 'restored' : 'archived',
-    taskId: cleanText(record.taskId, '', 80),
-    task: record.task ? normalizeTask(record.task) : null,
-    archivedAt: record.archivedAt || null,
-    restoredAt: record.restoredAt || null,
-    createdAt: cleanText(record.createdAt, new Date().toISOString(), 40) || new Date().toISOString()
-  };
-  await fs.appendFile(TASK_ARCHIVE_PATH, `${JSON.stringify(archived)}\n`, 'utf8');
-  return archived;
-}
-
-async function readTaskArchive() {
-  let text = '';
-  try {
-    text = await fs.readFile(TASK_ARCHIVE_PATH, 'utf8');
-  } catch (err) {
-    if (err.code === 'ENOENT') return [];
-    throw err;
-  }
-  const activeArchive = new Map();
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let record;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const taskId = cleanText(record.taskId || record.task?.id, '', 80);
-    if (!taskId) continue;
-    if (record.type === 'restored') activeArchive.delete(taskId);
-    else if (record.task) {
-      activeArchive.set(taskId, {
-        archiveId: record.archiveId || `archive_${taskId}`,
-        taskId,
-        task: normalizeTask(record.task),
-        archivedAt: record.archivedAt || record.createdAt || null,
-        createdAt: record.createdAt || null
-      });
-    }
-  }
-  return [...activeArchive.values()].sort((a, b) => String(b.archivedAt || '').localeCompare(String(a.archivedAt || '')));
-}
-
-function statusForRestoredTask(status) {
-  return ['ready', 'assigned', 'in_progress'].includes(status) ? 'backlog' : normalizeTaskStatus(status, 'backlog');
-}
-
-function applyTaskEvent(tasks, agents, event) {
-  const taskId = cleanText(event.taskId, '', 80);
-  if (!taskId) return false;
-  const index = tasks.findIndex((task) => task.id === taskId);
-  if (index < 0) return false;
-  const current = tasks[index];
-  const nextStatus = normalizeTaskStatus(event.toStatus || event.status, current.status);
-  const assignedAgentId = event.agentId ? cleanText(event.agentId, '', 80) : current.assignedAgentId;
-  tasks[index] = normalizeTask({
-    ...current,
-    status: event.type === 'note' ? current.status : nextStatus,
-    assignedAgentId,
-    updatedAt: event.createdAt || new Date().toISOString()
-  }, current);
-  if (event.note) {
-    tasks[index] = addTaskNote(tasks[index], event.note, assignedAgentId, event.createdAt || new Date().toISOString());
-  }
-  const agent = agents.find((item) => item.id === assignedAgentId);
-  if (agent) {
-    agent.lastSeenAt = event.createdAt || new Date().toISOString();
-    agent.currentTaskId = ['done', 'failed'].includes(tasks[index].status) ? null : taskId;
-    agent.status = tasks[index].status === 'blocked' ? 'blocked' : ['assigned', 'in_progress', 'review'].includes(tasks[index].status) ? 'working' : 'idle';
-  }
-  return true;
-}
-
-function resolveSharedWorkspace(workspacePath) {
-  const raw = cleanText(workspacePath, '', 400);
-  if (!raw) return null;
-  const resolved = path.resolve(raw);
-  const rootWithSep = SHARED_DIR.endsWith(path.sep) ? SHARED_DIR : `${SHARED_DIR}${path.sep}`;
-  if (resolved !== SHARED_DIR && !resolved.startsWith(rootWithSep)) return null;
-  return resolved;
-}
-
-async function writeCurrentTaskForAgent(task, agent) {
-  const workspacePath = resolveSharedWorkspace(agent.workspacePath);
-  if (!workspacePath) return false;
-  const inbox = path.join(workspacePath, '.mission-control', 'inbox');
-  await fs.mkdir(inbox, { recursive: true });
-  const payload = {
-    taskId: task.id,
-    title: task.title,
-    description: task.description,
-    status: task.status,
-    priority: task.priority,
-    assignedAgentId: agent.id,
-    instructions: [
-      'Read this task before starting.',
-      'When you begin, append an in_progress event to .mission-control/outbox/task-events.jsonl.',
-      'If blocked, append a blocked event with a clear question.',
-      'When finished, append a review event.',
-      'Do not mark the task done.'
-    ],
-    allowedStatuses: ['in_progress', 'blocked', 'review']
-  };
-  await fs.writeFile(path.join(inbox, 'current-task.json'), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-  return true;
-}
-
-async function clearCurrentTaskForAgent(agent, taskId) {
-  const workspacePath = resolveSharedWorkspace(agent.workspacePath);
-  if (!workspacePath || !taskId) return false;
-  const currentTaskPath = path.join(workspacePath, '.mission-control', 'inbox', 'current-task.json');
-  try {
-    const currentTask = await readJsonIfPresent(currentTaskPath);
-    if (!currentTask || currentTask.taskId !== taskId) return false;
-    await fs.unlink(currentTaskPath);
-    return true;
-  } catch (err) {
-    if (err.code === 'ENOENT') return false;
-    throw err;
-  }
-}
-
-async function readNewOutboxLines(filePath, lastOffset = 0) {
-  const stat = await fs.stat(filePath);
-  const start = lastOffset > stat.size ? 0 : lastOffset;
-  const handle = await fs.open(filePath, 'r');
-  try {
-    const size = stat.size - start;
-    if (size <= 0) return { lines: [], offset: stat.size };
-    const buffer = Buffer.alloc(size);
-    await handle.read(buffer, 0, size, start);
-    const text = buffer.toString('utf8');
-    return { lines: text.split(/\r?\n/).filter((line) => line.trim()), offset: stat.size };
-  } finally {
-    await handle.close();
-  }
-}
-
-async function ingestAgentTaskEvents() {
-  const tasks = await readTasksFile();
-  const agents = await readTaskAgentsFile();
-  const processed = await readProcessedEvents();
-  let accepted = 0;
-  let scanned = false;
-  for (const agent of agents) {
-    const workspacePath = resolveSharedWorkspace(agent.workspacePath);
-    if (!workspacePath) continue;
-    const outboxPath = path.join(workspacePath, '.mission-control', 'outbox', 'task-events.jsonl');
-    let readResult;
-    try {
-      const bucket = processed[agent.id]?.[outboxPath] || { lastOffset: 0, processedEventIds: [] };
-      readResult = await readNewOutboxLines(outboxPath, Number(bucket.lastOffset) || 0);
-      scanned = true;
-      const seen = new Set(Array.isArray(bucket.processedEventIds) ? bucket.processedEventIds : []);
-      for (let index = 0; index < readResult.lines.length; index += 1) {
-        let event;
-        try {
-          event = JSON.parse(readResult.lines[index]);
-        } catch {
-          continue;
-        }
-        event.eventId = event.eventId || `agent_evt_${crypto.createHash('sha1').update(`${outboxPath}:${bucket.lastOffset}:${index}:${readResult.lines[index]}`).digest('hex').slice(0, 16)}`;
-        if (seen.has(event.eventId)) continue;
-        event.agentId = event.agentId || agent.id;
-        const taskExists = tasks.some((task) => task.id === event.taskId);
-        if (!taskExists) continue;
-        const acceptedEvent = await appendTaskEvent(event);
-        applyTaskEvent(tasks, agents, acceptedEvent);
-        await clearCurrentTaskForAgent(agent, acceptedEvent.taskId);
-        seen.add(acceptedEvent.eventId);
-        accepted += 1;
-      }
-      processed[agent.id] = processed[agent.id] || {};
-      processed[agent.id][outboxPath] = {
-        lastOffset: readResult.offset,
-        processedEventIds: [...seen].slice(-500)
-      };
-    } catch (err) {
-      if (err.code !== 'ENOENT') console.warn(`Unable to process task outbox for ${agent.id}: ${err.message}`);
-    }
-  }
-  if (accepted) {
-    await writeTasksFile(tasks);
-    await writeTaskAgentsFile(agents);
-  }
-  if (accepted || scanned) {
-    await writeProcessedEvents(processed);
-  }
-  return accepted;
-}
-
 async function readAvatarConfig() {
   const data = await readJsonIfPresent(AVATAR_ASSIGNMENTS_PATH);
   const sceneSource = data?.officeScene && typeof data.officeScene === 'object' ? data.officeScene : data;
@@ -849,7 +426,6 @@ async function readAvatarConfig() {
     assignments: normalizeAvatarAssignments(data),
     hiddenAgents: normalizeHiddenAgents(data),
     manualAgents: normalizeManualAgents(data),
-    taskAgents: normalizeTaskAgentSettings(data),
     modules: normalizeModules(data),
     officeScene: normalizeOfficeScene(data),
     officeSceneKeys
@@ -869,9 +445,6 @@ async function writeAvatarConfig(value) {
     assignments: normalizeAvatarAssignments(value?.assignments || value),
     hiddenAgents: Array.isArray(value?.hiddenAgents) ? normalizeHiddenAgents(value.hiddenAgents) : current.hiddenAgents,
     manualAgents,
-    taskAgents: value?.taskAgents && typeof value.taskAgents === 'object' && !Array.isArray(value.taskAgents)
-      ? normalizeTaskAgentSettings(value)
-      : current.taskAgents,
     modules: value?.modules && typeof value.modules === 'object' && !Array.isArray(value.modules)
       ? normalizeModules(value)
       : current.modules,
@@ -1154,6 +727,10 @@ function statusFromSessionEntry(entry, lastSeenMs) {
   if (/\b(active|running|working|busy|streaming|processing|in[-_ ]?progress|started)\b/i.test(rawStatus)) {
     return 'active';
   }
+  const completed = Boolean(entry.endedAt) || /\b(done|complete|completed|finished|idle|success|succeeded)\b/i.test(rawStatus);
+  if (completed) {
+    return Date.now() - (lastSeenMs || 0) <= AGENT_SUCCESS_MS ? 'success' : 'idle';
+  }
   if (entry.startedAt && !entry.endedAt && !/\b(done|complete|completed|idle|finished|success|succeeded)\b/i.test(rawStatus)) {
     return 'active';
   }
@@ -1239,6 +816,9 @@ function safeSessionActivity(key, entry, status, lastSeenMs, timestampInfo = {},
     runtimeMs,
     lastInteractionAt: timestampMs(entry.lastInteractionAt, entry.lastHeartbeatSentAt) || null,
     updatedAt: lastSeenMs || null,
+    successAt: (entry.endedAt || /\b(done|complete|completed|finished|idle|success|succeeded)\b/i.test(String(entry.status || '')))
+      ? lastSeenMs || null
+      : null,
     chatType: sessionChannelType(key, entry),
     channelType: sessionKeyParts(key)[3] || null,
     channelBadge: sessionChannelBadge(key, entry),
@@ -1763,7 +1343,7 @@ async function sessionAgents() {
     .slice(0, 24)
     .map((agent, index) => normalizeAgent({
       ...agent,
-      status: statusFromActivity(agent.lastSeenMs || 0, agent.task)
+      status: agent.status
     }, index)),
     debug: debug.sort((a, b) => b.latestMs - a.latestMs),
     latestSessions: latestSessions.sort((a, b) => b.timestampMs - a.timestampMs).slice(0, 12),
@@ -1834,6 +1414,7 @@ function normalizeManualAgentState(value) {
 
 function statusFromManualState(state) {
   if (state === 'Working') return 'active';
+  if (state === 'Success') return 'success';
   if (state === 'Blocked') return 'blocked';
   return 'idle';
 }
@@ -2080,7 +1661,12 @@ app.post('/api/runtime-agents', (req, res) => {
   if (!Array.isArray(inputAgents)) return res.status(400).json({ error: 'agents must be an array.' });
   if (inputAgents.length > 24) return res.status(400).json({ error: 'A runtime source may publish at most 24 agents.' });
 
-  const agents = inputAgents.map((agent, index) => normalizeRuntimeAgent(agent, provider, index)).filter(Boolean);
+  const previousById = new Map((runtimeAgentSources.get(sourceId)?.agents || []).map((agent) => [agent.id, agent]));
+  const agents = inputAgents.map((agent, index) => {
+    const rawId = cleanRuntimeText(agent?.id, 160);
+    const normalizedId = rawId.startsWith(`${provider}:`) ? rawId : `${provider}:${rawId}`;
+    return normalizeRuntimeAgent(agent, provider, index, previousById.get(normalizedId));
+  }).filter(Boolean);
   if (agents.length) runtimeAgentSources.set(sourceId, { provider, agents, updatedAtMs: Date.now() });
   else runtimeAgentSources.delete(sourceId);
   return res.json({ ok: true, provider, accepted: agents.length, ttlMs: RUNTIME_AGENT_TTL_MS });
@@ -2099,19 +1685,6 @@ app.delete('/api/runtime-agents/:agentId', (req, res) => {
   return res.json({ ok: true, agentId, removed, rediscovery: 'next-publish' });
 });
 
-app.get(['/tasks.html', '/archived-tasks.html'], async (req, res, next) => {
-  try {
-    const config = await readAvatarConfig();
-    if (config.modules.tasks.enabled) return next();
-    res.type('html').send(`<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Tasks Disabled</title><link rel="stylesheet" href="/styles.css" /></head>
-<body class="tasksPage"><header><div><h1>Tasks Disabled</h1><p>The task module is turned off in Config.</p></div><div class="headerActions"><a class="secondary button" href="/avatar-legend.html">Config</a><a class="secondary button" href="/index.html">Agent view</a></div></header><main class="tasksShell disabledTasksShell"><section class="taskEmpty taskModuleDisabled">Enable Tasks in Config to use the Kanban board.</section></main></body>
-</html>`);
-  } catch (err) {
-    next(err);
-  }
-});
 app.use(express.static(PUBLIC_DIR));
 
 app.get('/api/config', async (req, res, next) => {
@@ -2152,7 +1725,6 @@ app.put('/api/avatar-assignments', async (req, res, next) => {
       assignments: req.body?.assignments || {},
       hiddenAgents: Array.isArray(req.body?.hiddenAgents) ? req.body.hiddenAgents : current.hiddenAgents,
       manualAgents: Array.isArray(req.body?.manualAgents) ? req.body.manualAgents : current.manualAgents,
-      taskAgents: req.body?.taskAgents && typeof req.body.taskAgents === 'object' && !Array.isArray(req.body.taskAgents) ? req.body.taskAgents : current.taskAgents,
       modules: req.body?.modules && typeof req.body.modules === 'object' && !Array.isArray(req.body.modules) ? req.body.modules : current.modules,
       officeScene: req.body?.officeScene || current.officeScene
     });
@@ -2168,16 +1740,6 @@ app.put('/api/avatar-assignments', async (req, res, next) => {
     next(err);
   }
 });
-
-async function requireTasksModule(req, res, next) {
-  try {
-    const config = await readAvatarConfig();
-    if (config.modules.tasks.enabled) return next();
-    res.status(403).json({ enabled: false, error: 'Task module is disabled' });
-  } catch (err) {
-    next(err);
-  }
-}
 
 async function requireFolderViewModule(req, res, next) {
   try {
@@ -2317,12 +1879,13 @@ app.get('/api/agents', async (req, res, next) => {
       sessionGroupedCounts: sessionGroupedCounts || {},
       cronJobs: cron.jobs,
       weeklyCost: weeklyCost || null,
-      statusRules: { activeMs: AGENT_ACTIVE_MS, idleMs: AGENT_IDLE_MS, blockedPattern: 'error|failed|failure|exception|blocked|fatal' },
+      statusRules: { activeMs: AGENT_ACTIVE_MS, successMs: AGENT_SUCCESS_MS, idleMs: AGENT_IDLE_MS, blockedPattern: 'error|failed|failure|exception|blocked|fatal' },
       acceptedManualStates: MANUAL_AGENT_STATES,
       agentStatePath: AGENT_STATE_PATH,
       summary: {
         total: responseAgents.length,
         active: responseAgents.filter((agent) => agent.status === 'active').length,
+        success: responseAgents.filter((agent) => agent.status === 'success').length,
         idle: responseAgents.filter((agent) => agent.status === 'idle').length,
         blocked: responseAgents.filter((agent) => agent.status === 'blocked').length
       },
@@ -2340,354 +1903,6 @@ app.get('/api/cron-jobs/:id/runs', async (req, res, next) => {
   try {
     res.set('Cache-Control', 'no-store, max-age=0');
     res.json(await cronJobRuns(req.params.id, req.query.limit));
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.get('/api/tasks', async (req, res, next) => {
-  try {
-    const config = await readAvatarConfig();
-    if (!config.modules.tasks.enabled) {
-      res.set('Cache-Control', 'no-store, max-age=0');
-      return res.json({
-        enabled: false,
-        generatedAt: new Date().toISOString(),
-        tasksDir: TASKS_DIR,
-        sharedDir: SHARED_DIR,
-        statuses: TASK_STATUSES,
-        priorities: TASK_PRIORITIES,
-        tasks: [],
-        agents: []
-      });
-    }
-    await ingestAgentTaskEvents();
-    res.set('Cache-Control', 'no-store, max-age=0');
-    const [tasks, agents] = await Promise.all([readTasksFile(), readTaskAgentsFile()]);
-    res.json({
-      generatedAt: new Date().toISOString(),
-      tasksDir: TASKS_DIR,
-      sharedDir: SHARED_DIR,
-      statuses: TASK_STATUSES,
-      priorities: TASK_PRIORITIES,
-      tasks,
-      agents
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/api/tasks', requireTasksModule, async (req, res, next) => {
-  try {
-    const tasks = await readTasksFile();
-    const now = new Date().toISOString();
-    const task = normalizeTask({
-      id: req.body?.id || `task_${crypto.randomUUID().slice(0, 8)}`,
-      title: req.body?.title,
-      description: req.body?.description,
-      priority: req.body?.priority,
-      tags: req.body?.tags,
-      status: req.body?.status || 'backlog',
-      createdAt: now,
-      updatedAt: now
-    });
-    if (tasks.some((item) => item.id === task.id)) return res.status(409).json({ error: 'A task with that id already exists' });
-    tasks.unshift(task);
-    await writeTasksFile(tasks);
-    await appendTaskEvent({
-      eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-      taskId: task.id,
-      type: 'created',
-      status: task.status,
-      note: 'Task created by user.',
-      createdAt: now
-    });
-    res.status(201).json({ task });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.patch('/api/tasks/:id', requireTasksModule, async (req, res, next) => {
-  try {
-    const tasks = await readTasksFile();
-    const agents = await readTaskAgentsFile();
-    const index = tasks.findIndex((task) => task.id === req.params.id);
-    if (index < 0) return res.status(404).json({ error: 'Task not found' });
-    const before = tasks[index];
-    const updatedAt = new Date().toISOString();
-    const bodyHasNote = Object.prototype.hasOwnProperty.call(req.body || {}, 'lastNote');
-    let nextTask = normalizeTask({
-      ...before,
-      ...req.body,
-      id: before.id,
-      lastNote: bodyHasNote ? before.lastNote : req.body?.lastNote ?? before.lastNote,
-      lastNoteAgentId: bodyHasNote ? before.lastNoteAgentId : req.body?.lastNoteAgentId ?? before.lastNoteAgentId,
-      updatedAt
-    }, before);
-    if (bodyHasNote && cleanText(req.body?.lastNote, '', 1000)) {
-      nextTask = addTaskNote(nextTask, req.body.lastNote, nextTask.assignedAgentId, updatedAt);
-    }
-    tasks[index] = nextTask;
-    await writeTasksFile(tasks);
-    let agentsChanged = false;
-    if (before.status !== nextTask.status) {
-      await appendTaskEvent({
-        eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-        taskId: nextTask.id,
-        agentId: nextTask.assignedAgentId,
-        type: 'status_change',
-        fromStatus: before.status,
-        toStatus: nextTask.status,
-        note: req.body?.lastNote || `Moved from ${before.status} to ${nextTask.status}.`,
-        createdAt: updatedAt
-      });
-      const agent = agents.find((item) => item.id === nextTask.assignedAgentId);
-      if (agent) {
-        agent.currentTaskId = ['done', 'failed'].includes(nextTask.status) ? null : nextTask.id;
-        agent.status = nextTask.status === 'blocked' ? 'blocked' : ['assigned', 'in_progress', 'review'].includes(nextTask.status) ? 'working' : 'idle';
-        agent.lastSeenAt = updatedAt;
-        agentsChanged = true;
-      }
-    } else if (bodyHasNote && before.lastNote !== nextTask.lastNote && nextTask.lastNote) {
-      await appendTaskEvent({
-        eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-        taskId: nextTask.id,
-        agentId: nextTask.assignedAgentId,
-        type: 'note',
-        note: nextTask.lastNote,
-        createdAt: updatedAt
-      });
-    }
-    if (before.assignedAgentId !== nextTask.assignedAgentId) {
-      const previousAgent = agents.find((agent) => agent.id === before.assignedAgentId);
-      if (previousAgent && previousAgent.currentTaskId === nextTask.id) previousAgent.currentTaskId = null;
-      const agent = agents.find((item) => item.id === nextTask.assignedAgentId);
-      if (agent) {
-        agent.currentTaskId = nextTask.id;
-        agent.status = ['done', 'failed'].includes(nextTask.status) ? 'idle' : 'working';
-        agent.lastSeenAt = updatedAt;
-        await writeCurrentTaskForAgent(nextTask, agent);
-      }
-      agentsChanged = true;
-      await appendTaskEvent({
-        eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-        taskId: nextTask.id,
-        agentId: nextTask.assignedAgentId,
-        type: 'assigned',
-        fromStatus: before.status,
-        toStatus: nextTask.status,
-        note: nextTask.assignedAgentId ? `Assigned to ${nextTask.assignedAgentId}.` : 'Assignment cleared.',
-        createdAt: updatedAt
-      });
-    }
-    if (agentsChanged) await writeTaskAgentsFile(agents);
-    res.json({ task: nextTask });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/api/tasks/:id/assign', requireTasksModule, async (req, res, next) => {
-  try {
-    const tasks = await readTasksFile();
-    const agents = await readTaskAgentsFile();
-    const taskIndex = tasks.findIndex((task) => task.id === req.params.id);
-    if (taskIndex < 0) return res.status(404).json({ error: 'Task not found' });
-    const agentId = cleanText(req.body?.agentId, '', 80);
-    const agent = agents.find((item) => item.id === agentId);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const before = tasks[taskIndex];
-    const updatedAt = new Date().toISOString();
-    const nextStatus = before.status === 'backlog' || before.status === 'ready' ? 'assigned' : before.status;
-    const task = normalizeTask({ ...before, assignedAgentId: agent.id, status: nextStatus, updatedAt }, before);
-    tasks[taskIndex] = task;
-    for (const item of agents) {
-      if (item.currentTaskId === task.id) item.currentTaskId = null;
-    }
-    agent.currentTaskId = task.id;
-    agent.status = 'working';
-    agent.lastSeenAt = updatedAt;
-    await writeTasksFile(tasks);
-    await writeTaskAgentsFile(agents);
-    const wroteCurrentTask = await writeCurrentTaskForAgent(task, agent);
-    await appendTaskEvent({
-      eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-      taskId: task.id,
-      agentId: agent.id,
-      type: 'assigned',
-      fromStatus: before.status,
-      toStatus: task.status,
-      note: `Assigned to ${agent.id}.`,
-      createdAt: updatedAt
-    });
-    res.json({ task, agent, wroteCurrentTask });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.delete('/api/tasks/:id', requireTasksModule, async (req, res, next) => {
-  try {
-    const tasks = await readTasksFile();
-    const agents = await readTaskAgentsFile();
-    const task = tasks.find((item) => item.id === req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    await writeTasksFile(tasks.filter((item) => item.id !== task.id));
-    for (const agent of agents) {
-      if (agent.currentTaskId === task.id) agent.currentTaskId = null;
-    }
-    await writeTaskAgentsFile(agents);
-    await appendTaskEvent({
-      eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-      taskId: task.id,
-      agentId: task.assignedAgentId,
-      type: 'deleted',
-      note: 'Task deleted by user.',
-      createdAt: new Date().toISOString()
-    });
-    res.json({ deleted: task.id });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/api/tasks/:id/archive', requireTasksModule, async (req, res, next) => {
-  try {
-    const tasks = await readTasksFile();
-    const agents = await readTaskAgentsFile();
-    const task = tasks.find((item) => item.id === req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    const now = new Date().toISOString();
-    await writeTasksFile(tasks.filter((item) => item.id !== task.id));
-    for (const agent of agents) {
-      if (agent.currentTaskId === task.id) {
-        agent.currentTaskId = null;
-        agent.status = 'idle';
-        agent.lastSeenAt = now;
-      }
-    }
-    await writeTaskAgentsFile(agents);
-    await appendTaskArchive({
-      archiveId: `archive_${crypto.randomUUID().slice(0, 8)}`,
-      type: 'archived',
-      taskId: task.id,
-      task: { ...task, archivedFromStatus: task.status },
-      archivedAt: now,
-      createdAt: now
-    });
-    await appendTaskEvent({
-      eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-      taskId: task.id,
-      agentId: task.assignedAgentId,
-      type: 'archived',
-      status: task.status,
-      note: 'Task archived by user.',
-      createdAt: now
-    });
-    res.json({ archived: task.id, task });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.get('/api/archived-tasks', requireTasksModule, async (req, res, next) => {
-  try {
-    res.set('Cache-Control', 'no-store, max-age=0');
-    res.json({
-      generatedAt: new Date().toISOString(),
-      archivePath: TASK_ARCHIVE_PATH,
-      statuses: TASK_STATUSES,
-      archivedTasks: await readTaskArchive()
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/api/archived-tasks/:id/restore', requireTasksModule, async (req, res, next) => {
-  try {
-    const archive = await readTaskArchive();
-    const archived = archive.find((item) => item.taskId === req.params.id);
-    if (!archived) return res.status(404).json({ error: 'Archived task not found' });
-    const tasks = await readTasksFile();
-    if (tasks.some((task) => task.id === archived.taskId)) return res.status(409).json({ error: 'A task with this id already exists on the board' });
-    const now = new Date().toISOString();
-    const restoredTask = normalizeTask({
-      ...archived.task,
-      status: statusForRestoredTask(archived.task.status),
-      assignedAgentId: null,
-      lastNote: archived.task.lastNote || `Restored from ${archived.task.status}.`,
-      updatedAt: now
-    }, archived.task);
-    tasks.unshift(restoredTask);
-    await writeTasksFile(tasks);
-    await appendTaskArchive({
-      archiveId: `archive_${crypto.randomUUID().slice(0, 8)}`,
-      type: 'restored',
-      taskId: restoredTask.id,
-      restoredAt: now,
-      createdAt: now
-    });
-    await appendTaskEvent({
-      eventId: `evt_${crypto.randomUUID().slice(0, 8)}`,
-      taskId: restoredTask.id,
-      agentId: restoredTask.assignedAgentId,
-      type: 'restored',
-      status: restoredTask.status,
-      note: `Task restored to ${restoredTask.status}.`,
-      createdAt: now
-    });
-    res.json({ task: restoredTask });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/api/task-agents', requireTasksModule, async (req, res, next) => {
-  try {
-    const agents = await readTaskAgentsFile();
-    const agent = normalizeTaskAgent({
-      id: req.body?.id,
-      name: req.body?.name,
-      role: req.body?.role,
-      workspacePath: req.body?.workspacePath,
-      allowedTaskTags: req.body?.allowedTaskTags
-    });
-    if (!resolveSharedWorkspace(agent.workspacePath)) return res.status(400).json({ error: `Workspace path must be inside ${SHARED_DIR}` });
-    const existingIndex = agents.findIndex((item) => item.id === agent.id);
-    if (existingIndex >= 0) agents[existingIndex] = normalizeTaskAgent(agent, agents[existingIndex]);
-    else agents.push(agent);
-    await writeTaskAgentsFile(agents);
-    res.status(existingIndex >= 0 ? 200 : 201).json({ agent: agents.find((item) => item.id === agent.id) });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.patch('/api/task-agents/:id', requireTasksModule, async (req, res, next) => {
-  try {
-    const agents = await readTaskAgentsFile();
-    const index = agents.findIndex((agent) => agent.id === req.params.id);
-    if (index < 0) return res.status(404).json({ error: 'Agent not found' });
-    const agent = normalizeTaskAgent({ ...agents[index], ...req.body, id: agents[index].id }, agents[index]);
-    if (!resolveSharedWorkspace(agent.workspacePath)) return res.status(400).json({ error: `Workspace path must be inside ${SHARED_DIR}` });
-    agents[index] = agent;
-    await writeTaskAgentsFile(agents);
-    res.json({ agent });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.delete('/api/task-agents/:id', requireTasksModule, async (req, res, next) => {
-  try {
-    const agents = await readTaskAgentsFile();
-    const agent = agents.find((item) => item.id === req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    await writeTaskAgentsFile(agents.filter((item) => item.id !== agent.id));
-    res.json({ deleted: agent.id });
   } catch (err) {
     next(err);
   }
