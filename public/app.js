@@ -13,6 +13,7 @@ const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;
 const SUCCESS_STATE_MS = 2 * 60 * 1000;
+const IDLE_POSE_STORAGE_KEY = 'taskfolk-idle-pose-history-v1';
 const AGENT_REFRESH_MS = 8_000;
 const AGENT_REQUEST_TIMEOUT_MS = 12_000;
 const AGENT_DISCOVERY_GRACE_MS = 12_000;
@@ -355,6 +356,36 @@ function hashString(value) {
   return Math.abs(hash);
 }
 
+function idleEpisodeKey(agent, age) {
+  const activity = agent.activity || {};
+  const marker = activity.successAt
+    || activity.updatedAt
+    || activity.lastInteractionAt
+    || activity.lastMessageAt
+    || activity.timestamp
+    || agent.lastSeen
+    || agent.updatedAt
+    || 'unknown';
+  return `${marker}:${age}`;
+}
+
+function idlePoseHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(IDLE_POSE_STORAGE_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function rememberIdlePose(identity, episode, pose, history) {
+  history[identity] = { episode, pose };
+  try {
+    localStorage.setItem(IDLE_POSE_STORAGE_KEY, JSON.stringify(history));
+  } catch {
+    // The deterministic episode seed still prevents flicker if storage is unavailable.
+  }
+}
+
 function idlePose(agent) {
   const age = agentAgeClass(agent);
   const role = pixelRole(agent);
@@ -367,10 +398,24 @@ function idlePose(agent) {
   const poses = age === 'fresh'
     ? ['reading', 'walking', 'coffee', 'headphones', 'gaming']
     : ['coffee', 'reading', 'gaming'];
+  const episode = idleEpisodeKey(agent, age);
+  const history = idlePoseHistory();
+  const previous = history[identity];
+
+  if (previous?.episode === episode && poses.includes(previous.pose)) {
+    return previous.pose;
+  }
 
   // Office and companion views run in separate renderer windows. Deriving the
-  // pose from shared agent data keeps both views on the same animation.
-  return poses[hashString(`${identity}:${age}`) % poses.length];
+  // first choice from shared episode data keeps both views on the same animation.
+  // If this agent used that pose last time, rotate to another valid idle pose.
+  let poseIndex = hashString(`${identity}:${episode}`) % poses.length;
+  if (poses[poseIndex] === previous?.pose && poses.length > 1) {
+    poseIndex = (poseIndex + 1 + (hashString(`${episode}:${identity}`) % (poses.length - 1))) % poses.length;
+  }
+  const pose = poses[poseIndex];
+  rememberIdlePose(identity, episode, pose, history);
+  return pose;
 }
 
 function sanitizeCount(value) {

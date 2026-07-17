@@ -5,6 +5,7 @@ const OFFICE_FLOORS = ['wood', 'wood2', 'carpet', 'concrete', 'tile', 'darkwood'
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;
 const SUCCESS_STATE_MS = 2 * 60 * 1000;
+const IDLE_POSE_STORAGE_KEY = 'taskfolk-idle-pose-history-v1';
 const AVATAR_VARIANT_COUNT = 24;
 const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 23 }, (_, index) => `v${index + 1}_gif`)];
 
@@ -205,7 +206,30 @@ function idlePose(agent) {
   const poses = age === 'fresh'
     ? ['reading', 'walking', 'coffee', 'headphones', 'gaming']
     : ['coffee', 'reading', 'gaming'];
-  return poses[hashString(`${agent.id}:${agent.name}`) % poses.length];
+  const identity = `${agent.id || ''}:${agent.name || ''}`;
+  const activity = agent.activity || {};
+  const marker = activity.successAt || activity.updatedAt || agent.lastSeen || agent.updatedAt || 'unknown';
+  const episode = `${marker}:${age}`;
+  let history = {};
+  try {
+    history = JSON.parse(localStorage.getItem(IDLE_POSE_STORAGE_KEY) || '{}');
+  } catch {
+    // Continue with the deterministic episode seed.
+  }
+  const previous = history[identity];
+  if (previous?.episode === episode && poses.includes(previous.pose)) return previous.pose;
+  let poseIndex = hashString(`${identity}:${episode}`) % poses.length;
+  if (poses[poseIndex] === previous?.pose && poses.length > 1) {
+    poseIndex = (poseIndex + 1 + (hashString(`${episode}:${identity}`) % (poses.length - 1))) % poses.length;
+  }
+  const pose = poses[poseIndex];
+  history[identity] = { episode, pose };
+  try {
+    localStorage.setItem(IDLE_POSE_STORAGE_KEY, JSON.stringify(history));
+  } catch {
+    // Storage is optional in the simulator.
+  }
+  return pose;
 }
 
 function pixelPosition(index, total) {
