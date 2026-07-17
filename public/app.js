@@ -6,7 +6,11 @@ const companionAgentId = pageParams.get('agent') || '';
 const MOST_RECENT_AGENT_ID = '__latest__';
 const themeOptions = ['system', 'light', 'dark'];
 const themeLabels = { system: 'System', light: 'Light', dark: 'Dark' };
-const themeIcons = { system: '💻', light: '☀️', dark: '🌙' };
+const themeIcons = {
+  system: '<svg class="themeIcon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg>',
+  light: '<svg class="themeIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path></svg>',
+  dark: '<svg class="themeIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.3A8.5 8.5 0 0 1 8.7 3.8a8.5 8.5 0 1 0 11.5 11.5Z"></path></svg>'
+};
 const AVATAR_VARIANT_COUNT = 24;
 const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 23 }, (_, index) => `v${index + 1}_gif`)];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
@@ -53,8 +57,11 @@ let selectedCronJobId = null;
 let latestCronJobs = [];
 let agentRefreshTimer = null;
 let agentRefreshInFlight = false;
+let agentRequestController = null;
+let agentRequestGeneration = 0;
 let agentDiscoveryStartedAt = 0;
 let agentDiscoveryRetryTimer = null;
+let preserveAgentsDuringWakeRecovery = false;
 let officeSceneConfig = { floor: 'wood', windowView: 'sf', poster: 0, emptyDesks: 0 };
 let modulesConfig = { folderView: { enabled: true } };
 let renderedCompanionAgentId = '';
@@ -63,7 +70,7 @@ let renderedCompanionAgentSignature = '';
 function applyTheme(theme) {
   const nextTheme = themeOptions.includes(theme) ? theme : 'system';
   document.documentElement.dataset.theme = nextTheme;
-  themeToggleBtn.innerHTML = `<span aria-hidden="true">${themeIcons[nextTheme]}</span><span>${themeLabels[nextTheme]}</span>`;
+  themeToggleBtn.innerHTML = `${themeIcons[nextTheme]}<span>${themeLabels[nextTheme]}</span>`;
   themeToggleBtn.setAttribute('aria-label', `Color theme: ${themeLabels[nextTheme]}. Click to switch theme.`);
 }
 
@@ -196,6 +203,7 @@ function clearAgentDiscoveryRetry() {
 
 function resetAgentDiscovery() {
   agentDiscoveryStartedAt = 0;
+  preserveAgentsDuringWakeRecovery = false;
   clearAgentDiscoveryRetry();
 }
 
@@ -246,7 +254,8 @@ function waitForAgentDiscovery() {
     clearAgentDiscoveryRetry();
     return false;
   }
-  renderAgentDiscoveryLoading();
+  const hasRenderedAgents = officeMap.querySelector('.companionAvatar, .pixelOfficeScene, .agentDesk');
+  if (!preserveAgentsDuringWakeRecovery || !hasRenderedAgents) renderAgentDiscoveryLoading();
   scheduleAgentDiscoveryRetry(Math.min(AGENT_DISCOVERY_RETRY_MS, remainingMs));
   return true;
 }
@@ -639,14 +648,17 @@ function meetingPosition(index) {
 async function loadAgents() {
   if (agentRefreshInFlight) return;
   agentRefreshInFlight = true;
+  const requestGeneration = ++agentRequestGeneration;
   if (!officeMap.firstElementChild) renderAgentDiscoveryLoading();
   const requestController = new AbortController();
+  agentRequestController = requestController;
   const requestTimeout = setTimeout(() => requestController.abort(), AGENT_REQUEST_TIMEOUT_MS);
   try {
     const data = await api(`/api/agents?t=${Date.now()}`, {
       cache: 'no-store',
       signal: requestController.signal
     });
+    if (requestGeneration !== agentRequestGeneration) return;
     const weeklyCost = data.weeklyCost || {};
     latestCronJobs = Array.isArray(data.cronJobs) ? data.cronJobs : [];
     agentSummary.innerHTML = `
@@ -673,6 +685,7 @@ async function loadAgents() {
       else renderAgentCards(agents);
     }
   } catch (err) {
+    if (requestGeneration !== agentRequestGeneration) return;
     resetAgentDiscovery();
     const avatarCompanion = companionMode && companionView === 'avatar';
     if (avatarCompanion) {
@@ -690,9 +703,24 @@ async function loadAgents() {
     officeMap.querySelector('.agentLoadRefreshBtn')?.addEventListener('click', loadAgents);
   } finally {
     clearTimeout(requestTimeout);
-    agentRefreshInFlight = false;
-    scheduleAgentRefresh();
+    if (requestGeneration === agentRequestGeneration) {
+      agentRequestController = null;
+      agentRefreshInFlight = false;
+      scheduleAgentRefresh();
+    }
   }
+}
+
+function refreshAgentsAfterSystemResume() {
+  agentRequestGeneration += 1;
+  agentRequestController?.abort();
+  agentRequestController = null;
+  agentRefreshInFlight = false;
+  agentDiscoveryStartedAt = Date.now();
+  preserveAgentsDuringWakeRecovery = true;
+  clearAgentDiscoveryRetry();
+  if (currentView !== 'agents') return;
+  loadAgents();
 }
 
 function agentMeta(agent) {
@@ -1393,6 +1421,7 @@ newFolderBtn.onclick = createFolder;
 window.addEventListener('focus', () => {
   if (currentView === 'agents' && agentAutoRefresh) loadAgents();
 });
+window.addEventListener('taskfolk:system-resume', refreshAgentsAfterSystemResume);
 try {
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if ((document.documentElement.dataset.theme || 'system') === 'system' && currentView === 'agents' && agentDisplayMode === 'pixel') {

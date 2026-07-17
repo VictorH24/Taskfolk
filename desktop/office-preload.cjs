@@ -3,6 +3,10 @@ const { ipcRenderer, webFrame } = require('electron');
 const avatarMode = new URLSearchParams(window.location.search).get('companionView') === 'avatar';
 const loadingLabel = avatarMode ? 'Loading avatar' : 'Loading office';
 
+ipcRenderer.on('office:system-resume', () => {
+  window.dispatchEvent(new Event('taskfolk:system-resume'));
+});
+
 webFrame.insertCSS(`
   html:not(.companion-revealing):not(.companion-revealed) body {
     opacity: 0 !important;
@@ -121,6 +125,13 @@ window.addEventListener('DOMContentLoaded', () => {
     if (revealStarted) observer.disconnect();
   });
   observer.observe(document.body, { childList: true, subtree: true });
+
+  if (avatarMode) {
+    const unavailableStateObserver = new MutationObserver(() => {
+      if (document.querySelector('.companionAvatarEmpty.agentLoadFailure')) setMouseIgnore(false);
+    });
+    unavailableStateObserver.observe(document.body, { childList: true, subtree: true });
+  }
 });
 
 function setMouseIgnore(ignore) {
@@ -139,6 +150,9 @@ function avatarContainsOpaquePixel(x, y) {
   if (!document.documentElement.classList.contains('companion-revealed')) {
     return loaderContainsPoint(x, y);
   }
+  // Keep the whole companion window available while its agent cannot be
+  // displayed so users can always reach the native menu with a right-click.
+  if (document.querySelector('.companionAvatarEmpty.agentLoadFailure')) return true;
   const target = document.elementFromPoint(x, y);
   if (target instanceof Element && target.closest('[data-companion-interactive]')) return true;
   const image = document.querySelector('.companionAvatar .sceneArt');

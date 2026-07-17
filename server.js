@@ -1651,6 +1651,7 @@ app.use(requireGatewayAuth);
 app.post('/api/runtime-agents', (req, res) => {
   const sourceId = cleanRuntimeText(req.body?.sourceId, 120);
   const provider = cleanRuntimeText(req.body?.provider, 40).toLowerCase();
+  const publishedAtMs = Number(req.body?.publishedAtMs) || 0;
   const inputAgents = req.body?.agents;
   if (!sourceId || !/^[a-z0-9][a-z0-9._:-]*$/i.test(sourceId)) {
     return res.status(400).json({ error: 'A valid runtime sourceId is required.' });
@@ -1661,14 +1662,21 @@ app.post('/api/runtime-agents', (req, res) => {
   if (!Array.isArray(inputAgents)) return res.status(400).json({ error: 'agents must be an array.' });
   if (inputAgents.length > 24) return res.status(400).json({ error: 'A runtime source may publish at most 24 agents.' });
 
-  const previousById = new Map((runtimeAgentSources.get(sourceId)?.agents || []).map((agent) => [agent.id, agent]));
+  const previousSource = runtimeAgentSources.get(sourceId);
+  if (publishedAtMs && previousSource?.publishedAtMs && publishedAtMs < previousSource.publishedAtMs) {
+    return res.json({ ok: true, provider, accepted: previousSource.agents.length, ignoredAsStale: true, ttlMs: RUNTIME_AGENT_TTL_MS });
+  }
+  const previousById = new Map((previousSource?.agents || []).map((agent) => [agent.id, agent]));
   const agents = inputAgents.map((agent, index) => {
     const rawId = cleanRuntimeText(agent?.id, 160);
     const normalizedId = rawId.startsWith(`${provider}:`) ? rawId : `${provider}:${rawId}`;
     return normalizeRuntimeAgent(agent, provider, index, previousById.get(normalizedId));
   }).filter(Boolean);
-  if (agents.length) runtimeAgentSources.set(sourceId, { provider, agents, updatedAtMs: Date.now() });
-  else runtimeAgentSources.delete(sourceId);
+  if (agents.length || publishedAtMs) {
+    runtimeAgentSources.set(sourceId, { provider, agents, updatedAtMs: Date.now(), publishedAtMs });
+  } else {
+    runtimeAgentSources.delete(sourceId);
+  }
   return res.json({ ok: true, provider, accepted: agents.length, ttlMs: RUNTIME_AGENT_TTL_MS });
 });
 

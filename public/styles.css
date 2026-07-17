@@ -380,7 +380,16 @@ button.secondary, .button.secondary { background: var(--secondary); color: var(-
   min-width: 6.75rem;
   justify-content: center;
 }
-.themeToggle span[aria-hidden="true"] { font-size: 1.05rem; line-height: 1; }
+.themeIcon {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .tableWrap { overflow: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: .8rem 1rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }

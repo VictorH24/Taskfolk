@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, screen, session, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, safeStorage, screen, session, Tray } = require('electron');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -43,14 +43,17 @@ const AVATAR_SIZE_PRESETS = [
 ];
 const PARTITION = 'persist:taskfolk';
 const APP_ICON_PATH = path.join(__dirname, 'icon.png');
+const MAC_TRAY_ICON_PATH = path.join(__dirname, 'assets', 'trayTemplate.png');
 const MOST_RECENT_AGENT_ID = '__latest__';
 const OPENCODE_REFRESH_MS = 5_000;
 const OPENCODE_REQUEST_TIMEOUT_MS = 2_500;
+const RUNTIME_PUBLISH_TIMEOUT_MS = 5_000;
 const VSCODE_COPILOT_REFRESH_MS = 5_000;
 const CODEX_REFRESH_MS = 5_000;
 const CLAUDE_REFRESH_MS = 5_000;
 const OPENCLAW_REFRESH_MS = 5_000;
 const LOCAL_SERVER_START_TIMEOUT_MS = 12_000;
+const SYSTEM_SLEEP_GAP_MS = 20_000;
 
 app.setName('Taskfolk');
 
@@ -91,6 +94,8 @@ let claudeTimer = null;
 let claudeSyncInFlight = false;
 let claudePublished = false;
 let claudeLastError = '';
+let runtimeSyncGeneration = 0;
+let lastRuntimeHeartbeatAt = Date.now();
 let quitting = false;
 const runtimeAgentMenuSignatures = new Map();
 const companionWindows = new Map();
@@ -599,9 +604,31 @@ async function authenticate(baseUrl, credentials, ses) {
   await ses.cookies.flushStore();
 }
 
+function requestWithTimeout(request, controller, timeoutMs, message) {
+  let timeout;
+  const expired = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller?.abort();
+      const error = new Error(message);
+      error.name = 'TimeoutError';
+      reject(error);
+    }, timeoutMs);
+  });
+  return Promise.race([request, expired]).finally(() => clearTimeout(timeout));
+}
+
 async function fetchAvailableAgents(baseUrl, ses) {
+  const controller = new AbortController();
   try {
-    const response = await ses.fetch(endpoint(baseUrl, `/api/agents?t=${Date.now()}`), { credentials: 'include' });
+    const response = await requestWithTimeout(
+      ses.fetch(endpoint(baseUrl, `/api/agents?t=${Date.now()}`), {
+        credentials: 'include',
+        signal: controller.signal
+      }),
+      controller,
+      RUNTIME_PUBLISH_TIMEOUT_MS,
+      'Agent discovery request timed out.'
+    );
     if (!response.ok) return [];
     const data = await response.json();
     return (Array.isArray(data.agents) ? data.agents : []).map((agent) => ({
@@ -635,16 +662,24 @@ function mostRecentAvailableAgentId() {
 async function publishRuntimeAgents(provider, agents, config = readConfig()) {
   if (!activeBaseUrl) return;
   const ses = session.fromPartition(PARTITION, { cache: true });
-  const response = await ses.fetch(endpoint(activeBaseUrl, '/api/runtime-agents'), {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      sourceId: `${ensureRuntimeSourceId(config)}:${provider}`,
-      provider,
-      agents
-    })
-  });
+  const controller = new AbortController();
+  const response = await requestWithTimeout(
+    ses.fetch(endpoint(activeBaseUrl, '/api/runtime-agents'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceId: `${ensureRuntimeSourceId(config)}:${provider}`,
+        provider,
+        publishedAtMs: Date.now(),
+        agents
+      }),
+      signal: controller.signal
+    }),
+    controller,
+    RUNTIME_PUBLISH_TIMEOUT_MS,
+    `${provider} status publish timed out.`
+  );
   if (!response.ok) {
     let message = `Taskfolk rejected ${provider} status (${response.status}).`;
     try {
@@ -678,7 +713,11 @@ function openCodeAgentActivityMs(agent) {
 }
 
 async function syncOpenCodeAdapter() {
-  if (openCodeSyncInFlight) return;
+  if (openCodeSyncInFlight) {
+    scheduleOpenCodeSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
   openCodeSyncInFlight = true;
   try {
     const config = readConfig();
@@ -731,10 +770,13 @@ async function syncOpenCodeAdapter() {
       throw new Error(`OpenCode server: ${serverError.message}; desktop: ${desktopError.message}`);
     }
     if (!agents.length && serverError && !desktopAgents.length) throw serverError;
+    if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('opencode', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
     openCodePublished = agents.length > 0;
     openCodeLastError = '';
   } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     const message = error?.name === 'AbortError' ? 'OpenCode status request timed out.' : error.message;
     if (message !== openCodeLastError) console.warn(`OpenCode adapter: ${message}`);
     openCodeLastError = message;
@@ -743,6 +785,7 @@ async function syncOpenCodeAdapter() {
       openCodePublished = false;
     }
   } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     openCodeSyncInFlight = false;
     scheduleOpenCodeSync();
   }
@@ -763,7 +806,11 @@ function scheduleVsCodeCopilotSync() {
 }
 
 async function syncVsCodeCopilotAdapter() {
-  if (vsCodeCopilotSyncInFlight) return;
+  if (vsCodeCopilotSyncInFlight) {
+    scheduleVsCodeCopilotSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
   vsCodeCopilotSyncInFlight = true;
   try {
     const config = readConfig();
@@ -776,10 +823,13 @@ async function syncVsCodeCopilotAdapter() {
     const agents = await fetchVsCodeCopilotAgents({
       grouping: normalizeVsCodeCopilotGrouping(config.vsCodeCopilotGrouping)
     });
+    if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('vscode-copilot', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
     vsCodeCopilotPublished = agents.length > 0;
     vsCodeCopilotLastError = '';
   } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     const message = error?.message || 'Could not read VS Code Copilot activity.';
     if (message !== vsCodeCopilotLastError) console.warn(`VS Code Copilot adapter: ${message}`);
     vsCodeCopilotLastError = message;
@@ -788,6 +838,7 @@ async function syncVsCodeCopilotAdapter() {
       vsCodeCopilotPublished = false;
     }
   } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     vsCodeCopilotSyncInFlight = false;
     scheduleVsCodeCopilotSync();
   }
@@ -808,7 +859,11 @@ function scheduleCodexSync() {
 }
 
 async function syncCodexAdapter() {
-  if (codexSyncInFlight) return;
+  if (codexSyncInFlight) {
+    scheduleCodexSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
   codexSyncInFlight = true;
   try {
     const config = readConfig();
@@ -819,10 +874,13 @@ async function syncCodexAdapter() {
       return;
     }
     const agents = await fetchCodexAgents({ grouping: normalizeCodexGrouping(config.codexGrouping) });
+    if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('codex', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
     codexPublished = agents.length > 0;
     codexLastError = '';
   } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     const message = error?.message || 'Could not read Codex activity.';
     if (message !== codexLastError) console.warn(`Codex adapter: ${message}`);
     codexLastError = message;
@@ -831,6 +889,7 @@ async function syncCodexAdapter() {
       codexPublished = false;
     }
   } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     codexSyncInFlight = false;
     scheduleCodexSync();
   }
@@ -851,7 +910,11 @@ function scheduleClaudeSync() {
 }
 
 async function syncClaudeAdapter() {
-  if (claudeSyncInFlight) return;
+  if (claudeSyncInFlight) {
+    scheduleClaudeSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
   claudeSyncInFlight = true;
   try {
     const config = readConfig();
@@ -862,10 +925,13 @@ async function syncClaudeAdapter() {
       return;
     }
     const agents = await fetchClaudeAgents({ grouping: normalizeClaudeGrouping(config.claudeGrouping) });
+    if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('claude', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
     claudePublished = agents.length > 0;
     claudeLastError = '';
   } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     const message = error?.message || 'Could not read Claude activity.';
     if (message !== claudeLastError) console.warn(`Claude adapter: ${message}`);
     claudeLastError = message;
@@ -874,6 +940,7 @@ async function syncClaudeAdapter() {
       claudePublished = false;
     }
   } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     claudeSyncInFlight = false;
     scheduleClaudeSync();
   }
@@ -894,7 +961,11 @@ function scheduleOpenClawSync() {
 }
 
 async function syncOpenClawAdapter() {
-  if (openClawSyncInFlight) return;
+  if (openClawSyncInFlight) {
+    scheduleOpenClawSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
   openClawSyncInFlight = true;
   try {
     const config = readConfig();
@@ -914,10 +985,13 @@ async function syncOpenClawAdapter() {
       deviceIdentity: ensureOpenClawDeviceIdentity(config),
       onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes)
     });
+    if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('openclaw', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
     openClawPublished = agents.length > 0;
     openClawLastError = '';
   } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     const message = error?.message || 'Could not read OpenClaw gateway activity.';
     if (message !== openClawLastError) console.warn(`OpenClaw adapter: ${message}`);
     openClawLastError = message;
@@ -926,6 +1000,7 @@ async function syncOpenClawAdapter() {
       openClawPublished = false;
     }
   } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
     openClawSyncInFlight = false;
     scheduleOpenClawSync();
   }
@@ -935,6 +1010,31 @@ function startOpenClawAdapter() {
   clearTimeout(openClawTimer);
   openClawTimer = null;
   void syncOpenClawAdapter();
+}
+
+function restartRuntimeAdaptersAfterWake() {
+  if (!activeBaseUrl) return;
+  runtimeSyncGeneration += 1;
+  openCodeSyncInFlight = false;
+  vsCodeCopilotSyncInFlight = false;
+  codexSyncInFlight = false;
+  claudeSyncInFlight = false;
+  openClawSyncInFlight = false;
+  startOpenCodeAdapter();
+  startVsCodeCopilotAdapter();
+  startCodexAdapter();
+  startClaudeAdapter();
+  startOpenClawAdapter();
+  for (const window of companionWindows.keys()) {
+    if (!window.isDestroyed()) window.webContents.send('office:system-resume');
+  }
+}
+
+function checkForSystemSleepGap() {
+  const now = Date.now();
+  const elapsed = now - lastRuntimeHeartbeatAt;
+  lastRuntimeHeartbeatAt = now;
+  if (elapsed > SYSTEM_SLEEP_GAP_MS) restartRuntimeAdaptersAfterWake();
 }
 
 function companionUrl(baseUrl = activeBaseUrl, config = readConfig(), agentId = '') {
@@ -1408,15 +1508,15 @@ function toggleOffice() {
 function createTray() {
   if (tray && !tray.isDestroyed()) return;
   const trayIconPath = process.platform === 'darwin'
-    ? APP_ICON_PATH
+    ? MAC_TRAY_ICON_PATH
     : path.join(__dirname, '..', 'public', 'favicon.png');
   const fallbackIconPath = path.join(__dirname, '..', 'public', 'favicon.png');
   let sourceIcon = nativeImage.createEmpty();
   let fallbackIcon = nativeImage.createEmpty();
   try {
-    sourceIcon = nativeImage.createFromBuffer(fs.readFileSync(trayIconPath));
+    sourceIcon = nativeImage.createFromPath(trayIconPath);
     fallbackIcon = sourceIcon.isEmpty()
-      ? nativeImage.createFromBuffer(fs.readFileSync(fallbackIconPath))
+      ? nativeImage.createFromPath(fallbackIconPath)
       : sourceIcon;
   } catch (error) {
     console.warn(`Could not read the Taskfolk menu-bar icon: ${error.message}`);
@@ -1425,7 +1525,10 @@ function createTray() {
     console.warn('Could not create the Taskfolk menu-bar icon.');
     return;
   }
-  const icon = fallbackIcon.resize({ width: 18, height: 18 });
+  const icon = process.platform === 'darwin'
+    ? fallbackIcon
+    : fallbackIcon.resize({ width: 18, height: 18 });
+  if (process.platform === 'darwin') icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip('Taskfolk');
   if (process.platform !== 'darwin') tray.on('click', toggleOffice);
@@ -1670,6 +1773,9 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
 });
 
 app.whenReady().then(async () => {
+  powerMonitor.on('resume', restartRuntimeAdaptersAfterWake);
+  powerMonitor.on('unlock-screen', restartRuntimeAdaptersAfterWake);
+  setInterval(checkForSystemSleepGap, 5_000).unref();
   const config = readConfig();
   if (process.platform === 'darwin') applyDockVisibility(config);
   else createTray();
