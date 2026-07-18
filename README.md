@@ -6,7 +6,9 @@ Taskfolk is a desktop companion that turns your AI coding sessions into a live p
 
 **New to Taskfolk?** See the [Taskfolk User Guide](USER_GUIDE.md) for macOS installation, Privacy & Security approval, first-run setup, integrations, and app configuration.
 
-<img src="docs/taskfolk_day.gif" alt="Taskfolk desktop companion showing live agents in a pixel office" maxwidth="250"> <img src="docs/taskfolk-multiple-avatars2.png" alt="Taskfolk desktop companion showing four live agents on the desktop" maxwidth="200">
+| Live pixel office | Multiple desktop avatars |
+| :---: | :---: |
+| ![Taskfolk desktop companion showing live agents in a pixel office](docs/taskfolk_day.gif) | ![Taskfolk desktop companion showing four live agents on the desktop](docs/taskfolk-multiple-avatars2.png) |
 
 ## Start the companion app
 
@@ -40,7 +42,7 @@ These avatars animate in the companion as their live state changes:
 
 | Reading | Working Robot | Working Cat | Coffee break |
 | :---: | :---: | :---: | :---: |
-| <img src="docs/taskfolk-avatar-reading.gif" alt="Animated Taskfolk avatar variant 0 working at a desk" width="180"> | <img src="docs/taskfolk-avatar-robot.gif" alt="Animated Taskfolk robot avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-working.gif" alt="Animated Taskfolk cat avatar working at a desk" width="180"> | <img src="docs/taskfolk-avatar-coffee.gif" alt="Animated Taskfolk avatar taking a coffee break" width="180"> |
+| ![Animated Taskfolk avatar variant 0 working at a desk](docs/taskfolk-avatar-reading.gif) | ![Animated Taskfolk robot avatar working at a desk](docs/taskfolk-avatar-robot.gif) | ![Animated Taskfolk cat avatar working at a desk](docs/taskfolk-avatar-working.gif) | ![Animated Taskfolk avatar taking a coffee break](docs/taskfolk-avatar-coffee.gif) |
 
 ### Live coding-session support
 
@@ -54,9 +56,9 @@ Taskfolk reads only the local metadata needed to represent activity. It does not
 
 ## Web dashboard
 
-The same live office is available as a browser dashboard with configuration, shared-folder tools, and optional task views.
+The same live office is available as a browser dashboard with configuration, shared-folder tools.
 
-![Taskfolk pixel office](docs/taskfolk_day.gif)
+![Taskfolk pixel office](docs/user-guide-pixel-office.jpg)
 
 ### Dashboard features
 
@@ -109,7 +111,7 @@ opencode --port 4096
 
 In **Setup**, enable **Track OpenCode Desktop and terminal sessions**, then choose **One agent per project** or **One agent for all projects**. The adapter merges automatically discovered Desktop activity with the terminal server's `/session/status` and `/session` endpoints, sends normalized session metadata to Taskfolk, and removes runtime agents when OpenCode becomes unavailable. Each grouping mode keeps its own stable avatar configuration.
 
-Each OpenCode project gets its own stable avatar configuration key, so it keeps an independent avatar across new sessions and restarts even though OpenCode changes the underlying session ID. Up to 24 recently active projects can appear at once. The Config page automatically migrates the former global and older per-session OpenCode assignments onto discovered projects. Use **Disable** to hide a project while preserving its configuration, or **Remove** to forget its avatar and task settings and drop it from the current discovery snapshot. A removed project can reappear with the default configuration the next time OpenCode publishes it.
+Each OpenCode project gets its own stable avatar configuration key, so it keeps an independent avatar across new sessions and restarts even though OpenCode changes the underlying session ID. Up to 24 recently active projects can appear at once. The Config page automatically migrates the former global and older per-session OpenCode assignments onto discovered projects. Use **Disable** to hide a project while preserving its configuration, or **Remove** to forget its avatar and drop it from the current discovery snapshot. A removed project can reappear with the default configuration the next time OpenCode publishes it.
 
 If the OpenCode server uses HTTP Basic authentication, enter its username and password in Setup. The default username is `opencode`. The password is encrypted with Electron `safeStorage` when operating-system encryption is available. Managed launches can provide `OPENCODE_SERVER_USERNAME` and `OPENCODE_SERVER_PASSWORD` instead.
 
