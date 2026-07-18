@@ -32,40 +32,6 @@
       </div>
     </section>
   <main class="legendPage">
-    <section class="legendControls legendSceneControls" aria-label="Office scene controls">
-      <div>
-        <span class="eyebrow">Pixel office</span>
-        <h3>Choose Floor, Window, And Poster</h3>
-      </div>
-      <div class="sceneChoiceGroups">
-        <div>
-          <span>Floor</span>
-          <div id="floorButtons" class="variantButtons"></div>
-        </div>
-        <div>
-          <span>Window</span>
-          <div id="windowButtons" class="variantButtons"></div>
-        </div>
-        <div>
-          <span>Poster</span>
-          <div id="posterButtons" class="posterButtons"></div>
-        </div>
-        <div>
-          <span>Empty desks</span>
-          <div class="emptyDeskControl">
-            <input id="emptyDesksInput" type="number" min="0" max="24" step="1" value="0" aria-label="Number of empty desks" />
-          </div>
-        </div>
-      </div>
-    </section>
-    <section class="legendIntro">
-      <div>
-        <span class="eyebrow">Avatar sheets</span>
-        <h2>One preview per variant</h2>
-        <p>Each generated sheet shows all eight avatar states. Choose avatars only in the Live Agents section below.</p>
-      </div>
-    </section>
-    <section id="legendGrid" class="avatarSheetGrid" aria-label="Generated avatar sheets"></section>
     <section class="legendAssignments" aria-label="Assign agents to avatars">
       <div class="legendAssignmentsHeader">
         <div>
@@ -104,6 +70,43 @@
         <p>Use the token shown on the manual agent row. The optional <code>task</code> field becomes the short status text in the office.</p>
       </div>
     </details>
+    <details class="agentApiHelp">
+      <summary>Customize Pixel office</summary>
+      <section class="legendControls legendSceneControls disclosureControls" aria-label="Office scene controls">
+        <div>
+          <span class="eyebrow">Pixel office</span>
+          <h3>Choose Floor, Window, And Poster</h3>
+        </div>
+        <div class="sceneChoiceGroups">
+          <div>
+            <span>Floor</span>
+            <div id="floorButtons" class="variantButtons"></div>
+          </div>
+          <div>
+            <span>Window</span>
+            <div id="windowButtons" class="variantButtons"></div>
+          </div>
+          <div>
+            <span>Poster</span>
+            <div id="posterButtons" class="posterButtons"></div>
+          </div>
+          <div>
+            <span>Empty desks</span>
+            <div class="emptyDeskControl">
+              <input id="emptyDesksInput" type="number" min="0" max="24" step="1" value="0" aria-label="Number of empty desks" />
+            </div>
+          </div>
+        </div>
+      </section>
+    </details>
+    <section class="legendIntro">
+      <div>
+        <span class="eyebrow">Avatar sheets</span>
+        <h2>One preview per variant</h2>
+        <p>Each generated sheet shows all eight avatar states. Choose avatars only in the Live Agents section above.</p>
+      </div>
+    </section>
+    <section id="legendGrid" class="avatarSheetGrid" aria-label="Generated avatar sheets"></section>
   </main>
 
   <script src="./scene-art.js"></script>

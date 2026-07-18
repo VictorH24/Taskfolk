@@ -25,7 +25,7 @@ const AVATAR_ASSIGNMENTS_PATH = path.resolve(process.env.AVATAR_ASSIGNMENTS_PATH
 const AGENT_STATE_PATH = path.resolve(process.env.AGENT_STATE_PATH || path.join(CONFIG_DIR, 'state.json'));
 const OFFICE_FIXTURE_PATH = path.resolve(process.env.OFFICE_FIXTURE_PATH || path.join(SERVER_DIR, 'public', 'test-agents.json'));
 const LOCAL_DESKTOP_MODE = String(process.env.LOCAL_DESKTOP_MODE || '').trim().toLowerCase() === 'true';
-const AVATAR_VARIANTS = [0, ...Array.from({ length: 23 }, (_, index) => `v${index + 1}_gif`)];
+const AVATAR_VARIANTS = [0, ...Array.from({ length: 25 }, (_, index) => `v${index + 1}_gif`)];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
@@ -324,7 +324,7 @@ function normalizeAvatarVariant(value) {
   if (raw === 'v0_gif') return 0;
   if (/^v\d+_gif$/.test(raw) && AVATAR_VARIANTS.includes(raw)) return raw;
   const variant = Number(value);
-  if (!Number.isInteger(variant) || variant < 0 || variant > 23) return 0;
+  if (!Number.isInteger(variant) || variant < 0 || variant > 25) return 0;
   return variant === 0 ? 0 : `v${variant}_gif`;
 }
 

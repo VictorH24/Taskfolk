@@ -572,6 +572,15 @@ main.legendPage {
   font-weight: 900;
 }
 
+.disclosureControls {
+  margin: 1rem 0 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .agentApiHelpBody {
   display: grid;
   gap: 1rem;

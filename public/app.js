@@ -11,8 +11,8 @@ const themeIcons = {
   light: '<svg class="themeIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path></svg>',
   dark: '<svg class="themeIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.3A8.5 8.5 0 0 1 8.7 3.8a8.5 8.5 0 1 0 11.5 11.5Z"></path></svg>'
 };
-const AVATAR_VARIANT_COUNT = 24;
-const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 23 }, (_, index) => `v${index + 1}_gif`)];
+const AVATAR_VARIANT_COUNT = 26;
+const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 25 }, (_, index) => `v${index + 1}_gif`)];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;

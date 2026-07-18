@@ -6,8 +6,8 @@ const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;
 const SUCCESS_STATE_MS = 2 * 60 * 1000;
 const IDLE_POSE_STORAGE_KEY = 'taskfolk-idle-pose-history-v1';
-const AVATAR_VARIANT_COUNT = 24;
-const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 23 }, (_, index) => `v${index + 1}_gif`)];
+const AVATAR_VARIANT_COUNT = 26;
+const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 25 }, (_, index) => `v${index + 1}_gif`)];
 
 const officeMap = document.querySelector('#officeMap');
 const agentSummary = document.querySelector('#agentSummary');

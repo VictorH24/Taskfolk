@@ -151,12 +151,23 @@ ipcMain.on('office-window-mouse:ignore', (event, requested) => {
   }
 });
 
+ipcMain.on('config:changed', (event) => {
+  if (!configWindow || configWindow.isDestroyed() || event.sender !== configWindow.webContents) return;
+  void refreshAvailableAgents().catch((error) => {
+    console.warn(`Could not refresh agents after Config changed: ${error.message}`);
+  });
+});
+
 function displayMode(config = readConfig()) {
   return config.displayMode === 'avatar' ? 'avatar' : 'office';
 }
 
 function isAlwaysOnTopEnabled(config = readConfig()) {
   return config.alwaysOnTop === undefined ? true : Boolean(config.alwaysOnTop);
+}
+
+function isShowOnAllDesktopsEnabled(config = readConfig()) {
+  return process.platform === 'darwin' && Boolean(config.showOnAllDesktops);
 }
 
 function normalizedOpacity(value) {
@@ -562,6 +573,7 @@ async function openConfigWindow() {
     autoHideMenuBar: true,
     webPreferences: {
       partition: PARTITION,
+      preload: path.join(__dirname, 'config-preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -646,6 +658,25 @@ async function fetchAvailableAgents(baseUrl, ses) {
   } catch {
     return [];
   }
+}
+
+async function refreshAvailableAgents() {
+  if (!activeBaseUrl) return;
+  const ses = session.fromPartition(PARTITION, { cache: true });
+  availableAgents = await fetchAvailableAgents(activeBaseUrl, ses);
+
+  let config = readConfig();
+  const selectedAgentUnavailable = displayMode(config) === 'avatar'
+    && config.selectedAgent !== MOST_RECENT_AGENT_ID
+    && !availableAgents.some((agent) => agent.id === config.selectedAgent);
+  if (selectedAgentUnavailable) {
+    config = { ...config, selectedAgent: availableAgents[0]?.id || '' };
+    writeConfig(config);
+    await loadCompanionView();
+  }
+
+  reconcileAdditionalCompanionWindows();
+  rebuildMenus();
 }
 
 function timestampCandidateMs(value) {
@@ -1302,7 +1333,7 @@ function cascadedAvatarBounds(referenceWindow) {
 }
 
 function createCompanionBrowserWindow(bounds, config = readConfig()) {
-  return new BrowserWindow({
+  const targetWindow = new BrowserWindow({
     ...bounds,
     minWidth: 120,
     minHeight: 150,
@@ -1327,6 +1358,15 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
       devTools: !app.isPackaged
     }
   });
+
+  if (process.platform === 'darwin') {
+    const showOnAllDesktops = isShowOnAllDesktopsEnabled(config);
+    targetWindow.setVisibleOnAllWorkspaces(showOnAllDesktops, {
+      visibleOnFullScreen: showOnAllDesktops
+    });
+  }
+
+  return targetWindow;
 }
 
 function secureCompanionNavigation(targetWindow, baseUrl) {
@@ -1479,7 +1519,7 @@ function rebuildMenus() {
   const config = readConfig();
   const alwaysOnTop = isAlwaysOnTopEnabled(config);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: officeWindow?.isVisible() ? 'Hide Office' : 'Show Office', click: toggleOffice },
+    { label: isOfficeVisible() ? 'Hide Office' : 'Show Office', click: toggleOffice },
     { label: 'Reload', enabled: Boolean(officeWindow), click: () => officeWindow?.reload() },
     { type: 'separator' },
     ...viewMenuItems(config),
@@ -1495,11 +1535,22 @@ function rebuildMenus() {
   ]));
 }
 
+function isOfficeVisible() {
+  for (const window of companionWindows.keys()) {
+    if (!window.isDestroyed() && window.isVisible()) return true;
+  }
+  return false;
+}
+
 function toggleOffice() {
   if (!officeWindow) return openSettingsWindow();
-  if (officeWindow.isVisible()) officeWindow.hide();
-  else {
-    officeWindow.show();
+  const hideOffice = isOfficeVisible();
+  for (const window of companionWindows.keys()) {
+    if (window.isDestroyed()) continue;
+    if (hideOffice) window.hide();
+    else window.show();
+  }
+  if (!hideOffice) {
     officeWindow.focus();
   }
   rebuildMenus();
@@ -1548,6 +1599,8 @@ ipcMain.handle('settings:load', () => {
       || credentials.password
     ),
     alwaysOnTop: isAlwaysOnTopEnabled(config),
+    showOnAllDesktopsSupported: process.platform === 'darwin',
+    showOnAllDesktops: isShowOnAllDesktopsEnabled(config),
     dockIconSupported: process.platform === 'darwin',
     hideDockIcon: Boolean(config.hideDockIcon),
     displayMode: displayMode(config),
@@ -1715,6 +1768,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     ...config,
     connectionMode: mode,
     alwaysOnTop: Boolean(input.alwaysOnTop),
+    showOnAllDesktops: process.platform === 'darwin' && Boolean(input.showOnAllDesktops),
     hideDockIcon: process.platform === 'darwin' && Boolean(input.hideDockIcon),
     displayMode: input.displayMode === 'avatar' ? 'avatar' : 'office',
     selectedAgent: String(input.selectedAgent || config.selectedAgent || ''),

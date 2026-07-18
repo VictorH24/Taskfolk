@@ -41,7 +41,9 @@ const AVATAR_VARIANT_NAMES = [
   'Hijabi Woman',
   'Silver-Haired Man',
   'Blonde Woman',
-  'African-American Man'
+  'African-American Man',
+  'Hooded Hacker',
+  'Extraterrestrial'
 ];
 const AVATAR_VARIANTS = AVATAR_VARIANT_NAMES.map((name, index) => ({
   value: index === 0 ? 0 : `v${index}_gif`,
@@ -83,7 +85,7 @@ function normalizeAvatarVariant(value) {
   if (raw === 'v0_gif') return 0;
   if (/^v\d+_gif$/.test(raw) && AVATAR_VARIANTS.some((variant) => variant.value === raw)) return raw;
   const numeric = Number(value);
-  if (!Number.isInteger(numeric) || numeric < 0 || numeric > 23) return 0;
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > 25) return 0;
   return numeric === 0 ? 0 : `v${numeric}_gif`;
 }
 
@@ -519,6 +521,7 @@ async function saveAssignments(reload = true) {
     modules = normalizeModules(data.modules || modules);
     officeScene = normalizeOfficeScene(data.officeScene);
     assignmentStatus.textContent = `Saved assignments · ${data.path}`;
+    if (isDesktopConfig) window.taskfolkDesktop?.configChanged();
     if (reload) await loadAssignments();
   } catch (err) {
     assignmentStatus.textContent = `Unable to save assignments: ${err.message}`;

@@ -144,7 +144,7 @@ function agentsFromRows(rows, nowMs, maxAgents, grouping = 'project') {
     const projectKey = normalizeProjectDirectory(row.directory) || `session:${row.id}`;
     const candidate = { row, rawStatus: rowStatus(row, nowMs) };
     const existing = projects.get(projectKey);
-    if (!existing || (existing.rawStatus === 'idle' && candidate.rawStatus !== 'idle')) projects.set(projectKey, candidate);
+    if (!existing || rowActivityMs(candidate.row) > rowActivityMs(existing.row)) projects.set(projectKey, candidate);
   }
   const selected = [...projects.values()]
     .sort((left, right) => {
