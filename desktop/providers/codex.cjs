@@ -90,26 +90,30 @@ function readRolloutActivity(rolloutPath) {
   try {
     handle = fs.openSync(rolloutPath, 'r');
     const size = fs.fstatSync(handle).size;
-    const length = Math.min(size, ROLLOUT_TAIL_BYTES);
-    if (!length) return null;
-    const buffer = Buffer.alloc(length);
-    fs.readSync(handle, buffer, 0, length, size - length);
-    const lines = buffer.toString('utf8').split(/\r?\n/);
-    let latestMs = 0;
-    let latestSignal = '';
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let record;
-      try { record = JSON.parse(line); } catch { continue; }
-      const timestampMs = Date.parse(String(record?.timestamp || ''));
-      if (Number.isFinite(timestampMs)) latestMs = Math.max(latestMs, timestampMs);
-      if (record?.type !== 'event_msg') continue;
-      const eventType = String(record?.payload?.type || '');
-      if (['task_started', 'task_complete', 'turn_aborted', 'stream_error', 'error'].includes(eventType)) {
-        latestSignal = eventType;
+    if (!size) return null;
+    let length = Math.min(size, ROLLOUT_TAIL_BYTES);
+    while (length > 0) {
+      const buffer = Buffer.alloc(length);
+      fs.readSync(handle, buffer, 0, length, size - length);
+      const lines = buffer.toString('utf8').split(/\r?\n/);
+      let latestMs = 0;
+      let latestSignal = '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let record;
+        try { record = JSON.parse(line); } catch { continue; }
+        const timestampMs = Date.parse(String(record?.timestamp || ''));
+        if (Number.isFinite(timestampMs)) latestMs = Math.max(latestMs, timestampMs);
+        if (record?.type !== 'event_msg') continue;
+        const eventType = String(record?.payload?.type || '');
+        if (['task_started', 'task_complete', 'turn_aborted', 'stream_error', 'error'].includes(eventType)) {
+          latestSignal = eventType;
+        }
       }
+      if (latestSignal || length === size) return { latestMs, latestSignal };
+      length = Math.min(size, length * 2);
     }
-    return { latestMs, latestSignal };
+    return null;
   } catch {
     return null;
   } finally {
@@ -141,7 +145,10 @@ function agentFromRow(row, nowMs) {
   const recent = updatedAt > 0 && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS;
   const signal = activity?.latestSignal || '';
   const blocked = recent && ['stream_error', 'error'].includes(signal);
-  const active = recent && !['task_complete', 'turn_aborted', 'stream_error', 'error'].includes(signal);
+  // A turn remains active until Codex writes an explicit terminal lifecycle
+  // event. Long-running quiet tools must not become idle based on age alone.
+  const active = signal === 'task_started'
+    || (recent && !['task_complete', 'turn_aborted', 'stream_error', 'error'].includes(signal));
   const status = blocked ? 'blocked' : active ? 'active' : 'idle';
   const project = projectIdentity(cwd);
   const projectName = path.basename(cwd) || 'Workspace';

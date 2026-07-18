@@ -102,10 +102,14 @@ function rowStatus(row, nowMs) {
   if (row.message_error) return 'error';
   const toolStatus = String(row.tool_status || '').toLowerCase();
   if (/error|failed|rejected/.test(toolStatus)) return 'error';
+  // OpenCode persists a tool's lifecycle state while the tool is in flight.
+  // A quiet shell command may not update its part for minutes, so its age is
+  // not evidence that the agent is idle. Keep the agent busy until OpenCode
+  // replaces this state with completed/error.
+  if (/pending|running/.test(toolStatus)) return 'busy';
   const incompleteAssistant = row.message_role === 'assistant' && !row.message_completed;
   const waitingForAssistant = row.message_role === 'user';
-  const runningTool = /pending|running/.test(toolStatus);
-  if ((incompleteAssistant || waitingForAssistant || runningTool) && nowMs - rowActivityMs(row) <= ACTIVE_ACTIVITY_MS) {
+  if ((incompleteAssistant || waitingForAssistant) && nowMs - rowActivityMs(row) <= ACTIVE_ACTIVITY_MS) {
     return 'busy';
   }
   return 'idle';
