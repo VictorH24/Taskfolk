@@ -6,9 +6,11 @@ Taskfolk is a desktop companion that turns your AI coding sessions into a live p
 
 **New to Taskfolk?** See the [Taskfolk User Guide](USER_GUIDE.md) for macOS installation, Privacy & Security approval, first-run setup, integrations, and app configuration.
 
-<img src="docs/taskfolk_day.gif" alt="Taskfolk desktop companion showing live agents in a pixel office" width="auto"> | <img src="docs/taskfolk-multiple-avatars2.png" alt="Taskfolk desktop companion showing four live agents on the desktop" width="auto">
+<img src="docs/taskfolk_day.gif" alt="Taskfolk desktop companion showing live agents in a pixel office" maxwidth="250"> <img src="docs/taskfolk-multiple-avatars2.png" alt="Taskfolk desktop companion showing four live agents on the desktop" maxwidth="200">
 
 ## Start the companion app
+
+using the latest dmg or running the following commands:
 
 ```bash
 npm install
