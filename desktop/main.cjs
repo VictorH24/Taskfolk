@@ -61,6 +61,11 @@ let officeWindow = null;
 let settingsWindow = null;
 let configWindow = null;
 let tray = null;
+// Packaged macOS builds declare LSUIElement, so they begin in accessory mode
+// before Electron creates any windows. Development builds still need the
+// runtime transition because they use Electron's own bundle metadata.
+let macDockMode = process.platform === 'darwin' && app.isPackaged ? 'accessory' : null;
+let dockHideRetryTimer = null;
 let boundsTimer = null;
 let runtimeCredentials = null;
 let startupError = '';
@@ -168,6 +173,10 @@ function isAlwaysOnTopEnabled(config = readConfig()) {
 
 function isShowOnAllDesktopsEnabled(config = readConfig()) {
   return process.platform === 'darwin' && Boolean(config.showOnAllDesktops);
+}
+
+function shouldSkipTaskbar(config = readConfig()) {
+  return process.platform === 'darwin' && Boolean(config.hideDockIcon);
 }
 
 function normalizedOpacity(value) {
@@ -490,6 +499,18 @@ function setAlwaysOnTop(enabled) {
   rebuildMenus();
 }
 
+function ensureDockHidden(retriesRemaining = 2) {
+  if (process.platform !== 'darwin' || !app.dock || dockHideRetryTimer
+    || !app.dock.isVisible()) return;
+  app.dock.hide();
+  if (retriesRemaining <= 0) return;
+  dockHideRetryTimer = setTimeout(() => {
+    dockHideRetryTimer = null;
+    if (!readConfig().hideDockIcon || !tray || tray.isDestroyed()) return;
+    ensureDockHidden(retriesRemaining - 1);
+  }, 1_100);
+}
+
 function applyDockVisibility(config = readConfig()) {
   if (process.platform !== 'darwin' || !app.dock) return;
   if (config.hideDockIcon) {
@@ -499,13 +520,29 @@ function applyDockVisibility(config = readConfig()) {
     }
     // Never remove the Dock entry unless the menu-bar fallback was created.
     // This keeps Setup and Quit reachable if macOS rejects the status image.
-    if (tray) app.dock.hide();
-    else app.dock.show().catch(() => {});
+    if (tray) {
+      if (macDockMode !== 'accessory') {
+        // dock.hide() can be ignored when macOS receives repeated Dock changes
+        // in quick succession. Accessory activation policy is the authoritative
+        // menu-bar-only mode; hide() remains as a compatibility fallback.
+        for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(true);
+        app.setActivationPolicy('accessory');
+        macDockMode = 'accessory';
+      }
+      ensureDockHidden();
+    } else app.dock.show().catch(() => {});
     return;
   }
 
   // Keep the status item until macOS confirms that the Dock entry is visible,
   // so switching modes cannot briefly make Taskfolk unreachable.
+  clearTimeout(dockHideRetryTimer);
+  dockHideRetryTimer = null;
+  if (macDockMode !== 'regular') {
+    for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(false);
+    app.setActivationPolicy('regular');
+    macDockMode = 'regular';
+  }
   app.dock.show().then(() => {
     if (readConfig().hideDockIcon || !tray) return;
     tray.destroy();
@@ -541,6 +578,7 @@ function openSettingsWindow(message = '') {
     icon: APP_ICON_PATH,
     backgroundColor: '#101722',
     autoHideMenuBar: true,
+    skipTaskbar: shouldSkipTaskbar(),
     webPreferences: {
       preload: path.join(__dirname, 'settings-preload.cjs'),
       contextIsolation: true,
@@ -548,7 +586,9 @@ function openSettingsWindow(message = '') {
       sandbox: true
     }
   });
+  if (process.platform === 'darwin') settingsWindow.setSkipTaskbar(shouldSkipTaskbar());
   settingsWindow.loadFile(path.join(__dirname, 'settings.html'));
+  applyDockVisibility();
   settingsWindow.on('closed', () => { settingsWindow = null; });
 }
 
@@ -571,6 +611,7 @@ async function openConfigWindow() {
     icon: APP_ICON_PATH,
     backgroundColor: '#101722',
     autoHideMenuBar: true,
+    skipTaskbar: shouldSkipTaskbar(),
     webPreferences: {
       partition: PARTITION,
       preload: path.join(__dirname, 'config-preload.cjs'),
@@ -580,6 +621,8 @@ async function openConfigWindow() {
       devTools: !app.isPackaged
     }
   });
+  if (process.platform === 'darwin') configWindow.setSkipTaskbar(shouldSkipTaskbar());
+  applyDockVisibility();
   const allowedOrigin = new URL(activeBaseUrl).origin;
   configWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   configWindow.webContents.on('will-navigate', (event, target) => {
@@ -1338,6 +1381,7 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
     minWidth: 120,
     minHeight: 150,
     show: false,
+    skipTaskbar: shouldSkipTaskbar(config),
     resizable: true,
     movable: true,
     alwaysOnTop: isAlwaysOnTopEnabled(config),
@@ -1358,6 +1402,11 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
       devTools: !app.isPackaged
     }
   });
+
+  // Electron can promote the application when constructing an NSWindow even
+  // when skipTaskbar was supplied in the constructor. Apply it directly to the
+  // native window before it is shown as well.
+  if (process.platform === 'darwin') targetWindow.setSkipTaskbar(shouldSkipTaskbar(config));
 
   if (process.platform === 'darwin') {
     const showOnAllDesktops = isShowOnAllDesktopsEnabled(config);
@@ -1414,6 +1463,7 @@ async function createAdditionalCompanionWindow(agentId, options = {}) {
     console.warn(`Could not add companion folk: ${error.message}`);
     if (!targetWindow.isDestroyed()) targetWindow.destroy();
   }
+  applyDockVisibility(config);
   rebuildMenus();
 }
 
@@ -1477,6 +1527,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
 
   await primaryWindow.loadURL(companionUrl(normalizedUrl, config));
   await restoreAdditionalCompanionWindows(config);
+  applyDockVisibility(config);
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
   startCodexAdapter();
@@ -1514,9 +1565,13 @@ function menuTemplate() {
 }
 
 function rebuildMenus() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate()));
-  if (!tray) return;
   const config = readConfig();
+  const menuBarOnly = process.platform === 'darwin' && Boolean(config.hideDockIcon);
+  // Installing a macOS application menu promotes an accessory app back to a
+  // regular app. In menu-bar-only mode the Tray context menu is the complete
+  // application menu, so keep the native application menu disabled.
+  Menu.setApplicationMenu(menuBarOnly ? null : Menu.buildFromTemplate(menuTemplate()));
+  if (!tray) return;
   const alwaysOnTop = isAlwaysOnTopEnabled(config);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: isOfficeVisible() ? 'Hide Office' : 'Show Office', click: toggleOffice },
