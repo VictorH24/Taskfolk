@@ -11,8 +11,8 @@ const themeIcons = {
   light: '<svg class="themeIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path></svg>',
   dark: '<svg class="themeIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.3A8.5 8.5 0 0 1 8.7 3.8a8.5 8.5 0 1 0 11.5 11.5Z"></path></svg>'
 };
-const AVATAR_VARIANT_COUNT = 26;
-const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 25 }, (_, index) => `v${index + 1}_gif`)];
+const AVATAR_VARIANT_FALLBACK = 'v0';
+let avatarVariantIds = new Set([AVATAR_VARIANT_FALLBACK]);
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;
@@ -659,6 +659,7 @@ async function loadAgents() {
       signal: requestController.signal
     });
     if (requestGeneration !== agentRequestGeneration) return;
+    setAvatarVariantRegistry(data.avatarVariants);
     const weeklyCost = data.weeklyCost || {};
     latestCronJobs = Array.isArray(data.cronJobs) ? data.cronJobs : [];
     agentSummary.innerHTML = `
@@ -860,13 +861,15 @@ function pixelRole(agent) {
 }
 
 function avatarVariant(agent) {
-  const raw = String(agent.avatarVariant ?? '');
-  if (raw === '0' || raw === 'v0' || raw === 'v0_gif') return 0;
-  if (ASSIGNABLE_AVATAR_VARIANTS.includes(raw)) return raw;
-  const assigned = Number(agent.avatarVariant);
-  if (Number.isInteger(assigned) && assigned > 0 && assigned < AVATAR_VARIANT_COUNT) return `v${assigned}_gif`;
-  const fallback = Math.abs(hashString(`${agent.id || ''}:${agent.name || ''}:${agent.role || ''}`)) % AVATAR_VARIANT_COUNT;
-  return fallback === 0 ? 0 : `v${fallback}_gif`;
+  const raw = String(agent.avatarVariant ?? '').trim();
+  return avatarVariantIds.has(raw) ? raw : AVATAR_VARIANT_FALLBACK;
+}
+
+function setAvatarVariantRegistry(value) {
+  const ids = Array.isArray(value)
+    ? value.map((variant) => String(variant?.id || '').trim()).filter(Boolean)
+    : [];
+  avatarVariantIds = new Set(ids.includes(AVATAR_VARIANT_FALLBACK) ? ids : [AVATAR_VARIANT_FALLBACK]);
 }
 
 function pixelRoomState(agents) {
@@ -957,6 +960,34 @@ function fitPixelThoughtBubble(agentElement) {
   const tailPosition = Math.max(18, Math.min(bubbleWidth - 18, bubbleWidth / 2 - shift));
   bubble.style.setProperty('--thought-shift', `${Math.round(shift)}px`);
   bubble.style.setProperty('--thought-tail', `${Math.round(tailPosition)}px`);
+}
+
+function fitCompanionThoughtBubble(agentElement) {
+  const bubble = agentElement.querySelector('.companionAgentThought');
+  const stage = agentElement.closest('.companionAvatarStage');
+  if (!bubble || !stage) return;
+
+  const minimumFontSize = 7;
+  const stageInset = 6;
+  const thoughtTailHeight = 23;
+  bubble.style.removeProperty('--companion-thought-font-size');
+
+  const stageRect = stage.getBoundingClientRect();
+  let fontSize = Number.parseFloat(window.getComputedStyle(bubble).fontSize);
+  if (!Number.isFinite(fontSize)) return;
+
+  const bubbleFits = () => {
+    const bubbleRect = bubble.getBoundingClientRect();
+    return bubbleRect.left >= stageRect.left + stageInset
+      && bubbleRect.right <= stageRect.right - stageInset
+      && bubbleRect.top >= stageRect.top + stageInset
+      && bubbleRect.bottom + thoughtTailHeight <= stageRect.bottom - stageInset;
+  };
+
+  while (fontSize > minimumFontSize && !bubbleFits()) {
+    fontSize = Math.max(minimumFontSize, fontSize - 0.5);
+    bubble.style.setProperty('--companion-thought-font-size', `${fontSize}px`);
+  }
 }
 
 function renderPixelOffice(agents, latestSession = null) {
@@ -1070,6 +1101,15 @@ function renderCompanionAvatar(agents) {
       ${pixelAgentScene(agent, false)}
       <div class="companionAvatarName">${esc(agent.name || agent.id || 'Agent')}</div>
     </article>`;
+
+  const companionAvatar = officeMap.querySelector('.companionAvatar');
+  if (showWorkingThought && companionAvatar) {
+    const fitThoughtBubble = () => window.requestAnimationFrame(
+      () => fitCompanionThoughtBubble(companionAvatar)
+    );
+    companionAvatar.addEventListener('pointerenter', fitThoughtBubble);
+    companionAvatar.addEventListener('focus', fitThoughtBubble);
+  }
 }
 
 function timestampCandidateMs(value) {
@@ -1113,6 +1153,7 @@ function pixelAgentScene(agent, meetingMode = false) {
     role,
     label: name,
     variant,
+    animationKey: agent.id,
     showLabel: false
   });
 }

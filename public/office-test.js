@@ -6,8 +6,8 @@ const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTER_COUNT = 50;
 const SUCCESS_STATE_MS = 2 * 60 * 1000;
 const IDLE_POSE_STORAGE_KEY = 'taskfolk-idle-pose-history-v1';
-const AVATAR_VARIANT_COUNT = 26;
-const ASSIGNABLE_AVATAR_VARIANTS = [0, ...Array.from({ length: 25 }, (_, index) => `v${index + 1}_gif`)];
+const AVATAR_VARIANT_FALLBACK = 'v0';
+let avatarVariantIds = new Set([AVATAR_VARIANT_FALLBACK]);
 
 const officeMap = document.querySelector('#officeMap');
 const agentSummary = document.querySelector('#agentSummary');
@@ -337,13 +337,15 @@ function pixelRole(agent) {
 }
 
 function avatarVariant(agent) {
-  const raw = String(agent.avatarVariant ?? '');
-  if (raw === '0' || raw === 'v0' || raw === 'v0_gif') return 0;
-  if (ASSIGNABLE_AVATAR_VARIANTS.includes(raw)) return raw;
-  const assigned = Number(agent.avatarVariant);
-  if (Number.isInteger(assigned) && assigned > 0 && assigned < AVATAR_VARIANT_COUNT) return `v${assigned}_gif`;
-  const fallback = Math.abs(hashString(`${agent.id || ''}:${agent.name || ''}:${agent.role || ''}`)) % AVATAR_VARIANT_COUNT;
-  return fallback === 0 ? 0 : `v${fallback}_gif`;
+  const raw = String(agent.avatarVariant ?? '').trim();
+  return avatarVariantIds.has(raw) ? raw : AVATAR_VARIANT_FALLBACK;
+}
+
+function setAvatarVariantRegistry(value) {
+  const ids = Array.isArray(value)
+    ? value.map((variant) => String(variant?.id || '').trim()).filter(Boolean)
+    : [];
+  avatarVariantIds = new Set(ids.includes(AVATAR_VARIANT_FALLBACK) ? ids : [AVATAR_VARIANT_FALLBACK]);
 }
 
 function pixelRoomState(agents) {
@@ -385,19 +387,20 @@ function pixelAgentScene(agent, meetingMode = false) {
   const role = pixelRole(agent);
   const variant = avatarVariant(agent);
   if (agent.status === 'success') {
-    return window.SceneArt.sceneMarkup({ pose: 'success', role, label: agent.name, variant, showLabel: false });
+    return window.SceneArt.sceneMarkup({ pose: 'success', role, label: agent.name, variant, animationKey: agent.id, showLabel: false });
   }
   if (agent.status === 'idle') {
-    return window.SceneArt.sceneMarkup({ pose: idlePose(agent), role, label: agent.name, variant, showLabel: false });
+    return window.SceneArt.sceneMarkup({ pose: idlePose(agent), role, label: agent.name, variant, animationKey: agent.id, showLabel: false });
   }
   if (meetingMode) {
-    return window.SceneArt.sceneMarkup({ pose: 'meeting', role, label: agent.name, variant, showLabel: false });
+    return window.SceneArt.sceneMarkup({ pose: 'meeting', role, label: agent.name, variant, animationKey: agent.id, showLabel: false });
   }
   return window.SceneArt.sceneMarkup({
     pose: agent.status === 'blocked' ? 'blocked' : 'working',
     role,
     label: agent.name,
     variant,
+    animationKey: agent.id,
     showLabel: false
   });
 }
@@ -493,8 +496,12 @@ function renderFixtureData(data, statusLabel = 'public/test-agents.json') {
 async function loadFixture() {
   simStatus.textContent = 'Loading fixture...';
   try {
-    const response = await fetch(`./test-agents.json?t=${Date.now()}`);
+    const [response, variantsResponse] = await Promise.all([
+      fetch(`./test-agents.json?t=${Date.now()}`),
+      fetch(`./api/avatar-variants?t=${Date.now()}`)
+    ]);
     if (!response.ok) throw new Error(response.statusText);
+    if (variantsResponse.ok) setAvatarVariantRegistry((await variantsResponse.json()).variants);
     const data = await response.json();
     renderFixtureData(data);
   } catch (err) {

@@ -17,45 +17,36 @@ const isDesktopConfig = new URLSearchParams(window.location.search).get('app') =
 document.body.classList.toggle('desktopConfig', isDesktopConfig);
 
 const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3000' : '';
-const AVATAR_VARIANT_NAMES = [
-  'Blonde Man',
-  'Black-Haired Man with Glasses',
-  'Curly-Haired Woman with Glasses',
-  'Silver-Haired Man with Glasses',
-  'Curly-Haired Man with Glasses',
-  'Braided Woman',
-  'Silver-Haired Woman',
-  'Blonde Woman',
-  'White Robot',
-  'Blue Robot',
-  'Golden Dog',
-  'Tuxedo Cat',
-  'Gorilla',
-  'Tiger',
-  'Lion',
-  'Green Robot',
-  'Curly-Haired Woman',
-  'Black-Haired Man',
-  'Braided Woman',
-  'Bearded Man',
-  'Hijabi Woman',
-  'Silver-Haired Man',
-  'Blonde Woman',
-  'African-American Man',
-  'Hooded Hacker',
-  'Extraterrestrial'
-];
-const AVATAR_VARIANTS = AVATAR_VARIANT_NAMES.map((name, index) => ({
-  value: index === 0 ? 0 : `v${index}_gif`,
-  label: `Variant ${index} ${name} (GIF)`,
-  versionLabel: `v${index} ${name.toLowerCase()} gif`
-}));
-const AVATAR_SHEETS = AVATAR_VARIANT_NAMES.map((description, value) => ({
-  value,
-  label: `Variant ${value}`,
-  description,
-  src: `./avatar-scenes/generated-sheets/v${value}.png`
-}));
+const AVATAR_VARIANT_FALLBACK = 'v0';
+let AVATAR_VARIANTS = [];
+let AVATAR_SHEETS = [];
+
+function setAvatarVariantRegistry(value) {
+  const registry = Array.isArray(value) ? value.filter((variant) => (
+    String(variant?.id || '').trim()
+      && String(variant?.name || '').trim()
+  )) : [];
+  const variants = registry.some((variant) => variant.id === AVATAR_VARIANT_FALLBACK)
+    ? registry
+    : [{ id: AVATAR_VARIANT_FALLBACK, version: 0, name: 'Default Avatar' }];
+  AVATAR_VARIANTS = variants.map((variant) => ({
+    value: variant.id,
+    label: Number.isInteger(variant.version)
+      ? `Variant ${variant.version} ${variant.name}`
+      : `${variant.name} (${variant.id})`,
+    versionLabel: `${variant.id} ${variant.name.toLowerCase()}`
+  }));
+  AVATAR_SHEETS = variants.map((variant) => ({
+    value: variant.id,
+    label: Number.isInteger(variant.version) ? `Variant ${variant.version}` : variant.id,
+    description: variant.name,
+    src: Number.isInteger(variant.version) && !variant.custom
+      ? `./avatar-scenes/generated-sheets/v${variant.version}.png`
+      : `./avatar-scenes/variants/${encodeURIComponent(variant.id)}/working.gif`
+  }));
+}
+
+setAvatarVariantRegistry([]);
 const OFFICE_FLOORS = [
   { value: 'wood', label: 'Wood' },
   { value: 'wood2', label: 'Wood2' },
@@ -81,12 +72,10 @@ let officeScene = { floor: 'wood', windowView: 'sf', poster: 0, emptyDesks: 0 };
 let savingAssignments = false;
 
 function normalizeAvatarVariant(value) {
-  const raw = String(value ?? 0);
-  if (raw === 'v0_gif') return 0;
-  if (/^v\d+_gif$/.test(raw) && AVATAR_VARIANTS.some((variant) => variant.value === raw)) return raw;
-  const numeric = Number(value);
-  if (!Number.isInteger(numeric) || numeric < 0 || numeric > 25) return 0;
-  return numeric === 0 ? 0 : `v${numeric}_gif`;
+  const raw = String(value ?? '').trim();
+  return AVATAR_VARIANTS.some((variant) => variant.value === raw)
+    ? raw
+    : AVATAR_VARIANT_FALLBACK;
 }
 
 function randomAvatarVariant() {
@@ -122,12 +111,12 @@ function renderAvatarSheets() {
   legendGrid.innerHTML = AVATAR_SHEETS.map((sheet) => `
     <article class="avatarSheetCard">
       <span class="avatarSheetImage">
-        <img src="${sheet.src}" alt="${sheet.label} generated avatar sheet" loading="lazy" draggable="false" />
-        <canvas class="avatarSheetCanvas" role="img" aria-label="${sheet.label} generated avatar sheet with transparent background" hidden></canvas>
+        <img src="${esc(sheet.src)}" alt="${esc(sheet.label)} avatar preview" loading="lazy" draggable="false" />
+        <canvas class="avatarSheetCanvas" role="img" aria-label="${esc(sheet.label)} avatar preview with transparent background" hidden></canvas>
       </span>
       <span class="avatarSheetMeta">
-        <strong>${sheet.label}</strong>
-        <small>${sheet.description} · v${sheet.value}</small>
+        <strong>${esc(sheet.label)}</strong>
+        <small>${esc(sheet.description)} · ${esc(sheet.value)}</small>
       </span>
     </article>
   `).join('');
@@ -289,7 +278,7 @@ function variantSelect(agent) {
   return `
     <select data-agent-id="${esc(agent.id)}" data-assignment-key="${esc(key)}" aria-label="Avatar variant for ${esc(agent.name)}">
       ${AVATAR_VARIANTS.map((variant) => `
-        <option value="${variant.value}" ${variant.value === value ? 'selected' : ''}>${variant.label}</option>
+        <option value="${esc(variant.value)}" ${variant.value === value ? 'selected' : ''}>${esc(variant.label)}</option>
       `).join('')}
     </select>`;
 }
@@ -397,7 +386,8 @@ function renderAssignments() {
           pose: agent.pose || (agent.status === 'blocked' ? 'blocked' : agent.status === 'active' ? 'working' : 'coffee'),
           role: agent.role || 'agent',
           label: agent.name,
-          variant: assignedAvatar(agent),
+          variant: normalizeAvatarVariant(assignedAvatar(agent)),
+          animationKey: agent.id,
           showLabel: false
         })}
       </div>
@@ -427,6 +417,7 @@ async function loadAssignments() {
       api(`/api/agents?includeHidden=1&t=${Date.now()}`),
       api(`/api/avatar-assignments?t=${Date.now()}`)
     ]);
+    setAvatarVariantRegistry(assignmentData.avatarVariants);
     assignments = assignmentData.assignments || {};
     hiddenAgents = Array.isArray(assignmentData.hiddenAgents) ? assignmentData.hiddenAgents : [];
     manualAgents = Array.isArray(assignmentData.manualAgents) ? assignmentData.manualAgents : [];

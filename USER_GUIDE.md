@@ -185,6 +185,16 @@ Use these buttons at the bottom of Setup:
 
 Saved credentials remain encrypted. They may need to be entered again after moving an exported configuration to another Mac. Treat exported configuration files as private because they can contain encrypted credentials, device identity data, server addresses, and window preferences.
 
+### Install custom avatar variants
+
+When the desktop app runs its local server, it discovers custom avatar folders at startup from:
+
+```text
+~/Library/Application Support/Taskfolk/custom-variants/
+```
+
+Put each avatar in its own folder. Numeric names such as `v28/` remain the convention, but names such as `robot-blue/` or `Robot Blue/` also work. The folder name becomes the avatar's saved identifier. A variant must contain an `avatar.json` file with a non-empty `name` and a `working.gif` file to appear in the Config avatar list. Add an optional `workingScreen` object with `left`, `top`, `width`, and `height` when the variant includes `working_alpha.png` and should use shared working-screen animations. Other pose files use the same names and format as bundled variants. Restart Taskfolk after adding or changing a custom variant. A folder with the same name as a bundled variant intentionally overrides that bundled variant.
+
 Avatar assignments and pixel-office appearance are managed separately on the **Config** page.
 
 ## 8. Everyday controls

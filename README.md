@@ -44,6 +44,25 @@ These avatars animate in the companion as their live state changes:
 | :---: | :---: | :---: | :---: |
 | ![Animated Taskfolk avatar variant 0 working at a desk](docs/taskfolk-avatar-reading.gif) | ![Animated Taskfolk robot avatar working at a desk](docs/taskfolk-avatar-robot.gif) | ![Animated Taskfolk cat avatar working at a desk](docs/taskfolk-avatar-working.gif) | ![Animated Taskfolk avatar taking a coffee break](docs/taskfolk-avatar-coffee.gif) |
 
+Avatar variants are discovered when the server starts. Each assignable folder under
+`public/avatar-scenes/variants/` must be named `v<number>`, contain the canonical
+`working.gif`, and include an `avatar.json` metadata file:
+
+```json
+{
+  "name": "Tuxedo Cat",
+  "workingScreen": { "left": 112, "top": 95, "width": 156, "height": 89 }
+}
+```
+
+`workingScreen` is optional. Include it when the variant has a `working_alpha.png`
+plate and should use the shared working-screen animation pool.
+
+Variants with missing or invalid metadata are skipped with a startup warning. The
+`v0` variant is required and is used whenever a saved assignment references a
+variant that is no longer installed. Restart Taskfolk after adding or removing a
+variant so the registry is rebuilt.
+
 ### Live coding-session support
 
 - **OpenCode Desktop and terminal sessions** — detects projects, session state, model, agent, and activity timestamps. For terminal sessions, run `opencode --port 4096` so the companion can connect.

@@ -13,7 +13,7 @@
       "status": "active",
       "task": "Coordinating the simulation run",
       "lastSeenOffsetMs": 24000,
-      "avatarVariant": "v0_gif",
+      "avatarVariant": "v0",
       "session": { "id": "sim-main-001", "file": "sessions/main.jsonl", "turns": 42 },
       "activity": { "totalTokens": 64000, "estimatedCostUsd": 1.82, "runtimeMs": 620000, "updatedAtOffsetMs": 24000, "skills": ["planning", "routing"] }
     },
@@ -24,7 +24,7 @@
       "status": "active",
       "task": "Building the office simulator",
       "lastSeenOffsetMs": 58000,
-      "avatarVariant": "v2_gif",
+      "avatarVariant": "v2",
       "session": { "id": "sim-build-001", "file": "sessions/builder-1.jsonl", "turns": 31 },
       "activity": { "totalTokens": 43000, "estimatedCostUsd": 1.15, "runtimeMs": 480000, "updatedAtOffsetMs": 58000, "skills": ["coding", "frontend"] }
     },
@@ -46,7 +46,7 @@
       "status": "idle",
       "task": "Reviewing render density",
       "lastSeenOffsetMs": 720000,
-      "avatarVariant": "v4_gif",
+      "avatarVariant": "v4",
       "session": { "id": "sim-review-001", "file": "sessions/reviewer.jsonl", "turns": 11 },
       "activity": { "totalTokens": 12000, "estimatedCostUsd": 0.31, "runtimeMs": 180000, "updatedAtOffsetMs": 720000, "skills": ["review", "qa"] }
     },
@@ -57,7 +57,7 @@
       "status": "blocked",
       "task": "Investigating failing smoke test",
       "lastSeenOffsetMs": 90000,
-      "avatarVariant": "v5_gif",
+      "avatarVariant": "v5",
       "session": { "id": "sim-ops-001", "file": "sessions/ops.jsonl", "turns": 27 },
       "activity": { "totalTokens": 28000, "estimatedCostUsd": 0.74, "runtimeMs": 540000, "updatedAtOffsetMs": 90000, "skills": ["monitoring", "debugging"] }
     },
@@ -68,7 +68,7 @@
       "status": "idle",
       "task": "Drafting release notes",
       "lastSeenOffsetMs": 1200000,
-      "avatarVariant": "v6_gif",
+      "avatarVariant": "v6",
       "session": { "id": "sim-write-001", "file": "sessions/writer.jsonl", "turns": 9 },
       "activity": { "totalTokens": 8000, "estimatedCostUsd": 0.21, "runtimeMs": 150000, "updatedAtOffsetMs": 1200000, "skills": ["writing"] }
     },
@@ -79,7 +79,7 @@
       "status": "active",
       "task": "Splitting follow-up tasks",
       "lastSeenOffsetMs": 46000,
-      "avatarVariant": "v1_gif",
+      "avatarVariant": "v1",
       "session": { "id": "sim-plan-001", "file": "sessions/planner.jsonl", "turns": 21 },
       "activity": { "totalTokens": 35000, "estimatedCostUsd": 0.91, "runtimeMs": 390000, "updatedAtOffsetMs": 46000, "skills": ["planning"] }
     },
@@ -90,7 +90,7 @@
       "status": "idle",
       "task": "Collecting examples",
       "lastSeenOffsetMs": 540000,
-      "avatarVariant": "v2_gif",
+      "avatarVariant": "v2",
       "session": { "id": "sim-research-001", "file": "sessions/researcher.jsonl", "turns": 16 },
       "activity": { "totalTokens": 16000, "estimatedCostUsd": 0.42, "runtimeMs": 220000, "updatedAtOffsetMs": 540000, "skills": ["research"] }
     },
@@ -101,7 +101,7 @@
       "status": "idle",
       "task": "Preparing screenshot checklist",
       "lastSeenOffsetMs": 1800000,
-      "avatarVariant": "v4_gif",
+      "avatarVariant": "v4",
       "session": { "id": "sim-qa-002", "file": "sessions/qa-2.jsonl", "turns": 7 },
       "activity": { "totalTokens": 6000, "estimatedCostUsd": 0.16, "runtimeMs": 90000, "updatedAtOffsetMs": 1800000, "skills": ["qa"] }
     },
@@ -112,7 +112,7 @@
       "status": "active",
       "task": "Checking container mounts",
       "lastSeenOffsetMs": 79000,
-      "avatarVariant": "v5_gif",
+      "avatarVariant": "v5",
       "session": { "id": "sim-infra-001", "file": "sessions/infra.jsonl", "turns": 24 },
       "activity": { "totalTokens": 22000, "estimatedCostUsd": 0.58, "runtimeMs": 310000, "updatedAtOffsetMs": 79000, "skills": ["infra", "docker"] }
     },
@@ -123,7 +123,7 @@
       "status": "idle",
       "task": "Choosing poster wall art",
       "lastSeenOffsetMs": 260000,
-      "avatarVariant": "v3_gif",
+      "avatarVariant": "v3",
       "session": { "id": "sim-design-001", "file": "sessions/designer.jsonl", "turns": 13 },
       "activity": { "totalTokens": 11000, "estimatedCostUsd": 0.29, "runtimeMs": 170000, "updatedAtOffsetMs": 260000, "skills": ["design", "css"] }
     },
@@ -134,7 +134,7 @@
       "status": "blocked",
       "task": "Alerting on stale session",
       "lastSeenOffsetMs": 150000,
-      "avatarVariant": "v6_gif",
+      "avatarVariant": "v6",
       "session": { "id": "sim-night-001", "file": "sessions/nightwatch.jsonl", "turns": 19 },
       "activity": { "totalTokens": 26000, "estimatedCostUsd": 0.67, "runtimeMs": 440000, "updatedAtOffsetMs": 150000, "skills": ["ops", "alerts"] }
     }

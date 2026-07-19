@@ -303,6 +303,7 @@ function localServerPaths() {
     root,
     shared: path.join(root, 'shared'),
     config: path.join(root, 'config'),
+    customVariants: path.join(app.getPath('userData'), 'custom-variants'),
     fixture: path.join(root, 'test-agents.json')
   };
 }
@@ -322,7 +323,7 @@ async function startLocalServer() {
 
   stopLocalServer();
   const paths = localServerPaths();
-  for (const directory of [paths.root, paths.shared, paths.config]) {
+  for (const directory of [paths.root, paths.shared, paths.config, paths.customVariants]) {
     fs.mkdirSync(directory, { recursive: true });
   }
   const configuredPort = normalizeLocalServerPort(readConfig().localServerPort);
@@ -337,6 +338,7 @@ async function startLocalServer() {
       LOCAL_DESKTOP_MODE: 'true',
       SHARED_DIR: paths.shared,
       CONFIG_DIR: paths.config,
+      CUSTOM_AVATAR_VARIANTS_DIR: paths.customVariants,
       OPENCLAW_CONFIG_PATH: path.join(paths.config, 'openclaw.json'),
       OPENCLAW_LOG_DIR: path.join(paths.root, 'openclaw-logs'),
       OPENCLAW_SESSIONS_DIR: path.join(paths.root, 'openclaw-agents'),

@@ -184,6 +184,7 @@ body.pixel-office-fullscreen .officeMap.pixelOfficeWrap {
   border: 0;
   border-radius: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
 }
 body.pixel-office-fullscreen .pixelOfficeScene {
@@ -269,6 +270,7 @@ body.companion-avatar-mode .companionAvatarName {
   transition: opacity .14s ease, transform .14s ease;
 }
 body.companion-avatar-mode .companionAgentThought {
+  --companion-thought-font-size: clamp(11px, 3.2vw, 14px);
   position: absolute;
   left: 50%;
   top: 2%;
@@ -281,7 +283,7 @@ body.companion-avatar-mode .companionAgentThought {
   background: #fffdf4;
   box-shadow: 0 5px 0 rgba(46, 35, 28, .22);
   color: #302a25;
-  font: 700 clamp(11px, 3.2vw, 14px)/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 700 var(--companion-thought-font-size)/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-wrap: anywhere;
   pointer-events: none;
   transform: translate(-50%, -35%) scale(.96);
@@ -1210,6 +1212,37 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   object-fit: contain;
   image-rendering: auto;
 }
+.sceneFigure > .sceneWorkingStack {
+  position: relative;
+  align-self: end;
+  display: block;
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  aspect-ratio: 3 / 4;
+}
+.sceneWorkingStack > .sceneArt {
+  position: relative;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+.sceneWorkingScreen {
+  display: none;
+}
+.sceneWorkingStack.is-layered > .sceneWorkingScreen {
+  position: absolute;
+  z-index: 1;
+  left: var(--working-screen-left);
+  top: var(--working-screen-top);
+  display: block;
+  width: var(--working-screen-width);
+  height: var(--working-screen-height);
+  object-fit: fill;
+  image-rendering: auto;
+}
 .sceneCaption {
   max-width: 100%;
   justify-self: center;
@@ -1267,6 +1300,7 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   height: 100%;
 }
 .pixelAgent.walking > .sceneFigure > .sceneArt,
+.pixelAgent.walking > .sceneFigure > .sceneWorkingStack,
 .sceneArt--walking {
   animation: pixelSceneRoam 3.6s ease-in-out infinite;
 }

@@ -13,44 +13,207 @@
     meeting: 'working.gif'
   };
 
+  const workingImagesByVariant = new Map();
+  const workingAnimationByAgent = new Map();
+  const workingLayoutsByVariant = new Map();
+  let sharedWorkingImages = [];
+  let workingCanvas = { width: 384, height: 512 };
+
   function variantKey(variant) {
-    return String(variant ?? 0);
+    const key = String(variant ?? 'v0').trim();
+    return key || 'v0';
   }
 
-  function gifVariantPaths(version, image) {
-    const revision = String(version) === '23' && image.replace(/\.png$/i, '.gif') === 'gaming.gif'
+  function gifVariantPaths(variant, image) {
+    const variantId = variantKey(variant);
+    const encodedVariant = encodeURIComponent(variantId);
+    const revision = variantId === 'v23' && image.replace(/\.png$/i, '.gif') === 'gaming.gif'
       ? '?rev=horizontal-3'
       : '';
     return [
-      `./avatar-scenes/variants/v${version}_gif/${image.replace(/\.png$/i, '.gif')}${revision}`,
-      `./avatar-scenes/variants/v${version}_gif/${image.replace(/\.gif$/i, '.png')}`,
-      `./avatar-scenes/variants/v${version}/${image.replace(/\.gif$/i, '.png')}`
+      `./avatar-scenes/variants/${encodedVariant}/${image.replace(/\.png$/i, '.gif')}${revision}`,
+      `./avatar-scenes/variants/${encodedVariant}/${image.replace(/\.gif$/i, '.png')}`
     ];
   }
 
   function imagePaths(image, variant) {
-    const key = variantKey(variant);
-    if (key === '0') {
-      return gifVariantPaths(0, image);
+    return gifVariantPaths(variantKey(variant), image);
+  }
+
+  function animatedVariantId(variant) {
+    return variantKey(variant);
+  }
+
+  function workingPool(variantId) {
+    const avatarAnimations = (workingImagesByVariant.get(variantId) || ['working.gif'])
+      .map((image) => ({ kind: 'avatar', image }));
+    if (!workingLayoutsByVariant.has(variantId)) return avatarAnimations;
+    return [
+      ...avatarAnimations,
+      ...sharedWorkingImages.map((image) => ({ kind: 'shared', image }))
+    ];
+  }
+
+  function animationForPose(pose, variant, animationKey) {
+    const defaultImage = POSE_TO_IMAGE[pose] || POSE_TO_IMAGE.working;
+    const key = String(animationKey ?? '');
+    const variantId = animatedVariantId(variant);
+    const usesWorkingAnimation = pose === 'working' || pose === 'meeting';
+    if (!usesWorkingAnimation || !variantId) {
+      if (key) workingAnimationByAgent.delete(key);
+      return { kind: 'avatar', image: defaultImage };
     }
-    if (key === 'v0') {
-      return [`./avatar-scenes/variants/v0/${image.replace(/\.gif$/i, '.png')}`];
+    if (!key) return { kind: 'avatar', image: defaultImage };
+
+    const current = workingAnimationByAgent.get(key);
+    if (!current || current.variantId !== variantId) {
+      const pool = workingPool(variantId);
+      const index = Math.floor(Math.random() * pool.length);
+      workingAnimationByAgent.set(key, { variantId, ...pool[index] });
     }
-    const gifMatch = key.match(/^v(\d+)_gif$/);
-    if (gifMatch) {
-      return gifVariantPaths(gifMatch[1], image);
-    }
-    const nextVariant = Number(key) || 0;
-    return [`./avatar-scenes/variants/v${nextVariant}/${image.replace(/\.gif$/i, '.png')}`];
+    return workingAnimationByAgent.get(key);
+  }
+
+  function pathsForAvatarImage(image, variant) {
+    if (image === 'working.gif') return imagePaths(image, variant);
+    return [imagePaths(image, variant)[0], ...imagePaths('working.gif', variant)];
+  }
+
+  function layeredPaths(variantId) {
+    return [
+      `./avatar-scenes/variants/${encodeURIComponent(variantKey(variantId))}/working_alpha.png`,
+      ...gifVariantPaths(variantId, 'working.gif')
+    ];
   }
 
   function fallbackSources(paths) {
     return paths.slice(1).join('|');
   }
 
+  function layoutStyle(variantId) {
+    const layout = workingLayoutsByVariant.get(variantId);
+    if (!layout) return '';
+    const width = Number(workingCanvas.width) || 384;
+    const height = Number(workingCanvas.height) || 512;
+    return [
+      `--working-screen-left:${(layout.left / width * 100).toFixed(5)}%`,
+      `--working-screen-top:${(layout.top / height * 100).toFixed(5)}%`,
+      `--working-screen-width:${(layout.width / width * 100).toFixed(5)}%`,
+      `--working-screen-height:${(layout.height / height * 100).toFixed(5)}%`
+    ].join(';');
+  }
+
+  function applyWorkingAnimation(stack, animation, variant) {
+    const variantId = animatedVariantId(variant);
+    const art = stack.querySelector('.sceneArt--working, .sceneArt--meeting');
+    const screen = stack.querySelector('.sceneWorkingScreen');
+    if (!art || !screen) return;
+    const isLayered = animation.kind === 'shared' && workingLayoutsByVariant.has(variantId);
+    const artPaths = isLayered ? layeredPaths(variantId) : pathsForAvatarImage(animation.image, variant);
+    stack.classList.toggle('is-layered', isLayered);
+    stack.dataset.workingKind = isLayered ? 'shared' : 'avatar';
+    stack.style.cssText = isLayered ? layoutStyle(variantId) : '';
+    art.dataset.animation = animation.image.replace(/\.gif$/i, '');
+    art.dataset.fallbackIndex = '0';
+    art.dataset.fallbackSrcs = fallbackSources(artPaths);
+    art.dataset.canonicalSrc = gifVariantPaths(variantId, 'working.gif')[0];
+    art.src = artPaths[0];
+    if (isLayered) {
+      screen.hidden = false;
+      screen.src = `./avatar-scenes/working-screens/${animation.image}`;
+    } else {
+      screen.hidden = true;
+      screen.removeAttribute('src');
+    }
+  }
+
+  function refreshVisibleWorkingImages(changedVariants) {
+    if (typeof document === 'undefined') return;
+    for (const stack of document.querySelectorAll('.sceneWorkingStack[data-animation-key]')) {
+      const animationKey = stack.dataset.animationKey || '';
+      const variant = stack.dataset.avatarVariant || 'v0';
+      const variantId = animatedVariantId(variant);
+      if (!animationKey || !variantId || !changedVariants.has(variantId)) continue;
+      workingAnimationByAgent.delete(animationKey);
+      applyWorkingAnimation(stack, animationForPose('working', variant, animationKey), variant);
+    }
+  }
+
+  function validLayout(layout) {
+    if (!layout || typeof layout !== 'object') return null;
+    const safe = {};
+    for (const key of ['left', 'top', 'width', 'height']) {
+      safe[key] = Number(layout[key]);
+      if (!Number.isFinite(safe[key]) || safe[key] < 0) return null;
+    }
+    if (!safe.width || !safe.height) return null;
+    return safe;
+  }
+
+  async function loadWorkingImages() {
+    if (typeof window.fetch !== 'function') return;
+    try {
+      const response = await window.fetch('./api/avatar-working-animations', { cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const changedVariants = new Set();
+      for (const [variantId, images] of Object.entries(payload?.variants || {})) {
+        const safeImages = Array.isArray(images)
+          ? images.filter((image) => /^working(?:\d+)?\.gif$/i.test(image))
+          : [];
+        if (!safeImages.length) continue;
+        const current = workingImagesByVariant.get(variantId) || [];
+        if (safeImages.length !== current.length || safeImages.some((image, index) => image !== current[index])) {
+          workingImagesByVariant.set(variantId, safeImages);
+          changedVariants.add(variantId);
+        }
+      }
+
+      const nextShared = Array.isArray(payload?.sharedScreens)
+        ? payload.sharedScreens.filter((image) => /^working\d+\.gif$/i.test(image))
+        : [];
+      const sharedChanged = nextShared.length !== sharedWorkingImages.length
+        || nextShared.some((image, index) => image !== sharedWorkingImages[index]);
+      sharedWorkingImages = nextShared;
+      workingCanvas = {
+        width: Number(payload?.canvas?.width) || 384,
+        height: Number(payload?.canvas?.height) || 512
+      };
+      let layoutChanged = false;
+      for (const [variantId, candidate] of Object.entries(payload?.layouts || {})) {
+        const layout = validLayout(candidate);
+        if (!layout) continue;
+        const current = workingLayoutsByVariant.get(variantId);
+        if (!current || ['left', 'top', 'width', 'height'].some((key) => current[key] !== layout[key])) {
+          workingLayoutsByVariant.set(variantId, layout);
+          layoutChanged = true;
+          changedVariants.add(variantId);
+        }
+      }
+      if (sharedChanged || layoutChanged) {
+        for (const variantId of workingImagesByVariant.keys()) changedVariants.add(variantId);
+      }
+      if (changedVariants.size) refreshVisibleWorkingImages(changedVariants);
+    } catch (_error) {
+      // The canonical working.gif remains available when discovery is offline.
+    }
+  }
+
   function handleImageError(event) {
     const image = event.target;
-    if (!(image instanceof HTMLImageElement) || !image.classList.contains('sceneArt')) return;
+    if (!(image instanceof HTMLImageElement)) return;
+    if (image.classList.contains('sceneWorkingScreen')) {
+      const stack = image.closest('.sceneWorkingStack');
+      const art = stack?.querySelector('.sceneArt--working, .sceneArt--meeting');
+      if (!stack || !art) return;
+      stack.classList.remove('is-layered');
+      stack.dataset.workingKind = 'avatar';
+      image.hidden = true;
+      image.removeAttribute('src');
+      art.src = art.dataset.canonicalSrc || art.src;
+      return;
+    }
+    if (!image.classList.contains('sceneArt')) return;
     const sources = (image.dataset.fallbackSrcs || '').split('|').filter(Boolean);
     const index = Number(image.dataset.fallbackIndex || 0);
     const nextSource = sources[index];
@@ -61,35 +224,57 @@
 
   function esc(value) {
     return String(value).replace(/[&<>'"]/g, (char) => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      "'": '&#39;',
-      '"': '&quot;'
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
     }[char]));
   }
 
-  function sceneMarkup({ pose, role, label, variant = 0, showLabel = true }) {
-    const image = POSE_TO_IMAGE[pose] || POSE_TO_IMAGE.working;
-    const paths = imagePaths(image, variant);
+  function artMarkup({ poseClass, roleClass, paths, animation, animationKey, variant, title }) {
+    return `<img
+          class="sceneArt sceneArt--${poseClass} role-${roleClass}"
+          src="${paths[0]}"
+          data-fallback-srcs="${esc(fallbackSources(paths))}"
+          data-fallback-index="0"
+          data-animation="${esc(animation.image.replace(/\.gif$/i, ''))}"
+          data-animation-key="${esc(animationKey)}"
+          data-avatar-variant="${esc(variantKey(variant))}"
+          alt="${title}"
+          draggable="false"
+        />`;
+  }
+
+  function sceneMarkup({ pose, role, label, variant = 'v0', animationKey = '', showLabel = true }) {
+    const animation = animationForPose(pose, variant, animationKey);
+    const variantId = animatedVariantId(variant);
+    const usesWorkingAnimation = pose === 'working' || pose === 'meeting';
+    const isLayered = usesWorkingAnimation && animation.kind === 'shared' && workingLayoutsByVariant.has(variantId);
+    const paths = isLayered ? layeredPaths(variantId) : pathsForAvatarImage(animation.image, variant);
     const roleClass = esc(role || 'agent');
     const poseClass = esc(pose || 'working');
     const variantClass = `variant-${variantKey(variant).replace(/[^a-z0-9_-]/gi, '-')}`;
     const title = esc(label || '');
     const caption = showLabel && title ? `<span class="sceneCaption">${title}</span>` : '';
+    const art = artMarkup({ poseClass, roleClass, paths, animation, animationKey, variant, title });
+    const visual = usesWorkingAnimation && variantId
+      ? `<span
+          class="sceneWorkingStack${isLayered ? ' is-layered' : ''}"
+          data-working-kind="${isLayered ? 'shared' : 'avatar'}"
+          data-animation-key="${esc(animationKey)}"
+          data-avatar-variant="${esc(variantKey(variant))}"
+          style="${isLayered ? layoutStyle(variantId) : ''}"
+        >
+          <img class="sceneWorkingScreen"${isLayered ? ` src="./avatar-scenes/working-screens/${esc(animation.image)}"` : ' hidden'} alt="" draggable="false" />
+          ${art.replace('draggable="false"', `data-canonical-src="${esc(gifVariantPaths(variantId, 'working.gif')[0])}" draggable="false"`)}
+        </span>`
+      : art;
     return `
       <div class="sceneFigure sceneFigure--${poseClass} role-${roleClass} ${variantClass}">
-        <img
-          class="sceneArt sceneArt--${poseClass} role-${roleClass}"
-          src="${paths[0]}"
-          data-fallback-srcs="${esc(fallbackSources(paths))}"
-          alt="${title}"
-          draggable="false"
-        />
+        ${visual}
         ${caption}
       </div>`;
   }
 
   window.addEventListener('error', handleImageError, true);
-  window.SceneArt = { sceneMarkup };
+  const workingImagesReady = loadWorkingImages();
+  if (typeof window.setInterval === 'function') window.setInterval(loadWorkingImages, 30_000);
+  window.SceneArt = { sceneMarkup, workingImagesReady };
 })();
