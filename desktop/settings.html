@@ -22,7 +22,7 @@
           <option value="remote">Connect to a remote server</option>
         </select>
       </label>
-      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. Agents can come from local or remote OpenClaw, OpenCode, VS Code Copilot, Codex, and Claude.</p>
+      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. Agents can come from local or remote OpenClaw, OpenCode, VS Code Copilot, Codex, Claude, and Gemini.</p>
       <div id="remoteConnectionFields" class="remoteConnectionFields">
         <label>
           <span>Taskfolk URL</span>
@@ -179,6 +179,34 @@
             <option value="single">One agent for all projects</option>
           </select>
           <small>Reads local Claude session metadata only. Cloud-only Cowork sessions are not visible because Anthropic does not expose their live status locally.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="geminiEnabled" name="geminiEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/gemini.svg" alt="" />Track Gemini CLI and Gemini Code Assist Agent mode</span>
+        </label>
+        <label id="geminiGroupingField">
+          <span>Gemini agents</span>
+          <select id="geminiGrouping" name="geminiGrouping">
+            <option value="project">One agent per project</option>
+            <option value="single">One agent for all projects</option>
+          </select>
+          <small>Reads local Gemini CLI session metadata and detects the local VS Code Code Assist agent process. The consumer Gemini app, ordinary Code Assist chats, and inline completions are not exposed locally.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="antigravityEnabled" name="antigravityEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/antigravity.png" alt="" />Track Google Antigravity agents</span>
+        </label>
+        <label id="antigravityGroupingField">
+          <span>Antigravity agents</span>
+          <select id="antigravityGrouping" name="antigravityGrouping">
+            <option value="project">One agent per project, plus conversations</option>
+            <option value="single">One agent for all Antigravity activity</option>
+          </select>
+          <small>Conversations in each project share one agent; chats outside a project share one Conversations agent. Prompts, responses, tool output, artifacts, and Google credentials stay private.</small>
         </label>
       </section>
       <div class="configActions" aria-label="Configuration file actions">

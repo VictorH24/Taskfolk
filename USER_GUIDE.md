@@ -122,6 +122,20 @@ No OpenAI API key or extra extension is required. Codex Desktop or the Codex CLI
 
 No Anthropic API key or extra extension is required. Taskfolk can track local Claude Code sessions, including Code launched from Claude Desktop. Remote-only Cowork activity is not available through Claude's local data and will not appear.
 
+### Gemini CLI and Gemini Code Assist
+
+1. Enable **Track Gemini CLI and Gemini Code Assist Agent mode**.
+2. Choose **One agent per project** or **One agent for all projects**.
+
+Gemini CLI projects appear while the CLI is running. The Gemini Code Assist VS Code extension appears when its local Agent mode is available. The consumer Gemini app, ordinary Code Assist chat, inline completions, and JetBrains activity do not expose live local task status and will not appear.
+
+### Google Antigravity
+
+1. Enable **Track Google Antigravity agents**.
+2. Choose **One agent per project, plus conversations** or **One agent for all Antigravity activity**.
+
+Antigravity activity appears while the app or its local language server is running. Conversations in the same project share one agent named for the project, while all chats outside projects share one **Antigravity · Conversations** agent. Taskfolk reads Antigravity's separate title and project metadata plus local lifecycle fields; it does not publish prompts, responses, tool output, artifacts, or Google credentials.
+
 ## 5. Open Setup again
 
 To change connections, integrations, display mode, opacity, or window behavior later, use any of these methods:
@@ -146,9 +160,9 @@ Open Config by right-clicking the office or avatar and choosing **Open Config…
 In **Live agents → Assign Agent Avatars**:
 
 1. Find the agent you want to customize.
-2. Select an option from its **Avatar** menu.
-3. The assignment saves automatically.
-4. Use **Disable** to hide an agent without deleting its assignment.
+2. Enter an optional **Custom name**, or leave it blank to use the automatically generated name.
+3. Select an option from its **Avatar** menu. Changes save automatically.
+4. Use **Disable** to hide an agent without deleting its settings.
 5. Use **Restore** to show it again.
 6. Use **Remove** on a discovered runtime agent to forget its saved avatar and current discovery entry. If the project is detected again, it can return with a default assignment.
 

@@ -28,7 +28,15 @@ const {
   fetchClaudeAgents,
   normalizeClaudeGrouping
 } = require('./providers/claude.cjs');
-const { normalizeLocalServerPort } = require('./local-server.cjs');
+const {
+  fetchGeminiAgents,
+  normalizeGeminiGrouping
+} = require('./providers/gemini.cjs');
+const {
+  fetchAntigravityAgents,
+  normalizeAntigravityGrouping
+} = require('./providers/antigravity.cjs');
+const { isLocalServerPortConflict, normalizeLocalServerPort } = require('./local-server.cjs');
 const { normalizeAdditionalFolks } = require('./companion-state.cjs');
 
 const DEFAULT_BOUNDS = { width: 720, height: 500 };
@@ -51,6 +59,8 @@ const RUNTIME_PUBLISH_TIMEOUT_MS = 5_000;
 const VSCODE_COPILOT_REFRESH_MS = 5_000;
 const CODEX_REFRESH_MS = 5_000;
 const CLAUDE_REFRESH_MS = 5_000;
+const GEMINI_REFRESH_MS = 5_000;
+const ANTIGRAVITY_REFRESH_MS = 5_000;
 const OPENCLAW_REFRESH_MS = 5_000;
 const LOCAL_SERVER_START_TIMEOUT_MS = 12_000;
 const SYSTEM_SLEEP_GAP_MS = 20_000;
@@ -99,6 +109,14 @@ let claudeTimer = null;
 let claudeSyncInFlight = false;
 let claudePublished = false;
 let claudeLastError = '';
+let geminiTimer = null;
+let geminiSyncInFlight = false;
+let geminiPublished = false;
+let geminiLastError = '';
+let antigravityTimer = null;
+let antigravitySyncInFlight = false;
+let antigravityPublished = false;
+let antigravityLastError = '';
 let runtimeSyncGeneration = 0;
 let lastRuntimeHeartbeatAt = Date.now();
 let quitting = false;
@@ -379,7 +397,9 @@ async function startLocalServer() {
     };
     child.stdout.on('data', inspectOutput);
     child.stderr.on('data', (chunk) => {
-      const message = chunk.toString().trim();
+      const text = chunk.toString();
+      output += text;
+      const message = text.trim();
       if (message) console.warn(`Local Taskfolk: ${message}`);
     });
     child.once('error', (error) => finish(new Error(`Could not start local Taskfolk: ${error.message}`)));
@@ -390,7 +410,18 @@ async function startLocalServer() {
         localServerUrl = '';
         localServerCredentials = null;
       }
-      if (!settled) finish(new Error(`Local Taskfolk stopped before startup (${signal || code}).`));
+      if (!settled && configuredPort && isLocalServerPortConflict(output)) {
+        settled = true;
+        clearTimeout(timer);
+        const config = readConfig();
+        writeConfig({ ...config, localServerPort: 0 });
+        void startLocalServer().then(resolve, reject);
+        return;
+      }
+      if (!settled) {
+        const details = output.trim();
+        finish(new Error(`Local Taskfolk stopped before startup (${signal || code}).${details ? ` ${details}` : ''}`));
+      }
       else if (wasCurrent && connectionMode() === 'local' && !quitting) {
         openSettingsWindow('The local Taskfolk process stopped. Reopen the office to restart it.');
       }
@@ -1028,6 +1059,110 @@ function startClaudeAdapter() {
   void syncClaudeAdapter();
 }
 
+function scheduleGeminiSync() {
+  clearTimeout(geminiTimer);
+  geminiTimer = null;
+  if (readConfig().geminiEnabled || geminiPublished) {
+    geminiTimer = setTimeout(syncGeminiAdapter, GEMINI_REFRESH_MS);
+  }
+}
+
+async function syncGeminiAdapter() {
+  if (geminiSyncInFlight) {
+    scheduleGeminiSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
+  geminiSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.geminiEnabled) {
+      if (geminiPublished) await publishRuntimeAgents('gemini', [], config);
+      geminiPublished = false;
+      geminiLastError = '';
+      return;
+    }
+    const agents = await fetchGeminiAgents({ grouping: normalizeGeminiGrouping(config.geminiGrouping) });
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    await publishRuntimeAgents('gemini', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    geminiPublished = agents.length > 0;
+    geminiLastError = '';
+  } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    const message = error?.message || 'Could not read Gemini activity.';
+    if (message !== geminiLastError) console.warn(`Gemini adapter: ${message}`);
+    geminiLastError = message;
+    if (geminiPublished) {
+      try { await publishRuntimeAgents('gemini', []); } catch {}
+      geminiPublished = false;
+    }
+  } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    geminiSyncInFlight = false;
+    scheduleGeminiSync();
+  }
+}
+
+function startGeminiAdapter() {
+  clearTimeout(geminiTimer);
+  geminiTimer = null;
+  void syncGeminiAdapter();
+}
+
+function scheduleAntigravitySync() {
+  clearTimeout(antigravityTimer);
+  antigravityTimer = null;
+  if (readConfig().antigravityEnabled || antigravityPublished) {
+    antigravityTimer = setTimeout(syncAntigravityAdapter, ANTIGRAVITY_REFRESH_MS);
+  }
+}
+
+async function syncAntigravityAdapter() {
+  if (antigravitySyncInFlight) {
+    scheduleAntigravitySync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
+  antigravitySyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.antigravityEnabled) {
+      if (antigravityPublished) await publishRuntimeAgents('antigravity', [], config);
+      antigravityPublished = false;
+      antigravityLastError = '';
+      return;
+    }
+    const agents = await fetchAntigravityAgents({
+      grouping: normalizeAntigravityGrouping(config.antigravityGrouping)
+    });
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    await publishRuntimeAgents('antigravity', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    antigravityPublished = agents.length > 0;
+    antigravityLastError = '';
+  } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    const message = error?.message || 'Could not read Google Antigravity activity.';
+    if (message !== antigravityLastError) console.warn(`Google Antigravity adapter: ${message}`);
+    antigravityLastError = message;
+    if (antigravityPublished) {
+      try { await publishRuntimeAgents('antigravity', []); } catch {}
+      antigravityPublished = false;
+    }
+  } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    antigravitySyncInFlight = false;
+    scheduleAntigravitySync();
+  }
+}
+
+function startAntigravityAdapter() {
+  clearTimeout(antigravityTimer);
+  antigravityTimer = null;
+  void syncAntigravityAdapter();
+}
+
 function scheduleOpenClawSync() {
   clearTimeout(openClawTimer);
   openClawTimer = null;
@@ -1095,11 +1230,15 @@ function restartRuntimeAdaptersAfterWake() {
   vsCodeCopilotSyncInFlight = false;
   codexSyncInFlight = false;
   claudeSyncInFlight = false;
+  geminiSyncInFlight = false;
+  antigravitySyncInFlight = false;
   openClawSyncInFlight = false;
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
   startCodexAdapter();
   startClaudeAdapter();
+  startGeminiAdapter();
+  startAntigravityAdapter();
   startOpenClawAdapter();
   for (const window of companionWindows.keys()) {
     if (!window.isDestroyed()) window.webContents.send('office:system-resume');
@@ -1534,6 +1673,8 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   startVsCodeCopilotAdapter();
   startCodexAdapter();
   startClaudeAdapter();
+  startGeminiAdapter();
+  startAntigravityAdapter();
   startOpenClawAdapter();
   settingsWindow?.close();
   rebuildMenus();
@@ -1676,6 +1817,10 @@ ipcMain.handle('settings:load', () => {
     codexGrouping: normalizeCodexGrouping(config.codexGrouping),
     claudeEnabled: config.claudeEnabled === undefined ? mode === 'local' : Boolean(config.claudeEnabled),
     claudeGrouping: normalizeClaudeGrouping(config.claudeGrouping),
+    geminiEnabled: config.geminiEnabled === undefined ? mode === 'local' : Boolean(config.geminiEnabled),
+    geminiGrouping: normalizeGeminiGrouping(config.geminiGrouping),
+    antigravityEnabled: config.antigravityEnabled === undefined ? mode === 'local' : Boolean(config.antigravityEnabled),
+    antigravityGrouping: normalizeAntigravityGrouping(config.antigravityGrouping),
     openClawEnabled: Boolean(config.openClawEnabled),
     openClawUrl: runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL,
     openClawCredentialsStored: Boolean(
@@ -1843,6 +1988,10 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     codexGrouping: normalizeCodexGrouping(input.codexGrouping),
     claudeEnabled: Boolean(input.claudeEnabled),
     claudeGrouping: normalizeClaudeGrouping(input.claudeGrouping),
+    geminiEnabled: Boolean(input.geminiEnabled),
+    geminiGrouping: normalizeGeminiGrouping(input.geminiGrouping),
+    antigravityEnabled: Boolean(input.antigravityEnabled),
+    antigravityGrouping: normalizeAntigravityGrouping(input.antigravityGrouping),
     openClawEnabled: Boolean(input.openClawEnabled),
     openClawUrl,
     openClawCredentialsUrl: openClawUrl,
@@ -1956,6 +2105,8 @@ app.on('before-quit', () => {
   clearTimeout(vsCodeCopilotTimer);
   clearTimeout(codexTimer);
   clearTimeout(claudeTimer);
+  clearTimeout(geminiTimer);
+  clearTimeout(antigravityTimer);
   clearTimeout(openClawTimer);
   stopLocalServer();
 });

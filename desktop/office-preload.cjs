@@ -105,7 +105,7 @@ async function waitForImages(container) {
 async function revealWhenReady() {
   if (revealStarted) return;
   const selector = avatarMode
-    ? '.companionAvatar, .companionAvatarEmpty, .emptyOffice'
+    ? '.companionAvatar, .companionAvatarEmpty, .agentDiscoveryLoading, .emptyOffice'
     : '.pixelOfficeScene, .emptyOffice';
   const content = document.querySelector(selector);
   if (!content) return;

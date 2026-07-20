@@ -341,6 +341,24 @@ body.companion-avatar-mode .companionAvatarEmpty {
   color: #f8f0dc;
   font: 700 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+body.companion-avatar-mode .agentDiscoveryLoading {
+  width: min(82vw, 220px);
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 14px;
+  background: rgba(11, 16, 26, .88);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+  color: #f8f0dc;
+  font: 700 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+body.companion-avatar-mode .agentDiscoverySpinner {
+  width: 36px;
+  height: 36px;
+}
+body.companion-avatar-mode .agentForceReloadBtn {
+  padding: .5rem .7rem;
+  font-size: 12px;
+}
 .browser, .preview {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -524,6 +542,7 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
 .agentDiscoveryState { min-height: 180px; place-items: center; }
 .agentDiscoveryLoading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .8rem; padding: 2rem; color: var(--muted); text-align: center; }
 .agentDiscoverySpinner { width: 46px; height: 46px; border: 4px solid color-mix(in srgb, var(--accent), transparent 78%); border-top-color: var(--accent); border-right-color: color-mix(in srgb, var(--accent), white 25%); border-radius: 50%; box-shadow: 0 8px 24px var(--shadow); animation: agentDiscoverySpin .8s linear infinite; }
+.agentForceReloadBtn { cursor: pointer; user-select: none; }
 @keyframes agentDiscoverySpin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .agentDiscoverySpinner { animation: none; } }
 .agentLoadFailure { display: flex; flex-direction: column; align-items: center; gap: .8rem; text-align: center; }
@@ -1212,7 +1231,8 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   object-fit: contain;
   image-rendering: auto;
 }
-.sceneFigure > .sceneWorkingStack {
+.sceneFigure > .sceneWorkingStack,
+.sceneFigure > .sceneGamingStack {
   position: relative;
   align-self: end;
   display: block;
@@ -1221,7 +1241,8 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   max-width: 100%;
   aspect-ratio: 3 / 4;
 }
-.sceneWorkingStack > .sceneArt {
+.sceneWorkingStack > .sceneArt,
+.sceneGamingStack > .sceneArt {
   position: relative;
   z-index: 2;
   display: block;
@@ -1240,6 +1261,20 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   display: block;
   width: var(--working-screen-width);
   height: var(--working-screen-height);
+  object-fit: fill;
+  image-rendering: auto;
+}
+.sceneGamingScreen {
+  display: none;
+}
+.sceneGamingStack.is-layered > .sceneGamingScreen {
+  position: absolute;
+  z-index: 1;
+  left: var(--gaming-screen-left);
+  top: var(--gaming-screen-top);
+  display: block;
+  width: var(--gaming-screen-width);
+  height: var(--gaming-screen-height);
   object-fit: fill;
   image-rendering: auto;
 }

@@ -224,7 +224,9 @@ function renderAgentDiscoveryLoading() {
     <div class="agentDiscoveryLoading" role="status" aria-live="polite">
       <span class="agentDiscoverySpinner" aria-hidden="true"></span>
       <span>Looking for agents…</span>
+      <button class="agentForceReloadBtn" type="button" data-companion-interactive>Force reload</button>
     </div>`;
+  officeMap.querySelector('.agentForceReloadBtn')?.addEventListener('click', forceReloadAgents);
 }
 
 function renderNoAgentsAvailable() {
@@ -710,6 +712,16 @@ async function loadAgents() {
       scheduleAgentRefresh();
     }
   }
+}
+
+function forceReloadAgents() {
+  agentRequestGeneration += 1;
+  agentRequestController?.abort();
+  agentRequestController = null;
+  agentRefreshInFlight = false;
+  resetAgentDiscovery();
+  renderAgentDiscoveryLoading();
+  loadAgents();
 }
 
 function refreshAgentsAfterSystemResume() {

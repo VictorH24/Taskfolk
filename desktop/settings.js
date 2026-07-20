@@ -44,6 +44,12 @@ const codexGroupingInput = document.querySelector('#codexGrouping');
 const claudeEnabledInput = document.querySelector('#claudeEnabled');
 const claudeGroupingField = document.querySelector('#claudeGroupingField');
 const claudeGroupingInput = document.querySelector('#claudeGrouping');
+const geminiEnabledInput = document.querySelector('#geminiEnabled');
+const geminiGroupingField = document.querySelector('#geminiGroupingField');
+const geminiGroupingInput = document.querySelector('#geminiGrouping');
+const antigravityEnabledInput = document.querySelector('#antigravityEnabled');
+const antigravityGroupingField = document.querySelector('#antigravityGroupingField');
+const antigravityGroupingInput = document.querySelector('#antigravityGrouping');
 const importConfigButton = document.querySelector('#importConfigButton');
 const exportConfigButton = document.querySelector('#exportConfigButton');
 const configStatus = document.querySelector('#configStatus');
@@ -90,6 +96,14 @@ function updateCodexFields() {
 
 function updateClaudeFields() {
   claudeGroupingField.classList.toggle('hidden', !claudeEnabledInput.checked);
+}
+
+function updateGeminiFields() {
+  geminiGroupingField.classList.toggle('hidden', !geminiEnabledInput.checked);
+}
+
+function updateAntigravityFields() {
+  antigravityGroupingField.classList.toggle('hidden', !antigravityEnabledInput.checked);
 }
 
 function updateOpenClawFields() {
@@ -153,6 +167,10 @@ async function initialize() {
   codexGroupingInput.value = settings.codexGrouping === 'single' ? 'single' : 'project';
   claudeEnabledInput.checked = Boolean(settings.claudeEnabled);
   claudeGroupingInput.value = settings.claudeGrouping === 'single' ? 'single' : 'project';
+  geminiEnabledInput.checked = Boolean(settings.geminiEnabled);
+  geminiGroupingInput.value = settings.geminiGrouping === 'single' ? 'single' : 'project';
+  antigravityEnabledInput.checked = Boolean(settings.antigravityEnabled);
+  antigravityGroupingInput.value = settings.antigravityGrouping === 'single' ? 'single' : 'project';
   while (selectedAgentInput.options.length > 2) selectedAgentInput.remove(2);
   for (const agent of settings.agents || []) {
     const option = document.createElement('option');
@@ -169,6 +187,8 @@ async function initialize() {
   updateVsCodeCopilotFields();
   updateCodexFields();
   updateClaudeFields();
+  updateGeminiFields();
+  updateAntigravityFields();
   updateConnectionFields();
   tokenInput.placeholder = settings.credentialsStored
     ? 'Saved securely — enter a value to replace it'
@@ -188,6 +208,8 @@ openClawEnabledInput.addEventListener('change', updateOpenClawFields);
 vsCodeCopilotEnabledInput.addEventListener('change', updateVsCodeCopilotFields);
 codexEnabledInput.addEventListener('change', updateCodexFields);
 claudeEnabledInput.addEventListener('change', updateClaudeFields);
+geminiEnabledInput.addEventListener('change', updateGeminiFields);
+antigravityEnabledInput.addEventListener('change', updateAntigravityFields);
 resetAvatarSizeButton.addEventListener('click', () => {
   avatarWidthInput.value = '300';
   avatarHeightInput.value = '380';
@@ -295,7 +317,11 @@ form.addEventListener('submit', async (event) => {
       codexEnabled: codexEnabledInput.checked,
       codexGrouping: codexGroupingInput.value,
       claudeEnabled: claudeEnabledInput.checked,
-      claudeGrouping: claudeGroupingInput.value
+      claudeGrouping: claudeGroupingInput.value,
+      geminiEnabled: geminiEnabledInput.checked,
+      geminiGrouping: geminiGroupingInput.value,
+      antigravityEnabled: antigravityEnabledInput.checked,
+      antigravityGrouping: antigravityGroupingInput.value
     });
   } catch (error) {
     showError(error.message || 'Could not connect to Taskfolk.');

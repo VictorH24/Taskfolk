@@ -40,9 +40,8 @@ function setAvatarVariantRegistry(value) {
     value: variant.id,
     label: Number.isInteger(variant.version) ? `Variant ${variant.version}` : variant.id,
     description: variant.name,
-    src: Number.isInteger(variant.version) && !variant.custom
-      ? `./avatar-scenes/generated-sheets/v${variant.version}.png`
-      : `./avatar-scenes/variants/${encodeURIComponent(variant.id)}/working.gif`
+    src: `./avatar-scenes/variants/${encodeURIComponent(variant.id)}/sheet.png`,
+    fallbackSrc: `./avatar-scenes/variants/${encodeURIComponent(variant.id)}/working.gif`
   }));
 }
 
@@ -65,6 +64,7 @@ const OFFICE_POSTER_COUNT = 50;
 
 let agents = [];
 let assignments = {};
+let customNames = {};
 let hiddenAgents = [];
 let manualAgents = [];
 let modules = { folderView: { enabled: true } };
@@ -111,7 +111,7 @@ function renderAvatarSheets() {
   legendGrid.innerHTML = AVATAR_SHEETS.map((sheet) => `
     <article class="avatarSheetCard">
       <span class="avatarSheetImage">
-        <img src="${esc(sheet.src)}" alt="${esc(sheet.label)} avatar preview" loading="lazy" draggable="false" />
+        <img src="${esc(sheet.src)}" data-fallback-src="${esc(sheet.fallbackSrc)}" alt="${esc(sheet.label)} avatar preview" loading="lazy" draggable="false" />
         <canvas class="avatarSheetCanvas" role="img" aria-label="${esc(sheet.label)} avatar preview with transparent background" hidden></canvas>
       </span>
       <span class="avatarSheetMeta">
@@ -191,8 +191,18 @@ function makeSheetBackgroundTransparent(image) {
 
 function renderTransparentSheetBackgrounds() {
   legendGrid.querySelectorAll('.avatarSheetImage img').forEach((image) => {
-    if (image.complete) makeSheetBackgroundTransparent(image);
-    else image.addEventListener('load', () => makeSheetBackgroundTransparent(image), { once: true });
+    const useWorkingFallback = () => {
+      const fallbackSrc = image.dataset.fallbackSrc;
+      if (!fallbackSrc || image.dataset.fallbackApplied === 'true') return;
+      image.dataset.fallbackApplied = 'true';
+      image.src = fallbackSrc;
+    };
+    image.addEventListener('error', useWorkingFallback, { once: true });
+    image.addEventListener('load', () => makeSheetBackgroundTransparent(image), { once: true });
+    if (image.complete) {
+      if (image.naturalWidth && image.naturalHeight) makeSheetBackgroundTransparent(image);
+      else useWorkingFallback();
+    }
   });
 }
 
@@ -270,6 +280,11 @@ function assignedAvatar(agent) {
   if (Object.prototype.hasOwnProperty.call(assignments, key)) return assignments[key];
   if (Object.prototype.hasOwnProperty.call(assignments, agent.id)) return assignments[agent.id];
   return agent.avatarVariant;
+}
+
+function customAgentName(agent) {
+  const key = agentConfigKey(agent);
+  return customNames[key] || customNames[agent.id] || '';
 }
 
 function variantSelect(agent) {
@@ -377,7 +392,10 @@ function renderAssignments() {
           <span>${esc(agent.id)} · manual agent · ${manualAgentEnabled(agent.id) ? 'enabled' : 'disabled'}</span>
           <code>${esc(manualAgentToken(agent.id))}</code>
         ` : `
-          <strong>${esc(agent.name)}</strong>
+          <label class="manualNameField">
+            <span>Custom name</span>
+            <input data-agent-custom-name="${esc(agentConfigKey(agent))}" value="${esc(customAgentName(agent))}" placeholder="${esc(agent.automaticName || agent.name)}" aria-label="Custom name for ${esc(agent.automaticName || agent.name)}" />
+          </label>
           <span>${esc(agent.id)} · ${esc(agent.role || 'agent')}${agent.hidden ? ' · disabled in office' : ''}</span>
         `}
       </div>
@@ -419,6 +437,7 @@ async function loadAssignments() {
     ]);
     setAvatarVariantRegistry(assignmentData.avatarVariants);
     assignments = assignmentData.assignments || {};
+    customNames = assignmentData.customNames || {};
     hiddenAgents = Array.isArray(assignmentData.hiddenAgents) ? assignmentData.hiddenAgents : [];
     manualAgents = Array.isArray(assignmentData.manualAgents) ? assignmentData.manualAgents : [];
     modules = normalizeModules(assignmentData.modules);
@@ -504,9 +523,10 @@ async function saveAssignments(reload = true) {
   try {
     const data = await api('/api/avatar-assignments', {
       method: 'PUT',
-      body: JSON.stringify({ assignments, hiddenAgents, manualAgents, modules, officeScene })
+      body: JSON.stringify({ assignments, customNames, hiddenAgents, manualAgents, modules, officeScene })
     });
     assignments = data.assignments || {};
+    customNames = data.customNames || {};
     hiddenAgents = Array.isArray(data.hiddenAgents) ? data.hiddenAgents : hiddenAgents;
     manualAgents = Array.isArray(data.manualAgents) ? data.manualAgents : manualAgents;
     modules = normalizeModules(data.modules || modules);
@@ -586,6 +606,11 @@ assignmentList.addEventListener('change', (event) => {
 });
 
 assignmentList.addEventListener('input', (event) => {
+  const customNameInput = event.target.closest('input[data-agent-custom-name]');
+  if (customNameInput) {
+    customNames[customNameInput.dataset.agentCustomName] = customNameInput.value;
+    return;
+  }
   const nameInput = event.target.closest('input[data-agent-name]');
   if (!nameInput) return;
   const manualAgent = manualAgents.find((agent) => agent.id === nameInput.dataset.agentName);
@@ -594,6 +619,15 @@ assignmentList.addEventListener('input', (event) => {
 });
 
 assignmentList.addEventListener('focusout', (event) => {
+  const customNameInput = event.target.closest('input[data-agent-custom-name]');
+  if (customNameInput) {
+    const key = customNameInput.dataset.agentCustomName;
+    const name = customNameInput.value.trim();
+    if (name) customNames[key] = name;
+    else delete customNames[key];
+    saveAssignments();
+    return;
+  }
   const nameInput = event.target.closest('input[data-agent-name]');
   if (nameInput) {
     const manualAgent = manualAgents.find((agent) => agent.id === nameInput.dataset.agentName);
@@ -613,6 +647,8 @@ assignmentList.addEventListener('click', async (event) => {
       await api(`/api/runtime-agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
       delete assignments[key];
       delete assignments[id];
+      delete customNames[key];
+      delete customNames[id];
       hiddenAgents = hiddenAgents.filter((entry) => entry !== key && entry !== id);
       agents = agents.filter((agent) => agent.id !== id);
       renderAssignments();
@@ -654,6 +690,7 @@ assignmentList.addEventListener('click', async (event) => {
   const id = button.dataset.deleteAgent;
   manualAgents = manualAgents.filter((agent) => agent.id !== id);
   delete assignments[id];
+  delete customNames[id];
   agents = agents.filter((agent) => agent.id !== id);
   renderAssignments();
   saveAssignments();

@@ -25,7 +25,6 @@ const AVATAR_ASSIGNMENTS_PATH = path.resolve(process.env.AVATAR_ASSIGNMENTS_PATH
 const AGENT_STATE_PATH = path.resolve(process.env.AGENT_STATE_PATH || path.join(CONFIG_DIR, 'state.json'));
 const OFFICE_FIXTURE_PATH = path.resolve(process.env.OFFICE_FIXTURE_PATH || path.join(SERVER_DIR, 'public', 'test-agents.json'));
 const LOCAL_DESKTOP_MODE = String(process.env.LOCAL_DESKTOP_MODE || '').trim().toLowerCase() === 'true';
-const AVATAR_VARIANTS = [0, ...Array.from({ length: 25 }, (_, index) => `v${index + 1}_gif`)];
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
@@ -53,6 +52,92 @@ const GATEWAY_AUTH_PASSWORD_ENV = String(process.env.GATEWAY_AUTH_PASSWORD || ''
 const GATEWAY_AUTH_SECURE_COOKIE = String(process.env.GATEWAY_AUTH_SECURE_COOKIE || '').trim().toLowerCase() === 'true';
 const AUTH_COOKIE_NAME = 'taskfolk_gateway_auth';
 const PUBLIC_DIR = path.join(SERVER_DIR, 'public');
+const AVATAR_VARIANTS_DIR = path.join(PUBLIC_DIR, 'avatar-scenes', 'variants');
+const CUSTOM_AVATAR_VARIANTS_DIR = String(process.env.CUSTOM_AVATAR_VARIANTS_DIR || '').trim()
+  ? path.resolve(process.env.CUSTOM_AVATAR_VARIANTS_DIR)
+  : '';
+const AVATAR_VARIANT_FALLBACK = 'v0';
+
+function normalizeAvatarScreen(value, fieldName) {
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`avatar.json "${fieldName}" must be an object`);
+  }
+  const layout = {};
+  for (const key of ['left', 'top', 'width', 'height']) {
+    layout[key] = Number(value[key]);
+    if (!Number.isFinite(layout[key]) || layout[key] < 0) {
+      throw new Error(`avatar.json "${fieldName}.${key}" must be a non-negative number`);
+    }
+  }
+  if (!layout.width || !layout.height) {
+    throw new Error(`avatar.json "${fieldName}" must have positive width and height`);
+  }
+  return Object.freeze(layout);
+}
+
+async function discoverAvatarVariants() {
+  const directories = new Map();
+  const variants = new Map();
+  const roots = [AVATAR_VARIANTS_DIR, ...(CUSTOM_AVATAR_VARIANTS_DIR ? [CUSTOM_AVATAR_VARIANTS_DIR] : [])];
+  for (const root of roots) {
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch((error) => {
+      if (root === CUSTOM_AVATAR_VARIANTS_DIR && error?.code === 'ENOENT') return [];
+      throw error;
+    });
+    const candidates = entries
+      .filter((entry) => entry.isDirectory() && entry.name !== '.' && entry.name !== '..')
+      .map((entry) => {
+        const numericMatch = entry.name.match(/^v(\d+)$/);
+        return {
+          id: entry.name,
+          ...(numericMatch ? { version: Number(numericMatch[1]) } : {}),
+          ...(root === CUSTOM_AVATAR_VARIANTS_DIR ? { custom: true } : {})
+        };
+      });
+    for (const candidate of candidates) {
+      const directory = path.join(root, candidate.id);
+      try {
+        const [metadataText, workingStat] = await Promise.all([
+          fs.readFile(path.join(directory, 'avatar.json'), 'utf8'),
+          fs.stat(path.join(directory, 'working.gif'))
+        ]);
+        const metadata = JSON.parse(metadataText);
+        const name = typeof metadata?.name === 'string' ? metadata.name.trim() : '';
+        if (!name) throw new Error('avatar.json must contain a non-empty "name"');
+        if (!workingStat.isFile()) throw new Error('working.gif is not a file');
+        const workingScreen = normalizeAvatarScreen(metadata.workingScreen, 'workingScreen');
+        const gaminScreen = normalizeAvatarScreen(metadata.gaminScreen, 'gaminScreen');
+        variants.set(candidate.id, Object.freeze({
+          ...candidate,
+          name,
+          ...(workingScreen ? { workingScreen } : {}),
+          ...(gaminScreen ? { gaminScreen } : {})
+        }));
+        directories.set(candidate.id, directory);
+      } catch (error) {
+        console.warn(`Skipping avatar variant ${candidate.id} from ${directory}: ${error.message}`);
+      }
+    }
+  }
+  const registry = [...variants.values()].sort((left, right) => {
+    const leftNumeric = Number.isInteger(left.version);
+    const rightNumeric = Number.isInteger(right.version);
+    if (leftNumeric && rightNumeric) return left.version - right.version;
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return left.id.localeCompare(right.id);
+  });
+  if (!registry.some((variant) => variant.id === AVATAR_VARIANT_FALLBACK)) {
+    throw new Error(`Required fallback avatar ${AVATAR_VARIANT_FALLBACK} is missing or invalid`);
+  }
+  return { registry: Object.freeze(registry), directories };
+}
+
+const AVATAR_VARIANT_DISCOVERY = await discoverAvatarVariants();
+const AVATAR_VARIANT_REGISTRY = AVATAR_VARIANT_DISCOVERY.registry;
+const AVATAR_VARIANT_DIRECTORIES = AVATAR_VARIANT_DISCOVERY.directories;
+const AVATAR_VARIANTS = Object.freeze(AVATAR_VARIANT_REGISTRY.map((variant) => variant.id));
+const AVATAR_VARIANT_IDS = new Set(AVATAR_VARIANTS);
 const PROTECTED_NAMES = new Set(
   String(process.env.PROTECTED_NAMES || '.git,.env')
     .split(',')
@@ -320,12 +405,8 @@ async function requireGatewayAuth(req, res, next) {
 }
 
 function normalizeAvatarVariant(value) {
-  const raw = String(value);
-  if (raw === 'v0_gif') return 0;
-  if (/^v\d+_gif$/.test(raw) && AVATAR_VARIANTS.includes(raw)) return raw;
-  const variant = Number(value);
-  if (!Number.isInteger(variant) || variant < 0 || variant > 25) return 0;
-  return variant === 0 ? 0 : `v${variant}_gif`;
+  const raw = String(value ?? '').trim();
+  return AVATAR_VARIANT_IDS.has(raw) ? raw : AVATAR_VARIANT_FALLBACK;
 }
 
 function randomAvatarVariant() {
@@ -342,6 +423,24 @@ function normalizeAvatarAssignments(value) {
     assignments[id] = normalizeAvatarVariant(variant);
   }
   return assignments;
+}
+
+function normalizeCustomAgentNames(value) {
+  const source = value?.customNames && typeof value.customNames === 'object' ? value.customNames : value;
+  const customNames = {};
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return customNames;
+  for (const [agentKeyValue, customName] of Object.entries(source)) {
+    const key = String(agentKeyValue || '')
+      .trim()
+      .replace(/[\u0000-\u001f]/g, '')
+      .slice(0, 160);
+    const name = String(customName || '')
+      .trim()
+      .replace(/[\u0000-\u001f]/g, '')
+      .slice(0, 80);
+    if (key && name) customNames[key] = name;
+  }
+  return customNames;
 }
 
 function normalizeHiddenAgents(value) {
@@ -424,6 +523,7 @@ async function readAvatarConfig() {
     : [];
   return {
     assignments: normalizeAvatarAssignments(data),
+    customNames: normalizeCustomAgentNames(data?.customNames || {}),
     hiddenAgents: normalizeHiddenAgents(data),
     manualAgents: normalizeManualAgents(data),
     modules: normalizeModules(data),
@@ -443,6 +543,9 @@ async function writeAvatarConfig(value) {
     : current.manualAgents;
   const normalized = {
     assignments: normalizeAvatarAssignments(value?.assignments || value),
+    customNames: value?.customNames && typeof value.customNames === 'object' && !Array.isArray(value.customNames)
+      ? normalizeCustomAgentNames(value.customNames)
+      : current.customNames,
     hiddenAgents: Array.isArray(value?.hiddenAgents) ? normalizeHiddenAgents(value.hiddenAgents) : current.hiddenAgents,
     manualAgents,
     modules: value?.modules && typeof value.modules === 'object' && !Array.isArray(value.modules)
@@ -1693,7 +1796,85 @@ app.delete('/api/runtime-agents/:agentId', (req, res) => {
   return res.json({ ok: true, agentId, removed, rediscovery: 'next-publish' });
 });
 
+if (CUSTOM_AVATAR_VARIANTS_DIR) {
+  const customVariantAssets = new Map();
+  for (const variant of AVATAR_VARIANT_REGISTRY) {
+    const directory = AVATAR_VARIANT_DIRECTORIES.get(variant.id);
+    if (path.dirname(directory) === CUSTOM_AVATAR_VARIANTS_DIR) {
+      customVariantAssets.set(variant.id, express.static(directory));
+    }
+  }
+  app.use('/avatar-scenes/variants/:variantId', (req, res, next) => {
+    const serveAssets = customVariantAssets.get(req.params.variantId);
+    return serveAssets ? serveAssets(req, res, next) : next();
+  });
+}
 app.use(express.static(PUBLIC_DIR));
+
+app.get('/api/avatar-working-animations', async (_req, res, next) => {
+  try {
+    const sharedRoot = path.join(PUBLIC_DIR, 'avatar-scenes', 'working-screens');
+    const gamingRoot = path.join(PUBLIC_DIR, 'avatar-scenes', 'gaming-screens');
+    const variants = Object.create(null);
+    await Promise.all(AVATAR_VARIANT_REGISTRY.map(async (variant) => {
+      const files = await fs.readdir(AVATAR_VARIANT_DIRECTORIES.get(variant.id));
+      const workingAnimations = files
+        .filter((file) => /^working(?:\d+)?\.gif$/i.test(file))
+        .sort((left, right) => {
+          const leftNumber = Number(left.match(/\d+/)?.[0] || 0);
+          const rightNumber = Number(right.match(/\d+/)?.[0] || 0);
+          return leftNumber - rightNumber || left.localeCompare(right);
+        });
+      if (workingAnimations.length) variants[variant.id] = workingAnimations;
+    }));
+    const sharedScreens = (await fs.readdir(sharedRoot).catch((error) => {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }))
+      .filter((file) => /^working\d+\.gif$/i.test(file))
+      .sort((left, right) => {
+        const leftNumber = Number(left.match(/\d+/)?.[0] || 0);
+        const rightNumber = Number(right.match(/\d+/)?.[0] || 0);
+        return leftNumber - rightNumber || left.localeCompare(right);
+      });
+    const layouts = Object.fromEntries(
+      AVATAR_VARIANT_REGISTRY
+        .filter((variant) => variant.workingScreen)
+        .map((variant) => [variant.id, variant.workingScreen])
+    );
+    const gamingScreens = (await fs.readdir(gamingRoot).catch((error) => {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }))
+      .filter((file) => /^gaming\d+\.gif$/i.test(file))
+      .sort((left, right) => {
+        const leftNumber = Number(left.match(/\d+/)?.[0] || 0);
+        const rightNumber = Number(right.match(/\d+/)?.[0] || 0);
+        return leftNumber - rightNumber || left.localeCompare(right);
+      });
+    const gamingLayouts = Object.fromEntries(
+      AVATAR_VARIANT_REGISTRY
+        .filter((variant) => variant.gaminScreen)
+        .map((variant) => [variant.id, variant.gaminScreen])
+    );
+    res.set('Cache-Control', 'no-store, max-age=0');
+    res.json({
+      variants,
+      sharedScreens,
+      gamingScreens,
+      canvas: { width: 384, height: 512 },
+      layouts,
+      gamingLayouts
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/avatar-variants', (_req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.json({ fallback: AVATAR_VARIANT_FALLBACK, variants: AVATAR_VARIANT_REGISTRY });
+});
 
 app.get('/api/config', async (req, res, next) => {
   try {
@@ -1716,6 +1897,8 @@ app.get('/api/avatar-assignments', async (req, res, next) => {
     res.json({
       path: AVATAR_ASSIGNMENTS_PATH,
       variants: AVATAR_VARIANTS,
+      avatarVariants: AVATAR_VARIANT_REGISTRY,
+      fallbackVariant: AVATAR_VARIANT_FALLBACK,
       floors: OFFICE_FLOORS,
       windows: OFFICE_WINDOWS,
       posters: OFFICE_POSTERS,
@@ -1731,6 +1914,9 @@ app.put('/api/avatar-assignments', async (req, res, next) => {
     const current = await readAvatarConfig();
     const config = await writeAvatarConfig({
       assignments: req.body?.assignments || {},
+      customNames: req.body?.customNames && typeof req.body.customNames === 'object' && !Array.isArray(req.body.customNames)
+        ? req.body.customNames
+        : current.customNames,
       hiddenAgents: Array.isArray(req.body?.hiddenAgents) ? req.body.hiddenAgents : current.hiddenAgents,
       manualAgents: Array.isArray(req.body?.manualAgents) ? req.body.manualAgents : current.manualAgents,
       modules: req.body?.modules && typeof req.body.modules === 'object' && !Array.isArray(req.body.modules) ? req.body.modules : current.modules,
@@ -1739,6 +1925,8 @@ app.put('/api/avatar-assignments', async (req, res, next) => {
     res.json({
       path: AVATAR_ASSIGNMENTS_PATH,
       variants: AVATAR_VARIANTS,
+      avatarVariants: AVATAR_VARIANT_REGISTRY,
+      fallbackVariant: AVATAR_VARIANT_FALLBACK,
       floors: OFFICE_FLOORS,
       windows: OFFICE_WINDOWS,
       posters: OFFICE_POSTERS,
@@ -1859,8 +2047,10 @@ app.get('/api/agents', async (req, res, next) => {
       const avatarVariant = Object.prototype.hasOwnProperty.call(avatarAssignments, assignmentKey)
         ? avatarAssignments[assignmentKey]
         : Object.prototype.hasOwnProperty.call(avatarAssignments, agent.id) ? avatarAssignments[agent.id] : null;
+      const customName = avatarConfig.customNames[assignmentKey] || avatarConfig.customNames[agent.id] || '';
       return {
         ...agent,
+        ...(customName ? { name: customName, automaticName: agent.name } : {}),
         runtime: runtimeAgentIds.has(agent.id),
         avatarAssignmentKey: assignmentKey,
         avatarVariant,
@@ -1887,6 +2077,8 @@ app.get('/api/agents', async (req, res, next) => {
       sessionGroupedCounts: sessionGroupedCounts || {},
       cronJobs: cron.jobs,
       weeklyCost: weeklyCost || null,
+      avatarVariants: AVATAR_VARIANT_REGISTRY,
+      fallbackVariant: AVATAR_VARIANT_FALLBACK,
       statusRules: { activeMs: AGENT_ACTIVE_MS, successMs: AGENT_SUCCESS_MS, idleMs: AGENT_IDLE_MS, blockedPattern: 'error|failed|failure|exception|blocked|fatal' },
       acceptedManualStates: MANUAL_AGENT_STATES,
       agentStatePath: AGENT_STATE_PATH,
