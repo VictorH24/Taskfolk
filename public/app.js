@@ -63,7 +63,7 @@ let agentDiscoveryStartedAt = 0;
 let agentDiscoveryRetryTimer = null;
 let preserveAgentsDuringWakeRecovery = false;
 let officeSceneConfig = { floor: 'wood', windowView: 'sf', poster: 0, emptyDesks: 0 };
-let modulesConfig = { folderView: { enabled: true } };
+let modulesConfig = { folderView: { enabled: false } };
 let renderedCompanionAgentId = '';
 let renderedCompanionAgentSignature = '';
 
@@ -679,7 +679,7 @@ async function loadAgents() {
     renderCronJobsPanel(latestCronJobs);
     officeSceneConfig = normalizeOfficeSceneConfig(data.officeScene);
     const agents = Array.isArray(data.agents) ? data.agents : [];
-    if (!agents.length && waitForAgentDiscovery()) return;
+    if (!agents.length && !data.openClawWarning && waitForAgentDiscovery()) return;
     if (!agents.length) renderNoAgentsAvailable();
     else {
       resetAgentDiscovery();
@@ -1224,7 +1224,7 @@ function applyModulesConfig(config = {}) {
   const hasFolderViewEnabled = Object.prototype.hasOwnProperty.call(config.folderView || {}, 'enabled');
   modulesConfig = {
     folderView: {
-      enabled: hasFolderViewEnabled ? config.folderView.enabled !== false : true
+      enabled: hasFolderViewEnabled ? config.folderView.enabled !== false : false
     }
   };
   viewToggleBtn?.classList.toggle('hidden', !modulesConfig.folderView.enabled);

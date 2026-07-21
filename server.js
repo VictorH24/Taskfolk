@@ -4,8 +4,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import * as tar from 'tar';
+
+const require = createRequire(import.meta.url);
+const {
+  DEFAULT_OPENCLAW_URL,
+  fetchOpenClawCronRuns,
+  fetchOpenClawSnapshot,
+  normalizeOpenClawUrl
+} = require('./desktop/providers/openclaw.cjs');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -21,10 +30,21 @@ const OPENCLAW_LOG_DIR = path.resolve(process.env.OPENCLAW_LOG_DIR || '/tmp/open
 const OPENCLAW_SESSIONS_DIR = path.resolve(process.env.OPENCLAW_SESSIONS_DIR || '/openclaw-agents');
 const OPENCLAW_CRON_DIR = path.resolve(process.env.OPENCLAW_CRON_DIR || path.join(CONFIG_DIR, 'cron'));
 const OPENCLAW_STATE_DB_PATH = path.resolve(process.env.OPENCLAW_STATE_DB_PATH || path.join(CONFIG_DIR, 'state', 'openclaw.sqlite'));
+const OPENCLAW_CONNECTION_MODE = String(process.env.OPENCLAW_CONNECTION_MODE || '').trim().toLowerCase() || 'none';
+if (!['none', 'files', 'gateway'].includes(OPENCLAW_CONNECTION_MODE)) {
+  throw new Error('OPENCLAW_CONNECTION_MODE must be "none", "files", or "gateway".');
+}
+const OPENCLAW_GATEWAY_URL = normalizeOpenClawUrl(process.env.OPENCLAW_GATEWAY_URL || DEFAULT_OPENCLAW_URL);
+const OPENCLAW_GATEWAY_TOKEN = String(process.env.OPENCLAW_GATEWAY_TOKEN || '').trim();
+const OPENCLAW_GATEWAY_PASSWORD = String(process.env.OPENCLAW_GATEWAY_PASSWORD || '');
+const OPENCLAW_GATEWAY_TIMEOUT_MS = Number(process.env.OPENCLAW_GATEWAY_TIMEOUT_MS || 8_000);
+const OPENCLAW_GATEWAY_CACHE_MS = Number(process.env.OPENCLAW_GATEWAY_CACHE_MS || 4_000);
 const AVATAR_ASSIGNMENTS_PATH = path.resolve(process.env.AVATAR_ASSIGNMENTS_PATH || path.join(CONFIG_DIR, 'avatar-assignments.json'));
 const AGENT_STATE_PATH = path.resolve(process.env.AGENT_STATE_PATH || path.join(CONFIG_DIR, 'state.json'));
 const OFFICE_FIXTURE_PATH = path.resolve(process.env.OFFICE_FIXTURE_PATH || path.join(SERVER_DIR, 'public', 'test-agents.json'));
 const LOCAL_DESKTOP_MODE = String(process.env.LOCAL_DESKTOP_MODE || '').trim().toLowerCase() === 'true';
+const FOLDER_VIEW_ENABLED = !LOCAL_DESKTOP_MODE
+  && String(process.env.FOLDER_VIEW_ENABLED || '').trim().toLowerCase() === 'true';
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
@@ -42,7 +62,7 @@ const MANUAL_AGENT_POSES = {
   Walking: 'walking'
 };
 const DEFAULT_OFFICE_SCENE = { floor: 'wood', windowView: 'sf', poster: 0, emptyDesks: 0 };
-const DEFAULT_MODULES = { folderView: { enabled: !LOCAL_DESKTOP_MODE } };
+const DEFAULT_MODULES = { folderView: { enabled: FOLDER_VIEW_ENABLED } };
 const AGENT_ACTIVE_MS = Number(process.env.AGENT_ACTIVE_MS || 2 * 60 * 1000);
 const AGENT_SUCCESS_MS = Number(process.env.AGENT_SUCCESS_MS || 2 * 60 * 1000);
 const AGENT_IDLE_MS = Number(process.env.AGENT_IDLE_MS || 30 * 60 * 1000);
@@ -155,6 +175,9 @@ const DEFAULT_AGENTS = [
 ];
 const CONFIGURED_AGENT_IDLE_TASK = 'Configured in OpenClaw; no session activity yet';
 const runtimeAgentSources = new Map();
+let openClawGatewayCache = null;
+let openClawGatewayRequest = null;
+let openClawGatewayLastWarning = '';
 
 function cleanRuntimeText(value, maxLength = 240) {
   return String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
@@ -340,7 +363,9 @@ function stripJsonComments(text) {
 }
 
 async function gatewayAuthConfig() {
-  const config = await readJsonIfPresent(OPENCLAW_CONFIG_PATH);
+  const config = OPENCLAW_CONNECTION_MODE === 'files'
+    ? await readJsonIfPresent(OPENCLAW_CONFIG_PATH)
+    : null;
   const fileAuth = config?.gateway?.auth && typeof config.gateway.auth === 'object'
     ? config.gateway.auth
     : {};
@@ -823,7 +848,7 @@ function sessionTimestampInfo(entry, fallbackMs) {
 }
 
 function statusFromSessionEntry(entry, lastSeenMs) {
-  const rawStatus = String(entry.status || '').trim().toLowerCase();
+  const rawStatus = String(entry.status || entry.state || '').trim().toLowerCase();
   if (entry.abortedLastRun || /\b(error|failed|failure|exception|blocked|fatal|aborted|cancelled|canceled)\b/i.test(rawStatus)) {
     return 'blocked';
   }
@@ -1215,7 +1240,19 @@ function safeCronJobId(id = '') {
 }
 
 function normalizeCronJob(job, stateRecord = {}) {
-  const state = stateRecord?.state && typeof stateRecord.state === 'object' ? stateRecord.state : {};
+  const storedState = stateRecord?.state && typeof stateRecord.state === 'object' ? stateRecord.state : {};
+  const state = {
+    ...storedState,
+    nextRunAtMs: job.nextRunAtMs ?? storedState.nextRunAtMs,
+    lastRunAtMs: job.lastRunAtMs ?? storedState.lastRunAtMs,
+    lastRunStatus: job.lastRunStatus ?? storedState.lastRunStatus,
+    lastDurationMs: job.lastDurationMs ?? storedState.lastDurationMs,
+    lastDeliveryStatus: job.lastDeliveryStatus ?? storedState.lastDeliveryStatus,
+    consecutiveErrors: job.consecutiveErrors ?? storedState.consecutiveErrors,
+    consecutiveSkipped: job.consecutiveSkipped ?? storedState.consecutiveSkipped,
+    lastError: job.lastRunError ?? job.lastError ?? storedState.lastError,
+    lastDiagnosticSummary: job.lastDiagnosticSummary ?? storedState.lastDiagnosticSummary
+  };
   const schedule = job.schedule && typeof job.schedule === 'object' ? job.schedule : {};
   const payload = job.payload && typeof job.payload === 'object' ? job.payload : {};
   const delivery = job.delivery && typeof job.delivery === 'object' ? job.delivery : {};
@@ -1251,6 +1288,24 @@ function normalizeCronJob(job, stateRecord = {}) {
 }
 
 async function cronJobsSnapshot() {
+  if (OPENCLAW_CONNECTION_MODE === 'none') {
+    return { source: 'disabled', cronDir: null, dbPath: null, jobs: [], byId: new Map() };
+  }
+  if (OPENCLAW_CONNECTION_MODE === 'gateway') {
+    let snapshot;
+    try {
+      snapshot = await configuredAgentsFromGateway();
+    } catch {
+      snapshot = openClawGatewayCache?.value;
+    }
+    return snapshot?.gatewayCron || {
+      source: 'gateway-unavailable',
+      cronDir: null,
+      dbPath: null,
+      jobs: [],
+      byId: new Map()
+    };
+  }
   const dbJobs = await readCronJobsFromDb();
   if (dbJobs) {
     return {
@@ -1283,6 +1338,26 @@ async function cronJobRuns(jobId, limit = 24) {
     const error = new Error('Invalid cron job id');
     error.status = 400;
     throw error;
+  }
+  if (OPENCLAW_CONNECTION_MODE === 'none') {
+    const error = new Error('OpenClaw integration is disabled');
+    error.status = 404;
+    throw error;
+  }
+  if (OPENCLAW_CONNECTION_MODE === 'gateway') {
+    const payload = await fetchOpenClawCronRuns({
+      id: safeId,
+      limit,
+      baseUrl: OPENCLAW_GATEWAY_URL,
+      token: OPENCLAW_GATEWAY_TOKEN,
+      password: OPENCLAW_GATEWAY_PASSWORD,
+      timeoutMs: OPENCLAW_GATEWAY_TIMEOUT_MS
+    });
+    return {
+      ...payload,
+      source: 'gateway',
+      runs: payload.runs.map((run) => normalizeCronRunFromDbRow(run, safeId))
+    };
   }
   const dbRuns = await cronJobRunsFromDb(safeId, limit);
   if (dbRuns) return dbRuns;
@@ -1590,6 +1665,51 @@ async function configuredAgents() {
   const envAgents = configuredAgentsFromEnv();
   if (envAgents.length) return { agents: envAgents, source: 'env', configLoaded: false, logFiles: 0, weeklyCost: null };
 
+  if (OPENCLAW_CONNECTION_MODE === 'none') {
+    return {
+      agents: [],
+      source: 'none',
+      configLoaded: false,
+      logFiles: 0,
+      sessionStores: 0,
+      emptySessionStores: 0,
+      sessionDebug: [],
+      latestSessions: [],
+      sessionGroupedCounts: {},
+      weeklyCost: null
+    };
+  }
+
+  if (OPENCLAW_CONNECTION_MODE === 'gateway') {
+    try {
+      const snapshot = await configuredAgentsFromGateway();
+      openClawGatewayLastWarning = '';
+      return snapshot;
+    } catch (error) {
+      const openClawWarning = openClawGatewayWarning(error);
+      if (openClawWarning.message !== openClawGatewayLastWarning) {
+        console.warn(`OpenClaw gateway: ${openClawWarning.message}`);
+        openClawGatewayLastWarning = openClawWarning.message;
+      }
+      const stale = openClawGatewayCache?.value;
+      return {
+        ...(stale || {
+          agents: [],
+          configLoaded: false,
+          logFiles: 0,
+          sessionStores: 0,
+          emptySessionStores: 0,
+          sessionDebug: [],
+          latestSessions: [],
+          sessionGroupedCounts: {},
+          weeklyCost: null
+        }),
+        source: stale ? 'gateway-stale' : 'gateway-unavailable',
+        openClawWarning
+      };
+    }
+  }
+
   const config = await readJsonIfPresent(OPENCLAW_CONFIG_PATH);
   const listedAgents = config ? agentsFromConfiguredList(config) : [];
   const configAgents = config ? (listedAgents.length ? listedAgents : collectConfigAgents(config, [], new WeakSet(), '', '', configDefaultWorkspace(config))).slice(0, 24) : [];
@@ -1618,6 +1738,105 @@ async function configuredAgents() {
     sessionGroupedCounts: sessions.groupedCounts,
     weeklyCost: sessions.weeklyCost
   };
+}
+
+function openClawGatewayWarning(error) {
+  const pairingRequired = Boolean(error?.pairingRequired);
+  const requestId = cleanRuntimeText(error?.requestId, 160);
+  const approvalCommand = pairingRequired && requestId ? `openclaw devices approve ${requestId}` : '';
+  return {
+    code: pairingRequired ? 'pairing_required' : 'unavailable',
+    message: cleanRuntimeText(error?.message, 500) || (pairingRequired
+      ? 'Taskfolk is waiting for OpenClaw device approval.'
+      : 'Taskfolk cannot currently connect to the OpenClaw gateway. Other features remain available.'),
+    pairingRequired,
+    requestId,
+    approvalCommand,
+    gatewayCode: cleanRuntimeText(error?.gatewayCode, 80),
+    detailsCode: cleanRuntimeText(error?.detailsCode, 120)
+  };
+}
+
+async function configuredAgentsFromGateway() {
+  const nowMs = Date.now();
+  if (openClawGatewayCache && openClawGatewayCache.expiresAt > nowMs) return openClawGatewayCache.value;
+  if (openClawGatewayRequest) return openClawGatewayRequest;
+
+  openClawGatewayRequest = fetchOpenClawSnapshot({
+    baseUrl: OPENCLAW_GATEWAY_URL,
+    token: OPENCLAW_GATEWAY_TOKEN,
+    password: OPENCLAW_GATEWAY_PASSWORD,
+    timeoutMs: OPENCLAW_GATEWAY_TIMEOUT_MS
+  }).then((snapshot) => {
+    const cronJobs = snapshot.cronJobs
+      .filter((job) => job && typeof job === 'object' && job.id)
+      .map((job) => normalizeCronJob(job, { updatedAtMs: job.updatedAtMs, state: job.state }))
+      .sort((a, b) => Math.max(b.lastRunAtMs || 0, b.nextRunAtMs || 0, b.createdAtMs || 0, b.updatedAtMs || 0)
+        - Math.max(a.lastRunAtMs || 0, a.nextRunAtMs || 0, a.createdAtMs || 0, a.updatedAtMs || 0));
+    const cronById = new Map(cronJobs.map((job) => [job.id, job]));
+    const latestSessions = [];
+    const sessionGroupedCounts = {};
+    const weeklySinceMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const weeklyCost = { sinceMs: weeklySinceMs, estimatedCostUsd: 0, sessionCount: 0, totalTokens: 0 };
+    for (const entry of snapshot.sessions) {
+      if (!entry || typeof entry !== 'object') continue;
+      const key = String(entry.key || entry.sessionKey || entry.sessionId || '');
+      const agentId = String(entry.agentId || entry.agent_id || agentIdFromSessionKey(key) || '').trim();
+      const timestampInfo = sessionTimestampInfo(entry, 0);
+      const ts = timestampInfo.ms;
+      const badge = sessionChannelBadge(key, entry);
+      const cronSession = cronSessionLabel(key, cronById);
+      sessionGroupedCounts[badge] = (sessionGroupedCounts[badge] || 0) + 1;
+      if (ts >= weeklySinceMs) {
+        weeklyCost.estimatedCostUsd += Number.isFinite(Number(entry.estimatedCostUsd)) ? Number(entry.estimatedCostUsd) : 0;
+        weeklyCost.totalTokens += Number.isFinite(Number(entry.totalTokens)) ? Number(entry.totalTokens) : 0;
+        weeklyCost.sessionCount += 1;
+      }
+      latestSessions.push({
+        agentId,
+        key,
+        shortKey: sessionShortKey(key),
+        displayKey: cronSession?.label || sessionShortKey(key),
+        cronJobId: cronSession?.id || null,
+        cronJobName: cronSession?.name || null,
+        channelBadge: badge,
+        model: entry.model || entry.modelOverride || entry.modelProvider || entry.providerOverride || entry.provider || null,
+        status: entry.status || entry.state || null,
+        derivedStatus: statusFromSessionEntry(entry, ts),
+        timestampMs: ts,
+        timestamp: ts ? new Date(ts).toISOString() : null,
+        timestampSource: timestampInfo.source,
+        timestampUsedFileMtime: false,
+        file: null
+      });
+    }
+    latestSessions.sort((a, b) => (b.timestampMs || 0) - (a.timestampMs || 0));
+    const value = {
+      agents: snapshot.agents.map((agent, index) => normalizeAgent(agent, index)),
+      source: 'gateway',
+      configLoaded: Boolean(snapshot.config),
+      logFiles: 0,
+      sessionStores: 0,
+      emptySessionStores: 0,
+      sessionDebug: [],
+      latestSessions: latestSessions.slice(0, 50),
+      sessionGroupedCounts,
+      weeklyCost,
+      openClawConfig: snapshot.config,
+      gatewayCron: {
+        source: 'gateway',
+        cronDir: null,
+        dbPath: null,
+        jobs: cronJobs,
+        byId: cronById
+      }
+    };
+    openClawGatewayCache = { value, expiresAt: Date.now() + Math.max(0, OPENCLAW_GATEWAY_CACHE_MS) };
+    return value;
+  }).finally(() => {
+    openClawGatewayRequest = null;
+  });
+  return openClawGatewayRequest;
 }
 
 
@@ -2015,11 +2234,13 @@ app.put('/api/office-fixture', async (req, res, next) => {
 app.get('/api/agents', async (req, res, next) => {
   try {
     res.set('Cache-Control', 'no-store, max-age=0');
-    const { agents, source, configLoaded, logFiles, sessionStores, emptySessionStores, sessionDebug, latestSessions, sessionGroupedCounts, weeklyCost } = await configuredAgents();
+    const { agents, source, configLoaded, logFiles, sessionStores, emptySessionStores, sessionDebug, latestSessions, sessionGroupedCounts, weeklyCost, openClawWarning, openClawConfig: gatewayOpenClawConfig } = await configuredAgents();
     const cron = await cronJobsSnapshot();
     const avatarConfig = await readAvatarConfig();
     const stateFile = await readAgentState();
-    const openClawConfig = await readJsonIfPresent(OPENCLAW_CONFIG_PATH);
+    const openClawConfig = OPENCLAW_CONNECTION_MODE === 'gateway'
+      ? gatewayOpenClawConfig
+      : OPENCLAW_CONNECTION_MODE === 'files' ? await readJsonIfPresent(OPENCLAW_CONFIG_PATH) : null;
     const officeScene = normalizeOfficeScene(openClawConfig);
     for (const key of avatarConfig.officeSceneKeys) officeScene[key] = avatarConfig.officeScene[key];
     const avatarAssignments = avatarConfig.assignments;
@@ -2063,12 +2284,17 @@ app.get('/api/agents', async (req, res, next) => {
     res.json({
       generatedAt: new Date().toISOString(),
       source: runtimeAgents.length ? (source === 'sample' ? 'runtime' : `${source}+runtime`) : source,
+      openClawConnection: {
+        mode: OPENCLAW_CONNECTION_MODE,
+        ...(OPENCLAW_CONNECTION_MODE === 'gateway' ? { gatewayUrl: OPENCLAW_GATEWAY_URL } : {})
+      },
+      openClawWarning: openClawWarning || null,
       configLoaded,
-      logDir: OPENCLAW_LOG_DIR,
-      configPath: OPENCLAW_CONFIG_PATH,
-      sessionsDir: OPENCLAW_SESSIONS_DIR,
-      cronDir: OPENCLAW_CRON_DIR,
-      cronDbPath: OPENCLAW_STATE_DB_PATH,
+      logDir: OPENCLAW_CONNECTION_MODE === 'files' ? OPENCLAW_LOG_DIR : null,
+      configPath: OPENCLAW_CONNECTION_MODE === 'files' ? OPENCLAW_CONFIG_PATH : null,
+      sessionsDir: OPENCLAW_CONNECTION_MODE === 'files' ? OPENCLAW_SESSIONS_DIR : null,
+      cronDir: OPENCLAW_CONNECTION_MODE === 'files' ? OPENCLAW_CRON_DIR : null,
+      cronDbPath: OPENCLAW_CONNECTION_MODE === 'files' ? OPENCLAW_STATE_DB_PATH : null,
       logFiles,
       sessionStores: sessionStores || 0,
       emptySessionStores: emptySessionStores || 0,

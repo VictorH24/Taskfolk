@@ -218,7 +218,17 @@ use Developer ID signing and Apple notarization instead.
 
 ## Run in docker
 
+```bash
 docker compose up -d --build
+```
+
+The folder-view module is disabled by default and the base Compose file does not mount host workspaces. To enable it, use the dedicated override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.FolderModule.yml up -d --build
+```
+
+The override sets `FOLDER_VIEW_ENABLED=true` and mounts the configured OpenClaw and development workspaces under `/shared`. Edit its host paths to choose which folders Taskfolk can access. For a non-Compose server launch, set `FOLDER_VIEW_ENABLED=true` directly in the environment.
 
 ## Gateway login
 
@@ -245,19 +255,50 @@ GATEWAY_AUTH_PASSWORD=optional-password
 GATEWAY_AUTH_SECURE_COOKIE=false
 ```
 
-Docker Compose reads that `.env` file for the `${GATEWAY_AUTH_*}` substitutions in `docker-compose.yml`, and the service maps them into Taskfolk auth. Env values take precedence over `gateway.auth.*` in the mounted `openclaw.json`, so you can keep secrets outside the config file.
+Docker Compose reads that `.env` file for the `${GATEWAY_AUTH_*}` substitutions in `docker-compose.yml`, and the service maps them into Taskfolk auth. In gateway mode these environment variables are the Taskfolk web-login source, so an OpenClaw config mount is not required. In files mode, env values take precedence over `gateway.auth.*` in the mounted `openclaw.json`.
 
 Leave `GATEWAY_AUTH_SECURE_COOKIE=false` for local plain-HTTP access such as `http://127.0.0.1:3000`. Set it to `true` only when the page is served over HTTPS.
 
 ## Agent data
 
-The dashboard reads OpenClaw data from the mounted runtime paths:
+The standalone server supports three OpenClaw connection modes. Select one with `OPENCLAW_CONNECTION_MODE`:
+
+- `none` (default) disables OpenClaw discovery. Taskfolk can still show manual agents and other runtime integrations.
+- `files` reads OpenClaw data from the mounted runtime paths listed below.
+- `gateway` connects to `OPENCLAW_GATEWAY_URL` and requests configured agents, safe session metadata, configuration, cron jobs, and cron run history from read-only gateway RPCs.
+
+An unset or empty `OPENCLAW_CONNECTION_MODE` is treated as `none`. The supplied `docker-compose.yml` therefore starts with OpenClaw disabled unless you explicitly select a connection mode. It does not mount OpenClaw's logs, config, state database, cron directory, agent session stores, or workspaces. Only Taskfolk's own `./config` directory is mounted by default.
+
+For example, add these values to the Compose project's `.env` file:
+
+```dotenv
+OPENCLAW_CONNECTION_MODE=gateway
+OPENCLAW_GATEWAY_URL=127.0.0.1:18789
+OPENCLAW_GATEWAY_TOKEN=optional-openclaw-token
+OPENCLAW_GATEWAY_PASSWORD=optional-openclaw-password
+```
+
+Then start Taskfolk with the provided gateway override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gateway.yml up -d --build
+```
+
+The URL may omit the scheme (as above), in which case `ws://` is used. From a Docker container, `127.0.0.1` refers to the container itself; use host networking or a host-reachable name such as `host.docker.internal` when OpenClaw runs on the Docker host.
+
+To use the legacy file reader instead, add the provided Compose override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.files.yml up -d
+```
+
+In `files` mode, the dashboard reads OpenClaw data from these mounted runtime paths:
 
 - `OPENCLAW_CONFIG_PATH` — defaults to `/config/openclaw.json`
 - `OPENCLAW_LOG_DIR` — defaults to `/tmp/openclaw`
 - `OPENCLAW_SESSIONS_DIR` — defaults to `/openclaw-agents`
 
-It reads configured agents from `openclaw.json`, then overlays safe session metadata from mounted OpenClaw `sessions.json` files and recent gateway logs. Session stores are expected at paths like `/openclaw-agents/<agentId>/sessions/sessions.json`; transcript `.jsonl` files are not required. Recent errors mark an agent as blocked.
+It reads configured agents from `openclaw.json`, then overlays safe session metadata from mounted OpenClaw `sessions.json` files. Session stores are expected at paths like `/openclaw-agents/<agentId>/sessions/sessions.json`; transcript `.jsonl` files are not required. Recent session failures mark an agent as blocked.
 
 For local demos or overrides, set `OPENCLAW_AGENTS_JSON` to an array:
 

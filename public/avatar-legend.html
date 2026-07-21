@@ -15,20 +15,21 @@
       <p>Configure avatars, office scene options, and test the pixel office before wiring live agents.</p>
     </div>
     <div class="headerActions">
-      <a id="folderViewNavBtn" class="secondary button" href="./index.html?view=files" data-hide-in-desktop-config>Folder view</a>
+      <a id="folderViewNavBtn" class="secondary button hidden" href="./index.html?view=files" data-hide-in-desktop-config>Folder view</a>
       <a class="secondary button" href="./office-test.html" data-hide-in-desktop-config>Office simulator</a>
       <a class="secondary button" href="./index.html" data-hide-in-desktop-config>Agent View</a>
       <button id="logoutBtn" class="secondary hidden" type="button" data-hide-in-desktop-config>Log out</button>
     </div>
   </header>
+  <section class="integrationWarnings hidden" id="integrationWarnings" aria-live="polite"></section>
   <section class="legendControls moduleControls" aria-label="Module controls">
       <div>
         <span class="eyebrow">Modules</span>
         <h3>Optional Features</h3>
       </div>
       <div class="moduleToggle">
-        <span id="folderViewModuleStatus">Folder view enabled</span>
-        <button id="folderViewModuleToggleBtn" class="secondary" type="button" aria-pressed="true">Enabled</button>
+        <span id="folderViewModuleStatus">Folder view disabled</span>
+        <button id="folderViewModuleToggleBtn" class="secondary" type="button" aria-pressed="false">Disabled</button>
       </div>
     </section>
   <main class="legendPage">

@@ -1,0 +1,16 @@
+services:
+  taskfolk:
+    environment:
+      FOLDER_VIEW_ENABLED: "true"
+    volumes:
+      # Agent workspaces used by the folder view module.
+      - ~/.openclaw/workspace:/shared/workspace
+      - ~/.openclaw/workspace-coder:/shared/workspace-coder
+      - ~/.openclaw/workspace-hr:/shared/workspace-hr
+      - ~/.openclaw/workspace-engineer:/shared/workspace-engineer
+      - ~/.openclaw/workspace-researcher:/shared/workspace-researcher
+      - ~/.openclaw/workspace-legal:/shared/workspace-legal
+      - ~/.openclaw/workspace-rogueworker:/shared/workspace-rogueworker
+      # Additional shared folders. Change the host paths to the folders you want to expose.
+      - ~/DEV:/shared/workspace/DEV
+      - ~/DEV:/shared/workspace-coder/DEV

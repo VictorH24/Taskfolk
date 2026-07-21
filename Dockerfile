@@ -1,4 +1,4 @@
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 
 ENV NODE_ENV=production \
     PORT=3000 \
@@ -11,6 +11,7 @@ RUN apk add --no-cache sqlite
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY server.js ./
+COPY desktop/providers/openclaw.cjs ./desktop/providers/openclaw.cjs
 COPY public ./public
 
 RUN mkdir -p /shared \

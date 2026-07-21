@@ -1,0 +1,17 @@
+services:
+  taskfolk:
+    #you can comment out the ports and network_mode below to run the taskfolk container in its own network namespace. 
+    #or you can use an existing container's network namespace by specifying the container name instead of "ts-openclaw".
+    #if you do this, you will need to set the OPENCLAW_GATEWAY_URL environment variable to the correct URL for the OpenClaw gateway.
+    #and make sure to expose the taskfolk port (3000) in the container owning the network.
+    ports: !reset  
+    network_mode: "container:ts-openclaw"
+    environment:
+      # OpenClaw connection mode:
+      # "none" disables OpenClaw; "files" reads mounted data; "gateway" uses the URL below.
+      #OPENCLAW_CONNECTION_MODE: ${OPENCLAW_CONNECTION_MODE:-none}
+      #OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-}
+      OPENCLAW_CONNECTION_MODE: gateway
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-127.0.0.1:18789}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_GATEWAY_PASSWORD: ${OPENCLAW_GATEWAY_PASSWORD:-}

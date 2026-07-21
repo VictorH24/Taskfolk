@@ -6,15 +6,16 @@ const OPENCLAW_PROTOCOL_VERSION = 4;
 const OPENCLAW_REQUEST_TIMEOUT_MS = 8_000;
 
 function normalizeOpenClawUrl(value) {
-  const url = new URL(String(value || DEFAULT_OPENCLAW_URL).trim());
+  const input = String(value || DEFAULT_OPENCLAW_URL).trim();
+  const url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(input) ? input : `ws://${input}`);
   if (url.protocol === 'http:') url.protocol = 'ws:';
   if (url.protocol === 'https:') url.protocol = 'wss:';
   if (!['ws:', 'wss:'].includes(url.protocol)) {
     throw new Error('The OpenClaw gateway URL must use ws://, wss://, http://, or https://.');
   }
   const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (url.protocol === 'ws:' && !isLoopbackHost(hostname) && !isTailscaleIpv4(hostname) && !isTailscaleIpv6(hostname)) {
-    throw new Error('Remote OpenClaw gateways must use wss://. Plain ws:// is allowed only for loopback and Tailscale 100.64.0.0/10 addresses.');
+  if (url.protocol === 'ws:' && !isLoopbackHost(hostname) && !isDockerHost(hostname) && !isTailscaleIpv4(hostname) && !isTailscaleIpv6(hostname)) {
+    throw new Error('Remote OpenClaw gateways must use wss://. Plain ws:// is allowed only for loopback, host.docker.internal, and Tailscale addresses.');
   }
   url.username = '';
   url.password = '';
@@ -29,6 +30,10 @@ function isLoopbackHost(hostname) {
   const octets = hostname.split('.').map(Number);
   return octets.length === 4 && octets[0] === 127
     && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255);
+}
+
+function isDockerHost(hostname) {
+  return hostname === 'host.docker.internal';
 }
 
 function isTailscaleIpv4(hostname) {
@@ -366,11 +371,88 @@ async function fetchOpenClawAgents({
   return normalizeOpenClawAgents(payloads.agents, payloads.sessions, { now });
 }
 
+async function fetchOpenClawSnapshot({
+  baseUrl = DEFAULT_OPENCLAW_URL,
+  token = '',
+  deviceToken = '',
+  password = '',
+  deviceIdentity,
+  onDeviceToken,
+  rpcImpl = gatewayRpcBatch,
+  WebSocketImpl,
+  timeoutMs,
+  now = Date.now
+} = {}) {
+  const payloads = await rpcImpl({
+    baseUrl,
+    token,
+    deviceToken,
+    password,
+    deviceIdentity,
+    onDeviceToken,
+    WebSocketImpl,
+    timeoutMs,
+    requests: [
+      { key: 'agents', method: 'agents.list', params: {} },
+      {
+        key: 'sessions',
+        method: 'sessions.list',
+        params: { limit: DEFAULT_MAX_SESSIONS, configuredAgentsOnly: true, includeDerivedTitles: true }
+      },
+      { key: 'config', method: 'config.get', params: {} },
+      { key: 'cron', method: 'cron.list', params: { includeDisabled: true, limit: 200 } }
+    ]
+  });
+  return {
+    agents: normalizeOpenClawAgents(payloads.agents, payloads.sessions, { now }),
+    sessions: sessionRows(payloads.sessions),
+    config: payloads.config?.config || payloads.config?.value || payloads.config || null,
+    cronJobs: Array.isArray(payloads.cron?.jobs) ? payloads.cron.jobs : []
+  };
+}
+
+async function fetchOpenClawCronRuns({
+  id,
+  limit = 24,
+  baseUrl = DEFAULT_OPENCLAW_URL,
+  token = '',
+  deviceToken = '',
+  password = '',
+  deviceIdentity,
+  onDeviceToken,
+  rpcImpl = gatewayRpcBatch,
+  WebSocketImpl,
+  timeoutMs
+} = {}) {
+  const jobId = String(id || '').trim();
+  if (!jobId) throw new Error('An OpenClaw cron job id is required.');
+  const rowLimit = Math.max(1, Math.min(Number(limit) || 24, 100));
+  const payloads = await rpcImpl({
+    baseUrl,
+    token,
+    deviceToken,
+    password,
+    deviceIdentity,
+    onDeviceToken,
+    WebSocketImpl,
+    timeoutMs,
+    requests: [{ key: 'runs', method: 'cron.runs', params: { id: jobId, limit: rowLimit } }]
+  });
+  const payload = payloads.runs && typeof payloads.runs === 'object' ? payloads.runs : {};
+  return {
+    ...payload,
+    jobId,
+    runs: Array.isArray(payload.runs) ? payload.runs : Array.isArray(payload.entries) ? payload.entries : []
+  };
+}
+
 module.exports = {
   DEFAULT_OPENCLAW_URL,
   buildDeviceAuthPayload,
   createOpenClawDeviceIdentity,
   fetchOpenClawAgents,
+  fetchOpenClawCronRuns,
+  fetchOpenClawSnapshot,
   gatewayRpcBatch,
   normalizeOpenClawAgents,
   normalizeOpenClawUrl,

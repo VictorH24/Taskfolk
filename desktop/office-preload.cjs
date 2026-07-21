@@ -127,9 +127,18 @@ window.addEventListener('DOMContentLoaded', () => {
   observer.observe(document.body, { childList: true, subtree: true });
 
   if (avatarMode) {
-    const unavailableStateObserver = new MutationObserver(() => {
-      if (document.querySelector('.companionAvatarEmpty.agentLoadFailure')) setMouseIgnore(false);
-    });
+    const keepUnavailableStateInteractive = () => {
+      // Avatar windows normally click through their transparent background.
+      // After system sleep, Chromium may stop forwarding the mousemove that
+      // would otherwise make a newly rendered recovery button clickable. Keep
+      // the native window interactive for every loading/error state instead of
+      // relying on pointer forwarding to recover it.
+      if (document.querySelector('.companionAvatarEmpty, .agentDiscoveryLoading, .emptyOffice')) {
+        setMouseIgnore(false);
+      }
+    };
+    keepUnavailableStateInteractive();
+    const unavailableStateObserver = new MutationObserver(keepUnavailableStateInteractive);
     unavailableStateObserver.observe(document.body, { childList: true, subtree: true });
   }
 });

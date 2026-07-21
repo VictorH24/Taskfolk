@@ -63,6 +63,7 @@ const GEMINI_REFRESH_MS = 5_000;
 const ANTIGRAVITY_REFRESH_MS = 5_000;
 const OPENCLAW_REFRESH_MS = 5_000;
 const LOCAL_SERVER_START_TIMEOUT_MS = 12_000;
+const CONNECTOR_STARTUP_GRACE_MS = 1_500;
 const SYSTEM_SLEEP_GAP_MS = 20_000;
 
 app.setName('Taskfolk');
@@ -533,10 +534,16 @@ function setAlwaysOnTop(enabled) {
 }
 
 function ensureDockHidden(retriesRemaining = 2) {
-  if (process.platform !== 'darwin' || !app.dock || dockHideRetryTimer
-    || !app.dock.isVisible()) return;
-  app.dock.hide();
-  if (retriesRemaining <= 0) return;
+  if (process.platform !== 'darwin' || !app.dock) return;
+  // Showing an NSWindow can promote the development Electron bundle on the
+  // next native event-loop turn. Reassert accessory mode even when the Dock is
+  // currently hidden, then keep checking after the window has been shown.
+  for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(true);
+  app.setActivationPolicy('accessory');
+  macDockMode = 'accessory';
+  if (app.dock.isVisible()) app.dock.hide();
+  // Keep the existing retry schedule instead of creating overlapping timers.
+  if (dockHideRetryTimer || retriesRemaining <= 0) return;
   dockHideRetryTimer = setTimeout(() => {
     dockHideRetryTimer = null;
     if (!readConfig().hideDockIcon || !tray || tray.isDestroyed()) return;
@@ -554,14 +561,8 @@ function applyDockVisibility(config = readConfig()) {
     // Never remove the Dock entry unless the menu-bar fallback was created.
     // This keeps Setup and Quit reachable if macOS rejects the status image.
     if (tray) {
-      if (macDockMode !== 'accessory') {
-        // dock.hide() can be ignored when macOS receives repeated Dock changes
-        // in quick succession. Accessory activation policy is the authoritative
-        // menu-bar-only mode; hide() remains as a compatibility fallback.
-        for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(true);
-        app.setActivationPolicy('accessory');
-        macDockMode = 'accessory';
-      }
+      // Accessory activation policy is the authoritative menu-bar-only mode;
+      // hide() remains as a compatibility fallback.
       ensureDockHidden();
     } else app.dock.show().catch(() => {});
     return;
@@ -736,15 +737,23 @@ async function fetchAvailableAgents(baseUrl, ses) {
   }
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function savedAvatarAgentIsUnavailable(config, agents = availableAgents) {
+  return displayMode(config) === 'avatar'
+    && config.selectedAgent !== MOST_RECENT_AGENT_ID
+    && !agents.some((agent) => agent.id === config.selectedAgent);
+}
+
 async function refreshAvailableAgents() {
   if (!activeBaseUrl) return;
   const ses = session.fromPartition(PARTITION, { cache: true });
   availableAgents = await fetchAvailableAgents(activeBaseUrl, ses);
 
   let config = readConfig();
-  const selectedAgentUnavailable = displayMode(config) === 'avatar'
-    && config.selectedAgent !== MOST_RECENT_AGENT_ID
-    && !availableAgents.some((agent) => agent.id === config.selectedAgent);
+  const selectedAgentUnavailable = savedAvatarAgentIsUnavailable(config);
   if (selectedAgentUnavailable) {
     config = { ...config, selectedAgent: availableAgents[0]?.id || '' };
     writeConfig(config);
@@ -1223,6 +1232,16 @@ function startOpenClawAdapter() {
   void syncOpenClawAdapter();
 }
 
+function startRuntimeAdapters() {
+  startOpenCodeAdapter();
+  startVsCodeCopilotAdapter();
+  startCodexAdapter();
+  startClaudeAdapter();
+  startGeminiAdapter();
+  startAntigravityAdapter();
+  startOpenClawAdapter();
+}
+
 function restartRuntimeAdaptersAfterWake() {
   if (!activeBaseUrl) return;
   runtimeSyncGeneration += 1;
@@ -1595,7 +1614,10 @@ async function createAdditionalCompanionWindow(agentId, options = {}) {
     companionWindows.delete(targetWindow);
     rebuildMenus();
   });
-  targetWindow.once('ready-to-show', () => targetWindow.show());
+  targetWindow.once('ready-to-show', () => {
+    targetWindow.show();
+    applyDockVisibility();
+  });
   targetWindow.setOpacity(normalizedOpacity(config.opacity));
   try {
     await targetWindow.loadURL(companionUrl(activeBaseUrl, config, agentId));
@@ -1631,10 +1653,15 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   let config = readConfig();
   const ses = session.fromPartition(PARTITION, { cache: true });
   if (!authenticated) await authenticate(normalizedUrl, credentials, ses);
+  startRuntimeAdapters();
   availableAgents = await fetchAvailableAgents(normalizedUrl, ses);
-  if (displayMode(config) === 'avatar'
-    && config.selectedAgent !== MOST_RECENT_AGENT_ID
-    && !availableAgents.some((agent) => agent.id === config.selectedAgent)) {
+  // A connector may still be publishing its first snapshot. Give it one short
+  // retry before replacing the persisted single-avatar selection.
+  if (savedAvatarAgentIsUnavailable(config)) {
+    await wait(CONNECTOR_STARTUP_GRACE_MS);
+    availableAgents = await fetchAvailableAgents(normalizedUrl, ses);
+  }
+  if (savedAvatarAgentIsUnavailable(config)) {
     config = { ...config, selectedAgent: availableAgents[0]?.id || '' };
     writeConfig(config);
   }
@@ -1663,19 +1690,15 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
     if (officeWindow === primaryWindow) officeWindow = null;
     rebuildMenus();
   });
-  primaryWindow.once('ready-to-show', () => primaryWindow.show());
+  primaryWindow.once('ready-to-show', () => {
+    primaryWindow.show();
+    applyDockVisibility();
+  });
   primaryWindow.setOpacity(normalizedOpacity(config.opacity));
 
   await primaryWindow.loadURL(companionUrl(normalizedUrl, config));
   await restoreAdditionalCompanionWindows(config);
   applyDockVisibility(config);
-  startOpenCodeAdapter();
-  startVsCodeCopilotAdapter();
-  startCodexAdapter();
-  startClaudeAdapter();
-  startGeminiAdapter();
-  startAntigravityAdapter();
-  startOpenClawAdapter();
   settingsWindow?.close();
   rebuildMenus();
 }

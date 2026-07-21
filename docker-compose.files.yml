@@ -1,0 +1,21 @@
+services:
+  taskfolk:
+    environment:
+      OPENCLAW_CONNECTION_MODE: files
+    volumes:
+      # OpenClaw runtime mounts are only needed when using files mode.
+      - ~/dockerclaw/tmp_logs:/tmp/openclaw:ro
+      - ~/.openclaw/openclaw.json:/config/openclaw.json:ro
+      - ~/.openclaw/state/:/config/state/:ro
+      - ~/.openclaw/cron/:/config/cron/:ro
+      - ~/.openclaw/agents:/openclaw-agents:ro
+      # agents sessions
+      # - ~/.openclaw/agents:/openclaw-agents:ro
+      # you can limit to the sessions folder of the agents you want to use, for example:
+      - ~/.openclaw/agents/main/sessions:/openclaw-agents/main/sessions:ro
+      - ~/.openclaw/agents/coder/sessions:/openclaw-agents/coder/sessions:ro
+      - ~/.openclaw/agents/hr/sessions:/openclaw-agents/hr/sessions:ro
+      - ~/.openclaw/agents/engineer/sessions:/openclaw-agents/engineer/sessions:ro
+      - ~/.openclaw/agents/researcher/sessions:/openclaw-agents/researcher/sessions:ro
+      - ~/.openclaw/agents/legal/sessions:/openclaw-agents/legal/sessions:ro
+      - ~/.openclaw/agents/rogueworker/sessions:/openclaw-agents/rogueworker/sessions:ro

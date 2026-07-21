@@ -12,6 +12,7 @@ const agentApiCurl = document.querySelector('#agentApiCurl');
 const folderViewNavBtn = document.querySelector('#folderViewNavBtn');
 const folderViewModuleToggleBtn = document.querySelector('#folderViewModuleToggleBtn');
 const folderViewModuleStatus = document.querySelector('#folderViewModuleStatus');
+const integrationWarnings = document.querySelector('#integrationWarnings');
 
 const isDesktopConfig = new URLSearchParams(window.location.search).get('app') === 'desktop';
 document.body.classList.toggle('desktopConfig', isDesktopConfig);
@@ -67,7 +68,7 @@ let assignments = {};
 let customNames = {};
 let hiddenAgents = [];
 let manualAgents = [];
-let modules = { folderView: { enabled: true } };
+let modules = { folderView: { enabled: false } };
 let officeScene = { floor: 'wood', windowView: 'sf', poster: 0, emptyDesks: 0 };
 let savingAssignments = false;
 
@@ -90,6 +91,23 @@ function esc(value) {
     "'": '&#39;',
     '"': '&quot;'
   }[char]));
+}
+
+function renderIntegrationWarning(warning) {
+  if (!warning) {
+    integrationWarnings.classList.add('hidden');
+    integrationWarnings.innerHTML = '';
+    return;
+  }
+  const pairing = warning.code === 'pairing_required' || warning.pairingRequired;
+  const title = pairing ? 'OpenClaw approval required' : 'OpenClaw is unavailable';
+  const command = warning.approvalCommand ? `<code>${esc(warning.approvalCommand)}</code>` : '';
+  integrationWarnings.classList.remove('hidden');
+  integrationWarnings.innerHTML = `
+    <div class="integrationWarning ${pairing ? 'pairing' : ''}" role="status">
+      <div><strong>${title}</strong><span>${esc(warning.message || 'Other Taskfolk features remain available.')}</span></div>
+      ${command}
+    </div>`;
 }
 
 async function api(path, options = {}) {
@@ -314,7 +332,7 @@ function normalizeModules(value = {}) {
   const hasFolderViewEnabled = Object.prototype.hasOwnProperty.call(value.folderView || {}, 'enabled');
   return {
     folderView: {
-      enabled: hasFolderViewEnabled ? value.folderView.enabled !== false : true
+      enabled: hasFolderViewEnabled ? value.folderView.enabled !== false : false
     }
   };
 }
@@ -436,6 +454,7 @@ async function loadAssignments() {
       api(`/api/avatar-assignments?t=${Date.now()}`)
     ]);
     setAvatarVariantRegistry(assignmentData.avatarVariants);
+    renderIntegrationWarning(agentData.openClawWarning);
     assignments = assignmentData.assignments || {};
     customNames = assignmentData.customNames || {};
     hiddenAgents = Array.isArray(assignmentData.hiddenAgents) ? assignmentData.hiddenAgents : [];
