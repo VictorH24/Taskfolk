@@ -8,7 +8,8 @@ Taskfolk is a desktop companion that turns your AI coding sessions into a live p
 
 | Live pixel office | Multiple desktop avatars |
 | :---: | :---: |
-| ![Taskfolk desktop companion showing live agents in a pixel office](docs/taskfolk_day.gif) | ![Taskfolk desktop companion showing four live agents on the desktop](docs/taskfolk-multiple-avatars2.png) |
+| ![Taskfolk desktop companion showing live agents in a pixel office](docs/taskfolk_officeview.png) | ![Taskfolk desktop companion showing four live agents on the desktop](docs/taskfolk-multiple-avatars2.png) |
+| ![Taskfolk desktop companion showing live agents in a pixel office](docs/taskfolk_day.gif) | ![Taskfolk desktop companion showing four live agents on the desktop](docs/taskfolk_night.gif) |
 
 ## Start the companion app
 
