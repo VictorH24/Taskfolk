@@ -36,6 +36,20 @@ const {
   fetchAntigravityAgents,
   normalizeAntigravityGrouping
 } = require('./providers/antigravity.cjs');
+const {
+  DEFAULT_OLLAMA_URL,
+  fetchOllamaAgents,
+  normalizeOllamaGrouping,
+  normalizeOllamaUrl
+} = require('./providers/ollama.cjs');
+const { fetchOllamaDesktopAgents } = require('./providers/ollama-desktop.cjs');
+const {
+  DEFAULT_LM_STUDIO_URL,
+  fetchLmStudioAgents,
+  normalizeLmStudioGrouping,
+  normalizeLmStudioUrl
+} = require('./providers/lmstudio.cjs');
+const { fetchLmStudioDesktopAgents } = require('./providers/lmstudio-desktop.cjs');
 const { isLocalServerPortConflict, normalizeLocalServerPort } = require('./local-server.cjs');
 const { normalizeAdditionalFolks } = require('./companion-state.cjs');
 
@@ -61,7 +75,13 @@ const CODEX_REFRESH_MS = 5_000;
 const CLAUDE_REFRESH_MS = 5_000;
 const GEMINI_REFRESH_MS = 5_000;
 const ANTIGRAVITY_REFRESH_MS = 5_000;
+const OLLAMA_REFRESH_MS = 5_000;
+const OLLAMA_REQUEST_TIMEOUT_MS = 2_500;
+const LM_STUDIO_REFRESH_MS = 5_000;
+const LM_STUDIO_REQUEST_TIMEOUT_MS = 2_500;
 const OPENCLAW_REFRESH_MS = 5_000;
+const AGENT_SNAPSHOT_REFRESH_MS = 8_000;
+const AGENT_SNAPSHOT_REQUEST_TIMEOUT_MS = 12_000;
 const LOCAL_SERVER_START_TIMEOUT_MS = 12_000;
 const CONNECTOR_STARTUP_GRACE_MS = 1_500;
 const SYSTEM_SLEEP_GAP_MS = 20_000;
@@ -118,9 +138,24 @@ let antigravityTimer = null;
 let antigravitySyncInFlight = false;
 let antigravityPublished = false;
 let antigravityLastError = '';
+let ollamaTimer = null;
+let ollamaSyncInFlight = false;
+let ollamaPublished = false;
+let ollamaLastError = '';
+let lmStudioTimer = null;
+let lmStudioSyncInFlight = false;
+let lmStudioPublished = false;
+let lmStudioLastError = '';
+let runtimeLmStudioToken = '';
+let runtimeLmStudioCredentialsUrl = '';
 let runtimeSyncGeneration = 0;
 let lastRuntimeHeartbeatAt = Date.now();
 let quitting = false;
+let agentSnapshot = null;
+let agentSnapshotVersion = 0;
+let agentSnapshotTimer = null;
+let agentSnapshotRequest = null;
+let agentSnapshotController = null;
 const runtimeAgentMenuSignatures = new Map();
 const companionWindows = new Map();
 const windowDrags = new Map();
@@ -175,6 +210,30 @@ ipcMain.on('office-window-mouse:ignore', (event, requested) => {
   }
 });
 
+ipcMain.on('office-window:visibility', (event, visible) => {
+  const targetWindow = companionWindowForSender(event);
+  if (!targetWindow) return;
+  const metadata = companionWindows.get(targetWindow);
+  companionWindows.set(targetWindow, { ...metadata, rendererVisible: Boolean(visible) });
+  if (visible) refreshAgentSnapshotForVisibleCompanions();
+  else scheduleAgentSnapshotPolling();
+});
+
+ipcMain.on('office-window:reload', (event) => {
+  const window = companionWindowForSender(event);
+  if (window) window.reload();
+});
+
+ipcMain.handle('office:agents:get', async (event) => {
+  if (!companionWindowForSender(event)) throw new Error('Unauthorized agent snapshot request.');
+  return agentSnapshot || refreshAgentSnapshot({ broadcast: false });
+});
+
+ipcMain.handle('office:agents:refresh', async (event) => {
+  if (!companionWindowForSender(event)) throw new Error('Unauthorized agent snapshot refresh.');
+  return refreshAgentSnapshot();
+});
+
 ipcMain.on('config:changed', (event) => {
   if (!configWindow || configWindow.isDestroyed() || event.sender !== configWindow.webContents) return;
   void refreshAvailableAgents().catch((error) => {
@@ -183,7 +242,7 @@ ipcMain.on('config:changed', (event) => {
 });
 
 function displayMode(config = readConfig()) {
-  return config.displayMode === 'avatar' ? 'avatar' : 'office';
+  return ['avatar', 'random'].includes(config.displayMode) ? config.displayMode : 'office';
 }
 
 function isAlwaysOnTopEnabled(config = readConfig()) {
@@ -262,6 +321,14 @@ function savedOpenCodeCredentials(config = readConfig()) {
     username: String(config.openCodeUsername || 'opencode'),
     password: decrypt(config.encryptedOpenCodePassword)
   };
+}
+
+function savedLmStudioToken(config = readConfig(), baseUrl = '') {
+  const normalizedUrl = baseUrl ? normalizeLmStudioUrl(baseUrl) : '';
+  const credentialsUrl = config.lmStudioCredentialsUrl || config.lmStudioUrl || '';
+  const credentialsMatch = !normalizedUrl || !credentialsUrl
+    || normalizeLmStudioUrl(credentialsUrl) === normalizedUrl;
+  return credentialsMatch ? decrypt(config.encryptedLmStudioApiToken) : '';
 }
 
 function savedOpenClawCredentials(config = readConfig(), baseUrl = '') {
@@ -704,6 +771,93 @@ function requestWithTimeout(request, controller, timeoutMs, message) {
     }, timeoutMs);
   });
   return Promise.race([request, expired]).finally(() => clearTimeout(timeout));
+}
+
+function broadcastAgentSnapshot(snapshot) {
+  for (const targetWindow of companionWindows.keys()) {
+    if (!targetWindow.isDestroyed()) targetWindow.webContents.send('office:agents-snapshot', snapshot);
+  }
+}
+
+function stopAgentSnapshotPolling() {
+  clearTimeout(agentSnapshotTimer);
+  agentSnapshotTimer = null;
+}
+
+function scheduleAgentSnapshotPolling() {
+  stopAgentSnapshotPolling();
+  const hasVisibleCompanion = [...companionWindows.entries()].some(([targetWindow, metadata]) => (
+    !targetWindow.isDestroyed()
+    && targetWindow.isVisible()
+    && !targetWindow.isMinimized()
+    && metadata?.rendererVisible !== false
+  ));
+  if (quitting || !activeBaseUrl || !hasVisibleCompanion) return;
+  agentSnapshotTimer = setTimeout(async () => {
+    await refreshAgentSnapshot();
+    scheduleAgentSnapshotPolling();
+  }, AGENT_SNAPSHOT_REFRESH_MS);
+  agentSnapshotTimer.unref();
+}
+
+function refreshAgentSnapshotForVisibleCompanions() {
+  if (!activeBaseUrl) return scheduleAgentSnapshotPolling();
+  void refreshAgentSnapshot().finally(scheduleAgentSnapshotPolling);
+}
+
+function resetAgentSnapshotCoordinator() {
+  stopAgentSnapshotPolling();
+  agentSnapshotController?.abort();
+  agentSnapshotController = null;
+  agentSnapshotRequest = null;
+  agentSnapshot = null;
+  agentSnapshotVersion = 0;
+}
+
+async function refreshAgentSnapshot({ broadcast = true } = {}) {
+  if (agentSnapshotRequest) return agentSnapshotRequest;
+  if (!activeBaseUrl) throw new Error('No active Taskfolk server.');
+
+  const requestedBaseUrl = activeBaseUrl;
+  const controller = new AbortController();
+  agentSnapshotController = controller;
+  let request;
+  request = (async () => {
+    const ses = session.fromPartition(PARTITION, { cache: true });
+    const response = await requestWithTimeout(
+      ses.fetch(endpoint(requestedBaseUrl, `/api/agents?t=${Date.now()}`), {
+        credentials: 'include',
+        cache: 'no-store',
+        signal: controller.signal
+      }),
+      controller,
+      AGENT_SNAPSHOT_REQUEST_TIMEOUT_MS,
+      'Agent snapshot request timed out.'
+    );
+    if (!response.ok) throw new Error(`Agent snapshot failed (${response.status}).`);
+    const data = await response.json();
+    if (requestedBaseUrl !== activeBaseUrl) return agentSnapshot;
+    agentSnapshot = {
+      version: ++agentSnapshotVersion,
+      fetchedAt: Date.now(),
+      data,
+      error: null
+    };
+    if (broadcast) broadcastAgentSnapshot(agentSnapshot);
+    return agentSnapshot;
+  })().catch((error) => {
+    const failure = {
+      ...(agentSnapshot || { version: agentSnapshotVersion, fetchedAt: 0, data: null }),
+      error: error?.name === 'AbortError' ? 'Agent snapshot request was canceled.' : error.message
+    };
+    if (broadcast && requestedBaseUrl === activeBaseUrl) broadcastAgentSnapshot(failure);
+    return failure;
+  }).finally(() => {
+    if (agentSnapshotController === controller) agentSnapshotController = null;
+    if (agentSnapshotRequest === request) agentSnapshotRequest = null;
+  });
+  agentSnapshotRequest = request;
+  return request;
 }
 
 async function fetchAvailableAgents(baseUrl, ses) {
@@ -1172,6 +1326,169 @@ function startAntigravityAdapter() {
   void syncAntigravityAdapter();
 }
 
+function scheduleOllamaSync() {
+  clearTimeout(ollamaTimer);
+  ollamaTimer = null;
+  if (readConfig().ollamaEnabled || ollamaPublished) {
+    ollamaTimer = setTimeout(syncOllamaAdapter, OLLAMA_REFRESH_MS);
+  }
+}
+
+async function syncOllamaAdapter() {
+  if (ollamaSyncInFlight) {
+    scheduleOllamaSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
+  ollamaSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.ollamaEnabled) {
+      if (ollamaPublished) await publishRuntimeAgents('ollama', [], config);
+      ollamaPublished = false;
+      ollamaLastError = '';
+      return;
+    }
+    const baseUrl = config.ollamaUrl || DEFAULT_OLLAMA_URL;
+    const normalizedUrl = normalizeOllamaUrl(baseUrl);
+    const hostname = new URL(normalizedUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const localServer = ['127.0.0.1', 'localhost', '::1'].includes(hostname);
+    let desktopAgents = [];
+    let desktopError = null;
+    if (localServer) {
+      try {
+        desktopAgents = await fetchOllamaDesktopAgents({
+          grouping: normalizeOllamaGrouping(config.ollamaGrouping)
+        });
+      } catch (error) {
+        desktopError = error;
+      }
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OLLAMA_REQUEST_TIMEOUT_MS);
+    let serverAgents = [];
+    let serverError = null;
+    try {
+      serverAgents = await fetchOllamaAgents({
+        baseUrl: normalizedUrl,
+        grouping: normalizeOllamaGrouping(config.ollamaGrouping),
+        signal: controller.signal
+      });
+    } catch (error) {
+      serverError = error;
+    } finally {
+      clearTimeout(timeout);
+    }
+    const agents = desktopAgents.length ? desktopAgents : serverAgents;
+    if (!agents.length && serverError && desktopError) {
+      throw new Error(`Ollama server: ${serverError.message}; desktop: ${desktopError.message}`);
+    }
+    if (!agents.length && serverError && !desktopAgents.length) throw serverError;
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    await publishRuntimeAgents('ollama', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    ollamaPublished = agents.length > 0;
+    ollamaLastError = '';
+  } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    const message = error?.name === 'AbortError'
+      ? 'Ollama status request timed out.'
+      : error?.message || 'Could not read Ollama activity.';
+    if (message !== ollamaLastError) console.warn(`Ollama adapter: ${message}`);
+    ollamaLastError = message;
+    if (ollamaPublished) {
+      try { await publishRuntimeAgents('ollama', []); } catch {}
+      ollamaPublished = false;
+    }
+  } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    ollamaSyncInFlight = false;
+    scheduleOllamaSync();
+  }
+}
+
+function startOllamaAdapter() {
+  clearTimeout(ollamaTimer);
+  ollamaTimer = null;
+  void syncOllamaAdapter();
+}
+
+function scheduleLmStudioSync() {
+  clearTimeout(lmStudioTimer);
+  lmStudioTimer = null;
+  if (readConfig().lmStudioEnabled || lmStudioPublished) {
+    lmStudioTimer = setTimeout(syncLmStudioAdapter, LM_STUDIO_REFRESH_MS);
+  }
+}
+
+async function syncLmStudioAdapter() {
+  if (lmStudioSyncInFlight) {
+    scheduleLmStudioSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
+  lmStudioSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.lmStudioEnabled) {
+      if (lmStudioPublished) await publishRuntimeAgents('lmstudio', [], config);
+      lmStudioPublished = false;
+      lmStudioLastError = '';
+      return;
+    }
+    const baseUrl = normalizeLmStudioUrl(config.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
+    const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const localServer = ['127.0.0.1', 'localhost', '::1'].includes(hostname);
+    let agents;
+    if (localServer) {
+      agents = await fetchLmStudioDesktopAgents({
+        grouping: normalizeLmStudioGrouping(config.lmStudioGrouping)
+      });
+    } else {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), LM_STUDIO_REQUEST_TIMEOUT_MS);
+      try {
+        agents = await fetchLmStudioAgents({
+          baseUrl,
+          apiToken: runtimeLmStudioCredentialsUrl === baseUrl
+            ? runtimeLmStudioToken
+            : savedLmStudioToken(config, baseUrl),
+          grouping: normalizeLmStudioGrouping(config.lmStudioGrouping),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    await publishRuntimeAgents('lmstudio', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    lmStudioPublished = agents.length > 0;
+    lmStudioLastError = '';
+  } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    const message = error?.name === 'AbortError'
+      ? 'LM Studio status request timed out.'
+      : error?.message || 'Could not read LM Studio activity.';
+    if (message !== lmStudioLastError) console.warn(`LM Studio adapter: ${message}`);
+    lmStudioLastError = message;
+    if (lmStudioPublished) {
+      try { await publishRuntimeAgents('lmstudio', []); } catch {}
+      lmStudioPublished = false;
+    }
+  } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    lmStudioSyncInFlight = false;
+    scheduleLmStudioSync();
+  }
+}
+
+function startLmStudioAdapter() {
+  clearTimeout(lmStudioTimer);
+  lmStudioTimer = null;
+  void syncLmStudioAdapter();
+}
+
 function scheduleOpenClawSync() {
   clearTimeout(openClawTimer);
   openClawTimer = null;
@@ -1239,7 +1556,42 @@ function startRuntimeAdapters() {
   startClaudeAdapter();
   startGeminiAdapter();
   startAntigravityAdapter();
+  startOllamaAdapter();
+  startLmStudioAdapter();
   startOpenClawAdapter();
+}
+
+function stopRuntimeAdapters() {
+  runtimeSyncGeneration += 1;
+  for (const timer of [
+    openCodeTimer,
+    vsCodeCopilotTimer,
+    codexTimer,
+    claudeTimer,
+    geminiTimer,
+    antigravityTimer,
+    ollamaTimer,
+    lmStudioTimer,
+    openClawTimer
+  ]) clearTimeout(timer);
+  openCodeTimer = null;
+  vsCodeCopilotTimer = null;
+  codexTimer = null;
+  claudeTimer = null;
+  geminiTimer = null;
+  antigravityTimer = null;
+  ollamaTimer = null;
+  lmStudioTimer = null;
+  openClawTimer = null;
+  openCodeSyncInFlight = false;
+  vsCodeCopilotSyncInFlight = false;
+  codexSyncInFlight = false;
+  claudeSyncInFlight = false;
+  geminiSyncInFlight = false;
+  antigravitySyncInFlight = false;
+  ollamaSyncInFlight = false;
+  lmStudioSyncInFlight = false;
+  openClawSyncInFlight = false;
 }
 
 function restartRuntimeAdaptersAfterWake() {
@@ -1251,6 +1603,8 @@ function restartRuntimeAdaptersAfterWake() {
   claudeSyncInFlight = false;
   geminiSyncInFlight = false;
   antigravitySyncInFlight = false;
+  ollamaSyncInFlight = false;
+  lmStudioSyncInFlight = false;
   openClawSyncInFlight = false;
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
@@ -1258,7 +1612,14 @@ function restartRuntimeAdaptersAfterWake() {
   startClaudeAdapter();
   startGeminiAdapter();
   startAntigravityAdapter();
+  startOllamaAdapter();
+  startLmStudioAdapter();
   startOpenClawAdapter();
+  const interruptedSnapshotRequest = agentSnapshotRequest;
+  agentSnapshotController?.abort();
+  void Promise.resolve(interruptedSnapshotRequest)
+    .finally(() => refreshAgentSnapshot())
+    .finally(scheduleAgentSnapshotPolling);
   for (const window of companionWindows.keys()) {
     if (!window.isDestroyed()) window.webContents.send('office:system-resume');
   }
@@ -1274,6 +1635,9 @@ function checkForSystemSleepGap() {
 function companionUrl(baseUrl = activeBaseUrl, config = readConfig(), agentId = '') {
   const url = new URL(endpoint(baseUrl, '/index.html'));
   url.searchParams.set('companion', '1');
+  if (displayMode(config) === 'random') {
+    url.searchParams.set('randomStatuses', '1');
+  }
   if (agentId || displayMode(config) === 'avatar') {
     url.searchParams.set('companionView', 'avatar');
     const selectedAgent = agentId || config.selectedAgent;
@@ -1327,10 +1691,11 @@ function avatarSizeMenuItems(targetWindow = officeWindow) {
 
 async function setDisplayMode(mode, selectedAgent = '') {
   if (!officeWindow || officeWindow.isDestroyed()) return;
+  if (displayMode(readConfig()) === 'random' && mode !== 'random') return;
   clearTimeout(boundsTimer);
   saveWindowBounds();
   const config = readConfig();
-  const nextMode = mode === 'avatar' ? 'avatar' : 'office';
+  const nextMode = ['avatar', 'random'].includes(mode) ? mode : 'office';
   const nextAgent = nextMode === 'avatar'
     ? String(selectedAgent || config.selectedAgent || availableAgents[0]?.id || '')
     : String(config.selectedAgent || selectedAgent || '');
@@ -1370,11 +1735,20 @@ function avatarMenuItems(config = readConfig()) {
 }
 
 function viewMenuItems(config = readConfig()) {
+  const currentMode = displayMode(config);
+  if (currentMode === 'random') {
+    return [{
+      label: 'Random Office View',
+      type: 'radio',
+      checked: true,
+      enabled: false
+    }];
+  }
   return [
     {
       label: 'Office View',
       type: 'radio',
-      checked: displayMode(config) === 'office',
+      checked: currentMode === 'office',
       click: () => setDisplayMode('office')
     },
     { label: 'Single Avatar', submenu: avatarMenuItems(config) }
@@ -1556,9 +1930,9 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // Companion windows must continue polling and animating while another app
-      // has focus. Electron otherwise throttles background renderer timers.
-      backgroundThrottling: false,
+      // Keep normal Chromium lifecycle throttling so hidden or occluded
+      // companions do not continue painting and running renderer timers.
+      backgroundThrottling: true,
       devTools: !app.isPackaged
     }
   });
@@ -1567,6 +1941,15 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
   // when skipTaskbar was supplied in the constructor. Apply it directly to the
   // native window before it is shown as well.
   if (process.platform === 'darwin') targetWindow.setSkipTaskbar(shouldSkipTaskbar(config));
+
+  targetWindow.on('show', () => {
+    refreshAgentSnapshotForVisibleCompanions();
+  });
+  targetWindow.on('hide', scheduleAgentSnapshotPolling);
+  targetWindow.on('minimize', scheduleAgentSnapshotPolling);
+  targetWindow.on('restore', () => {
+    refreshAgentSnapshotForVisibleCompanions();
+  });
 
   if (process.platform === 'darwin') {
     const showOnAllDesktops = isShowOnAllDesktopsEnabled(config);
@@ -1612,6 +1995,7 @@ async function createAdditionalCompanionWindow(agentId, options = {}) {
     windowDrags.delete(targetWindow);
     mouseIgnoringWindows.delete(targetWindow);
     companionWindows.delete(targetWindow);
+    scheduleAgentSnapshotPolling();
     rebuildMenus();
   });
   targetWindow.once('ready-to-show', () => {
@@ -1621,6 +2005,7 @@ async function createAdditionalCompanionWindow(agentId, options = {}) {
   targetWindow.setOpacity(normalizedOpacity(config.opacity));
   try {
     await targetWindow.loadURL(companionUrl(activeBaseUrl, config, agentId));
+    scheduleAgentSnapshotPolling();
     if (options.persist !== false) saveAdditionalFolk(agentId, targetWindow.getBounds());
   } catch (error) {
     console.warn(`Could not add companion folk: ${error.message}`);
@@ -1643,10 +2028,13 @@ async function restoreAdditionalCompanionWindows(config = readConfig()) {
 async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   const normalizedUrl = normalizeBaseUrl(baseUrl);
   if (activeBaseUrl !== normalizedUrl) {
+    resetAgentSnapshotCoordinator();
     configWindow?.destroy();
     runtimeAgentMenuSignatures.clear();
     openCodePublished = false;
     vsCodeCopilotPublished = false;
+    ollamaPublished = false;
+    lmStudioPublished = false;
     openClawPublished = false;
   }
   activeBaseUrl = normalizedUrl;
@@ -1687,6 +2075,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
     windowDrags.delete(primaryWindow);
     mouseIgnoringWindows.delete(primaryWindow);
     companionWindows.delete(primaryWindow);
+    scheduleAgentSnapshotPolling();
     if (officeWindow === primaryWindow) officeWindow = null;
     rebuildMenus();
   });
@@ -1698,6 +2087,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
 
   await primaryWindow.loadURL(companionUrl(normalizedUrl, config));
   await restoreAdditionalCompanionWindows(config);
+  scheduleAgentSnapshotPolling();
   applyDockVisibility(config);
   settingsWindow?.close();
   rebuildMenus();
@@ -1829,21 +2219,32 @@ ipcMain.handle('settings:load', () => {
     opacity: normalizedOpacity(config.opacity),
     avatarWidth: Number(config.avatarBounds?.width) || DEFAULT_AVATAR_BOUNDS.width,
     avatarHeight: Number(config.avatarBounds?.height) || DEFAULT_AVATAR_BOUNDS.height,
-    openCodeEnabled: config.openCodeEnabled === undefined ? mode === 'local' : Boolean(config.openCodeEnabled),
+    openCodeEnabled: Boolean(config.openCodeEnabled),
     openCodeGrouping: normalizeOpenCodeGrouping(config.openCodeGrouping),
     openCodeUrl: config.openCodeUrl || DEFAULT_OPENCODE_URL,
     openCodeUsername: runtimeOpenCodeCredentials?.username || config.openCodeUsername || 'opencode',
     openCodeCredentialsStored: Boolean(runtimeOpenCodeCredentials?.password || decrypt(config.encryptedOpenCodePassword)),
-    vsCodeCopilotEnabled: config.vsCodeCopilotEnabled === undefined ? mode === 'local' : Boolean(config.vsCodeCopilotEnabled),
+    vsCodeCopilotEnabled: Boolean(config.vsCodeCopilotEnabled),
     vsCodeCopilotGrouping: normalizeVsCodeCopilotGrouping(config.vsCodeCopilotGrouping),
-    codexEnabled: config.codexEnabled === undefined ? mode === 'local' : Boolean(config.codexEnabled),
+    codexEnabled: Boolean(config.codexEnabled),
     codexGrouping: normalizeCodexGrouping(config.codexGrouping),
-    claudeEnabled: config.claudeEnabled === undefined ? mode === 'local' : Boolean(config.claudeEnabled),
+    claudeEnabled: Boolean(config.claudeEnabled),
     claudeGrouping: normalizeClaudeGrouping(config.claudeGrouping),
-    geminiEnabled: config.geminiEnabled === undefined ? mode === 'local' : Boolean(config.geminiEnabled),
+    geminiEnabled: Boolean(config.geminiEnabled),
     geminiGrouping: normalizeGeminiGrouping(config.geminiGrouping),
-    antigravityEnabled: config.antigravityEnabled === undefined ? mode === 'local' : Boolean(config.antigravityEnabled),
+    antigravityEnabled: Boolean(config.antigravityEnabled),
     antigravityGrouping: normalizeAntigravityGrouping(config.antigravityGrouping),
+    ollamaEnabled: Boolean(config.ollamaEnabled),
+    ollamaGrouping: normalizeOllamaGrouping(config.ollamaGrouping),
+    ollamaUrl: config.ollamaUrl || DEFAULT_OLLAMA_URL,
+    lmStudioEnabled: Boolean(config.lmStudioEnabled),
+    lmStudioGrouping: normalizeLmStudioGrouping(config.lmStudioGrouping),
+    lmStudioUrl: config.lmStudioUrl || DEFAULT_LM_STUDIO_URL,
+    lmStudioCredentialsStored: Boolean(
+      (runtimeLmStudioCredentialsUrl === normalizeLmStudioUrl(config.lmStudioUrl || DEFAULT_LM_STUDIO_URL)
+        && runtimeLmStudioToken)
+      || savedLmStudioToken(config, config.lmStudioUrl || DEFAULT_LM_STUDIO_URL)
+    ),
     openClawEnabled: Boolean(config.openClawEnabled),
     openClawUrl: runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL,
     openClawCredentialsStored: Boolean(
@@ -1885,16 +2286,24 @@ ipcMain.handle('settings:import-config', async (event) => {
   }
 
   let importedOpenClawUrl;
+  let importedLmStudioUrl;
   try {
     importedOpenClawUrl = normalizeOpenClawUrl(imported.openClawUrl || DEFAULT_OPENCLAW_URL);
   } catch (error) {
     throw new Error(`The configuration has an invalid OpenClaw URL: ${error.message}`);
+  }
+  try {
+    importedLmStudioUrl = normalizeLmStudioUrl(imported.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
+  } catch (error) {
+    throw new Error(`The configuration has an invalid LM Studio URL: ${error.message}`);
   }
 
   writeConfig(imported);
   applyDockVisibility(imported);
   runtimeCredentials = savedCredentials(imported);
   runtimeOpenCodeCredentials = savedOpenCodeCredentials(imported);
+  runtimeLmStudioCredentialsUrl = importedLmStudioUrl;
+  runtimeLmStudioToken = savedLmStudioToken(imported, runtimeLmStudioCredentialsUrl);
   runtimeOpenClawUrl = '';
   runtimeOpenClawCredentialsUrl = importedOpenClawUrl;
   runtimeOpenClawCredentials = savedOpenClawCredentials(imported, runtimeOpenClawCredentialsUrl);
@@ -1912,6 +2321,58 @@ ipcMain.handle('settings:export-config', async (event) => {
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   fs.copyFileSync(configPath(), result.filePath);
+  return { canceled: false };
+});
+
+ipcMain.handle('settings:reset-config', async (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showMessageBox(owner, {
+    type: 'warning',
+    title: 'Reset Taskfolk Configuration?',
+    message: 'Reset Taskfolk like a fresh install?',
+    detail: 'This removes all saved Setup settings, encrypted credentials, integration choices, and window preferences. The current office will close. This cannot be undone.',
+    buttons: ['Cancel', 'Reset Configuration'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true
+  });
+  if (result.response !== 1) return { canceled: true };
+
+  clearTimeout(boundsTimer);
+  boundsTimer = null;
+  for (const timer of additionalFolkBoundsTimers.values()) clearTimeout(timer);
+  additionalFolkBoundsTimers.clear();
+  stopRuntimeAdapters();
+  resetAgentSnapshotCoordinator();
+  stopLocalServer();
+  configWindow?.destroy();
+  for (const window of [...companionWindows.keys()]) {
+    if (!window.isDestroyed()) window.destroy();
+  }
+  companionWindows.clear();
+  windowDrags.clear();
+  mouseIgnoringWindows.clear();
+  officeWindow = null;
+  activeBaseUrl = '';
+  availableAgents = [];
+  runtimeCredentials = null;
+  runtimeOpenCodeCredentials = null;
+  runtimeLmStudioCredentialsUrl = '';
+  runtimeLmStudioToken = '';
+  runtimeOpenClawUrl = '';
+  runtimeOpenClawCredentialsUrl = '';
+  runtimeOpenClawCredentials = null;
+  runtimeOpenClawDeviceIdentity = null;
+  startupError = '';
+  runtimeAgentMenuSignatures.clear();
+  try {
+    fs.unlinkSync(configPath());
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  await session.fromPartition(PARTITION, { cache: true }).clearStorageData();
+  applyDockVisibility({});
+  rebuildMenus();
   return { canceled: false };
 });
 
@@ -1972,6 +2433,8 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
   const avatarWidth = Math.min(1200, Math.max(120, Math.round(Number(input.avatarWidth) || DEFAULT_AVATAR_BOUNDS.width)));
   const avatarHeight = Math.min(1200, Math.max(150, Math.round(Number(input.avatarHeight) || DEFAULT_AVATAR_BOUNDS.height)));
   const openCodeUrl = normalizeOpenCodeUrl(input.openCodeUrl || DEFAULT_OPENCODE_URL);
+  const ollamaUrl = normalizeOllamaUrl(input.ollamaUrl || DEFAULT_OLLAMA_URL);
+  const lmStudioUrl = normalizeLmStudioUrl(input.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
   const openClawUrl = normalizeOpenClawUrl(input.openClawUrl || DEFAULT_OPENCLAW_URL);
   runtimeOpenClawUrl = openClawUrl;
   const savedOpenCode = savedOpenCodeCredentials(config);
@@ -1980,6 +2443,11 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     ? { username: String(input.openCodeUsername || 'opencode').trim() || 'opencode', password: String(input.openCodePassword) }
     : (runtimeOpenCodeCredentials || savedOpenCode);
   runtimeOpenCodeCredentials.username = String(input.openCodeUsername || runtimeOpenCodeCredentials.username || 'opencode').trim() || 'opencode';
+  const enteredLmStudioToken = String(input.lmStudioApiToken || '').trim();
+  runtimeLmStudioToken = enteredLmStudioToken
+    || (runtimeLmStudioCredentialsUrl === lmStudioUrl ? runtimeLmStudioToken : '')
+    || savedLmStudioToken(config, lmStudioUrl);
+  runtimeLmStudioCredentialsUrl = lmStudioUrl;
   const savedOpenClaw = savedOpenClawCredentials(config, openClawUrl);
   const replaceOpenClawCredentials = Boolean(
     String(input.openClawToken || '').trim() || String(input.openClawPassword || '')
@@ -1995,7 +2463,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     alwaysOnTop: Boolean(input.alwaysOnTop),
     showOnAllDesktops: process.platform === 'darwin' && Boolean(input.showOnAllDesktops),
     hideDockIcon: process.platform === 'darwin' && Boolean(input.hideDockIcon),
-    displayMode: input.displayMode === 'avatar' ? 'avatar' : 'office',
+    displayMode: ['avatar', 'random'].includes(input.displayMode) ? input.displayMode : 'office',
     selectedAgent: String(input.selectedAgent || config.selectedAgent || ''),
     opacity: normalizedOpacity(input.opacity),
     avatarBounds: { ...(config.avatarBounds || {}), width: avatarWidth, height: avatarHeight },
@@ -2015,6 +2483,14 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     geminiGrouping: normalizeGeminiGrouping(input.geminiGrouping),
     antigravityEnabled: Boolean(input.antigravityEnabled),
     antigravityGrouping: normalizeAntigravityGrouping(input.antigravityGrouping),
+    ollamaEnabled: Boolean(input.ollamaEnabled),
+    ollamaGrouping: normalizeOllamaGrouping(input.ollamaGrouping),
+    ollamaUrl,
+    lmStudioEnabled: Boolean(input.lmStudioEnabled),
+    lmStudioGrouping: normalizeLmStudioGrouping(input.lmStudioGrouping),
+    lmStudioUrl,
+    lmStudioCredentialsUrl: lmStudioUrl,
+    encryptedLmStudioApiToken: encrypt(runtimeLmStudioToken),
     openClawEnabled: Boolean(input.openClawEnabled),
     openClawUrl,
     openClawCredentialsUrl: openClawUrl,
@@ -2059,7 +2535,11 @@ app.whenReady().then(async () => {
   powerMonitor.on('resume', restartRuntimeAdaptersAfterWake);
   powerMonitor.on('unlock-screen', restartRuntimeAdaptersAfterWake);
   setInterval(checkForSystemSleepGap, 5_000).unref();
-  const config = readConfig();
+  let config = readConfig();
+  if (config.displayMode === 'random') {
+    config = { ...config, displayMode: 'office' };
+    writeConfig(config);
+  }
   if (process.platform === 'darwin') applyDockVisibility(config);
   else createTray();
   rebuildMenus();
@@ -2076,6 +2556,9 @@ app.whenReady().then(async () => {
         password: String(process.env.OPENCODE_SERVER_PASSWORD)
       }
     : savedOpenCodeCredentials(config);
+  runtimeLmStudioCredentialsUrl = normalizeLmStudioUrl(config.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
+  runtimeLmStudioToken = String(process.env.LM_STUDIO_API_TOKEN || process.env.LM_API_TOKEN || '')
+    || savedLmStudioToken(config, runtimeLmStudioCredentialsUrl);
   runtimeOpenClawCredentials = process.env.OPENCLAW_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_PASSWORD
     ? {
         token: String(process.env.OPENCLAW_GATEWAY_TOKEN || ''),
@@ -2124,12 +2607,7 @@ app.on('before-quit', () => {
   for (const [window, metadata] of companionWindows) {
     if (!metadata.primary) saveAdditionalFolkBounds(window);
   }
-  clearTimeout(openCodeTimer);
-  clearTimeout(vsCodeCopilotTimer);
-  clearTimeout(codexTimer);
-  clearTimeout(claudeTimer);
-  clearTimeout(geminiTimer);
-  clearTimeout(antigravityTimer);
-  clearTimeout(openClawTimer);
+  stopRuntimeAdapters();
+  resetAgentSnapshotCoordinator();
   stopLocalServer();
 });

@@ -50,8 +50,21 @@ const geminiGroupingInput = document.querySelector('#geminiGrouping');
 const antigravityEnabledInput = document.querySelector('#antigravityEnabled');
 const antigravityGroupingField = document.querySelector('#antigravityGroupingField');
 const antigravityGroupingInput = document.querySelector('#antigravityGrouping');
+const ollamaEnabledInput = document.querySelector('#ollamaEnabled');
+const ollamaGroupingField = document.querySelector('#ollamaGroupingField');
+const ollamaGroupingInput = document.querySelector('#ollamaGrouping');
+const ollamaUrlField = document.querySelector('#ollamaUrlField');
+const ollamaUrlInput = document.querySelector('#ollamaUrl');
+const lmStudioEnabledInput = document.querySelector('#lmStudioEnabled');
+const lmStudioGroupingField = document.querySelector('#lmStudioGroupingField');
+const lmStudioGroupingInput = document.querySelector('#lmStudioGrouping');
+const lmStudioUrlField = document.querySelector('#lmStudioUrlField');
+const lmStudioUrlInput = document.querySelector('#lmStudioUrl');
+const lmStudioTokenField = document.querySelector('#lmStudioTokenField');
+const lmStudioApiTokenInput = document.querySelector('#lmStudioApiToken');
 const importConfigButton = document.querySelector('#importConfigButton');
 const exportConfigButton = document.querySelector('#exportConfigButton');
+const resetConfigButton = document.querySelector('#resetConfigButton');
 const configStatus = document.querySelector('#configStatus');
 const connectButton = document.querySelector('#connectButton');
 const message = document.querySelector('#message');
@@ -104,6 +117,19 @@ function updateGeminiFields() {
 
 function updateAntigravityFields() {
   antigravityGroupingField.classList.toggle('hidden', !antigravityEnabledInput.checked);
+}
+
+function updateOllamaFields() {
+  ollamaGroupingField.classList.toggle('hidden', !ollamaEnabledInput.checked);
+  ollamaUrlField.classList.toggle('hidden', !ollamaEnabledInput.checked);
+  ollamaUrlInput.required = ollamaEnabledInput.checked;
+}
+
+function updateLmStudioFields() {
+  lmStudioGroupingField.classList.toggle('hidden', !lmStudioEnabledInput.checked);
+  lmStudioUrlField.classList.toggle('hidden', !lmStudioEnabledInput.checked);
+  lmStudioTokenField.classList.toggle('hidden', !lmStudioEnabledInput.checked);
+  lmStudioUrlInput.required = lmStudioEnabledInput.checked;
 }
 
 function updateOpenClawFields() {
@@ -171,6 +197,15 @@ async function initialize() {
   geminiGroupingInput.value = settings.geminiGrouping === 'single' ? 'single' : 'project';
   antigravityEnabledInput.checked = Boolean(settings.antigravityEnabled);
   antigravityGroupingInput.value = settings.antigravityGrouping === 'single' ? 'single' : 'project';
+  ollamaEnabledInput.checked = Boolean(settings.ollamaEnabled);
+  ollamaGroupingInput.value = settings.ollamaGrouping === 'single' ? 'single' : 'chat';
+  ollamaUrlInput.value = settings.ollamaUrl || 'http://127.0.0.1:11434';
+  lmStudioEnabledInput.checked = Boolean(settings.lmStudioEnabled);
+  lmStudioGroupingInput.value = settings.lmStudioGrouping === 'chat' ? 'chat' : 'single';
+  lmStudioUrlInput.value = settings.lmStudioUrl || 'http://127.0.0.1:1234';
+  lmStudioApiTokenInput.placeholder = settings.lmStudioCredentialsStored
+    ? 'Saved securely — enter to replace'
+    : 'Only if server authentication is enabled';
   while (selectedAgentInput.options.length > 2) selectedAgentInput.remove(2);
   for (const agent of settings.agents || []) {
     const option = document.createElement('option');
@@ -180,6 +215,7 @@ async function initialize() {
   }
   selectedAgentInput.value = settings.selectedAgent || '';
   exportConfigButton.classList.toggle('hidden', !settings.hasSavedConfiguration);
+  resetConfigButton.classList.toggle('hidden', !settings.hasSavedConfiguration);
   updateDisplayFields();
   updateOpacityLabel();
   updateOpenCodeFields();
@@ -189,6 +225,8 @@ async function initialize() {
   updateClaudeFields();
   updateGeminiFields();
   updateAntigravityFields();
+  updateOllamaFields();
+  updateLmStudioFields();
   updateConnectionFields();
   tokenInput.placeholder = settings.credentialsStored
     ? 'Saved securely — enter a value to replace it'
@@ -210,6 +248,8 @@ codexEnabledInput.addEventListener('change', updateCodexFields);
 claudeEnabledInput.addEventListener('change', updateClaudeFields);
 geminiEnabledInput.addEventListener('change', updateGeminiFields);
 antigravityEnabledInput.addEventListener('change', updateAntigravityFields);
+ollamaEnabledInput.addEventListener('change', updateOllamaFields);
+lmStudioEnabledInput.addEventListener('change', updateLmStudioFields);
 resetAvatarSizeButton.addEventListener('click', () => {
   avatarWidthInput.value = '300';
   avatarHeightInput.value = '380';
@@ -243,6 +283,22 @@ exportConfigButton.addEventListener('click', async () => {
     showConfigStatus('error', error.message || 'Could not export the configuration.');
   } finally {
     exportConfigButton.disabled = false;
+  }
+});
+
+resetConfigButton.addEventListener('click', async () => {
+  showConfigStatus();
+  resetConfigButton.disabled = true;
+  try {
+    const result = await window.clawOffice.resetConfig();
+    if (result.canceled) return;
+    await initialize();
+    showError('');
+    showConfigStatus('success', 'Configuration reset. Taskfolk is ready to be set up like a fresh install.');
+  } catch (error) {
+    showConfigStatus('error', error.message || 'Could not reset the configuration.');
+  } finally {
+    resetConfigButton.disabled = false;
   }
 });
 
@@ -321,7 +377,14 @@ form.addEventListener('submit', async (event) => {
       geminiEnabled: geminiEnabledInput.checked,
       geminiGrouping: geminiGroupingInput.value,
       antigravityEnabled: antigravityEnabledInput.checked,
-      antigravityGrouping: antigravityGroupingInput.value
+      antigravityGrouping: antigravityGroupingInput.value,
+      ollamaEnabled: ollamaEnabledInput.checked,
+      ollamaGrouping: ollamaGroupingInput.value,
+      ollamaUrl: ollamaUrlInput.value,
+      lmStudioEnabled: lmStudioEnabledInput.checked,
+      lmStudioGrouping: lmStudioGroupingInput.value,
+      lmStudioUrl: lmStudioUrlInput.value,
+      lmStudioApiToken: lmStudioApiTokenInput.value
     });
   } catch (error) {
     showError(error.message || 'Could not connect to Taskfolk.');

@@ -102,6 +102,12 @@ button.secondaryButton {
 }
 .configActions { display: flex; gap: 9px; }
 .configActions .secondaryButton { padding: 9px 12px; font-size: 12px; }
+button.secondaryButton.dangerButton {
+  border-color: rgba(255, 109, 116, .5);
+  background: rgba(255, 76, 87, .1);
+  color: #ffadb1;
+}
+button.secondaryButton.dangerButton:hover { background: rgba(255, 76, 87, .18); }
 .integrationButton { justify-self: start; }
 .integrationStatus {
   display: none;

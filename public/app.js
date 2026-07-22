@@ -2,6 +2,7 @@ let currentPath = '';
 const pageParams = new URLSearchParams(window.location.search);
 const companionMode = pageParams.get('companion') === '1';
 const companionView = companionMode && pageParams.get('companionView') === 'avatar' ? 'avatar' : 'office';
+const randomStatusMode = companionMode && pageParams.get('randomStatuses') === '1';
 const companionAgentId = pageParams.get('agent') || '';
 const MOST_RECENT_AGENT_ID = '__latest__';
 const themeOptions = ['system', 'light', 'dark'];
@@ -22,6 +23,8 @@ const AGENT_REFRESH_MS = 8_000;
 const AGENT_REQUEST_TIMEOUT_MS = 12_000;
 const AGENT_DISCOVERY_GRACE_MS = 12_000;
 const AGENT_DISCOVERY_RETRY_MS = 2_000;
+const RANDOM_STATUS_MIN_MS = 30_000;
+const RANDOM_STATUS_MAX_MS = 60_000;
 const rows = document.querySelector('#fileRows');
 const missionControl = document.querySelector('#missionControl');
 const folderView = document.querySelector('#folderView');
@@ -66,6 +69,24 @@ let officeSceneConfig = { floor: 'wood', windowView: 'sf', poster: 0, emptyDesks
 let modulesConfig = { folderView: { enabled: false } };
 let renderedCompanionAgentId = '';
 let renderedCompanionAgentSignature = '';
+let renderedAgentSummarySignature = '';
+let renderedSessionDebugSignature = '';
+let renderedCronJobsSignature = '';
+let renderedPixelOfficeSignature = '';
+let renderedPixelLatestSessionSignature = '';
+let latestAgentSnapshotData = {};
+let latestRawAgentSnapshotData = {};
+let desktopSnapshotUnsubscribe = null;
+let latestDesktopSnapshotVersion = -1;
+const randomizedStatusByAgent = new Map();
+const randomizedVariantByAgent = new Map();
+let randomStatusTimer = null;
+
+function usesDesktopAgentSnapshots() {
+  return companionMode
+    && typeof window.taskfolkDesktop?.getAgentSnapshot === 'function'
+    && typeof window.taskfolkDesktop?.subscribeAgentSnapshots === 'function';
+}
 
 function applyTheme(theme) {
   const nextTheme = themeOptions.includes(theme) ? theme : 'system';
@@ -162,6 +183,7 @@ function setSessionDebugVisible(visible) {
   sessionDebugToggleBtn.setAttribute('aria-pressed', String(sessionDebugVisible));
   sessionDebugToggleBtn.textContent = sessionDebugVisible ? 'Hide debug' : 'Session debug';
   sessionDebugPanel.classList.toggle('hidden', !sessionDebugVisible);
+  if (sessionDebugVisible) renderSessionDebugPanel(latestAgentSnapshotData);
 }
 
 function setCronJobsVisible(visible) {
@@ -188,7 +210,7 @@ function scheduleAgentRefresh() {
     clearTimeout(agentRefreshTimer);
     agentRefreshTimer = null;
   }
-  if (!agentAutoRefresh || currentView !== 'agents') return;
+  if (document.hidden || usesDesktopAgentSnapshots() || !agentAutoRefresh || currentView !== 'agents') return;
   agentRefreshTimer = setTimeout(() => {
     agentRefreshTimer = null;
     if (currentView === 'agents') loadAgents();
@@ -220,6 +242,7 @@ function renderAgentDiscoveryLoading() {
   officeMap.className = avatarCompanion
     ? 'companionAvatarStage'
     : companionMode ? 'officeMap pixelOfficeWrap agentDiscoveryState' : 'officeMap agentDiscoveryState';
+  officeMap.dataset.renderState = 'loading';
   officeMap.innerHTML = `
     <div class="agentDiscoveryLoading" role="status" aria-live="polite">
       <span class="agentDiscoverySpinner" aria-hidden="true"></span>
@@ -231,11 +254,13 @@ function renderAgentDiscoveryLoading() {
 
 function renderNoAgentsAvailable() {
   const avatarCompanion = companionMode && companionView === 'avatar';
+  if (officeMap.dataset.renderState === 'no-agents') return;
   renderedCompanionAgentId = '';
   renderedCompanionAgentSignature = '';
   officeMap.className = avatarCompanion
     ? 'companionAvatarStage'
     : companionMode ? 'officeMap pixelOfficeWrap agentLoadError' : 'officeMap agentLoadError';
+  officeMap.dataset.renderState = 'no-agents';
   officeMap.innerHTML = `
     <div class="${avatarCompanion ? 'companionAvatarEmpty' : 'emptyOffice'} agentLoadFailure">
       <span>No agents are available.</span>
@@ -244,7 +269,7 @@ function renderNoAgentsAvailable() {
   officeMap.querySelector('.agentLoadRefreshBtn')?.addEventListener('click', () => {
     resetAgentDiscovery();
     renderAgentDiscoveryLoading();
-    loadAgents();
+    refreshAgents();
   });
 }
 
@@ -514,6 +539,10 @@ function renderSessionDebugPanel(data = {}) {
   const latest = Array.isArray(data.latestSessions) ? data.latestSessions.slice(0, 3) : [];
   const stores = Array.isArray(data.sessionDebug) ? data.sessionDebug : [];
   const warnings = stores.filter((item) => item.mtimeNewerThanLatestEntry);
+  const signature = JSON.stringify({ latest, stores: stores.slice(0, 3), groups: data.sessionGroupedCounts || {} });
+  sessionDebugPanel.classList.toggle('hidden', !sessionDebugVisible);
+  if (signature === renderedSessionDebugSignature) return;
+  renderedSessionDebugSignature = signature;
   sessionDebugPanel.innerHTML = `
     <div class="sessionDebugHeader">
       <strong>${esc(latestSessionWinner(data))}</strong>
@@ -537,7 +566,6 @@ function renderSessionDebugPanel(data = {}) {
         <p><span>${esc(groupedSessionLine(data.sessionGroupedCounts || {}))}</span></p>
       </article>
     </div>`;
-  sessionDebugPanel.classList.toggle('hidden', !sessionDebugVisible);
 }
 
 function statusClass(status = '') {
@@ -553,6 +581,10 @@ function renderCronJobsPanel(jobs = latestCronJobs) {
   if (selectedCronJobId && !latestCronJobs.some((job) => job.id === selectedCronJobId)) selectedCronJobId = null;
   const selected = latestCronJobs.find((job) => job.id === selectedCronJobId) || latestCronJobs[0] || null;
   selectedCronJobId = selected?.id || null;
+  const signature = JSON.stringify({ jobs: latestCronJobs, selectedCronJobId, visible: cronJobsVisible });
+  cronJobsPanel.classList.toggle('hidden', !cronJobsVisible);
+  if (signature === renderedCronJobsSignature) return;
+  renderedCronJobsSignature = signature;
   cronJobsPanel.innerHTML = `
     <div class="sessionDebugHeader">
       <strong>${formatNumber(latestCronJobs.length)} cron job${latestCronJobs.length === 1 ? '' : 's'}</strong>
@@ -576,7 +608,6 @@ function renderCronJobsPanel(jobs = latestCronJobs) {
   cronJobsPanel.querySelectorAll('[data-cron-job-id]').forEach((button) => {
     button.onclick = () => selectCronJob(button.dataset.cronJobId);
   });
-  cronJobsPanel.classList.toggle('hidden', !cronJobsVisible);
   if (selected && cronJobsVisible) loadCronJobRuns(selected.id);
 }
 
@@ -647,65 +678,201 @@ function meetingPosition(index) {
   return seats[index] || { left: 50 + ((index % 2) ? 18 : -18), top: 46 + Math.floor(index / 2) * 7 };
 }
 
+function updateAgentSummary(data) {
+  const weeklyCost = data.weeklyCost || {};
+  const signature = JSON.stringify({
+    summary: data.summary,
+    source: data.source,
+    sessionStores: data.sessionStores || 0,
+    latest: latestSessionWinner(data),
+    groups: data.sessionGroupedCounts || {},
+    cronJobCount: latestCronJobs.length,
+    weeklyCost: {
+      estimatedCostUsd: weeklyCost.estimatedCostUsd || 0,
+      sessionCount: weeklyCost.sessionCount || 0,
+      totalTokens: weeklyCost.totalTokens || 0
+    }
+  });
+  if (signature === renderedAgentSummarySignature) return;
+  renderedAgentSummarySignature = signature;
+  agentSummary.innerHTML = `
+    <article><strong>${data.summary.total}</strong><span>Total agents</span></article>
+    <article><strong>${data.summary.active}</strong><span>Working</span></article>
+    <article><strong>${data.summary.success || 0}</strong><span>Success</span></article>
+    <article><strong>${data.summary.idle}</strong><span>Idle</span></article>
+    <article><strong>${data.summary.blocked}</strong><span>Blocked</span></article>
+    <article><strong>${data.source === 'sample' ? 'Sample' : 'Live'}</strong><span>${data.sessionStores || 0} session source(s)</span></article>
+    <article><strong>Latest</strong><span>${esc(latestSessionWinner(data))}</span></article>
+    <article><strong>Groups</strong><span>${esc(groupedSessionLine(data.sessionGroupedCounts || {}))}</span></article>
+    <article><strong>${formatNumber(latestCronJobs.length)}</strong><span>Cron jobs</span></article>
+    <article><strong>${formatCost(weeklyCost.estimatedCostUsd)}</strong><span>Weekly cost · ${esc(weeklyCostLine(weeklyCost))}</span></article>`;
+}
+
+function applyAgentSnapshotData(data, { randomTick = false } = {}) {
+  if (randomStatusMode) {
+    if (!randomTick) latestRawAgentSnapshotData = data;
+    data = randomizeAgentPresentation(data);
+  }
+  latestAgentSnapshotData = data;
+  setAvatarVariantRegistry(data.avatarVariants);
+  latestCronJobs = Array.isArray(data.cronJobs) ? data.cronJobs : [];
+  updateAgentSummary(data);
+  if (sessionDebugVisible) renderSessionDebugPanel(data);
+  if (cronJobsVisible) renderCronJobsPanel(latestCronJobs);
+  officeSceneConfig = normalizeOfficeSceneConfig(data.officeScene);
+  const agents = Array.isArray(data.agents) ? data.agents : [];
+  if (!agents.length && !data.openClawWarning && waitForAgentDiscovery()) return;
+  if (!agents.length) renderNoAgentsAvailable();
+  else {
+    resetAgentDiscovery();
+    if (companionMode && companionView === 'avatar') renderCompanionAvatar(agents);
+    else if (agentDisplayMode === 'pixel') renderPixelOffice(agents, data.latestSessions?.[0]);
+    else renderAgentCards(agents);
+  }
+}
+
+function randomizeAgentPresentation(data = {}) {
+  const statuses = [
+    { status: 'active', displayState: 'Working' },
+    { status: 'success', displayState: 'Success' },
+    { status: 'idle', displayState: 'Idle' },
+    { status: 'blocked', displayState: 'Blocked' }
+  ];
+  const variants = (Array.isArray(data.avatarVariants) ? data.avatarVariants : [])
+    .map((variant) => String(variant?.id || '').trim())
+    .filter(Boolean);
+  const configuredAgents = data.source === 'sample'
+    ? []
+    : Array.isArray(data.agents) ? data.agents : [];
+  let agents = configuredAgents;
+  if (!agents.length) {
+    const id = 'random-showcase-agent';
+    let avatarVariant = randomizedVariantByAgent.get(id);
+    if (!avatarVariant || !variants.includes(avatarVariant)) {
+      avatarVariant = variants[Math.floor(Math.random() * variants.length)] || AVATAR_VARIANT_FALLBACK;
+      randomizedVariantByAgent.set(id, avatarVariant);
+    }
+    agents = [{
+      id,
+      name: 'Random Folk',
+      role: 'Showcase agent',
+      source: 'random',
+      status: 'idle',
+      displayState: 'Idle',
+      task: 'Random status showcase',
+      avatarVariant,
+      lastSeen: new Date().toISOString(),
+      activity: { status: 'idle', derivedStatus: 'idle', updatedAt: Date.now() }
+    }];
+  }
+  const now = Date.now();
+  const visibleAgentIds = new Set(agents.map((agent, index) => String(agent.id || index)));
+  for (const agentId of randomizedStatusByAgent.keys()) {
+    if (!visibleAgentIds.has(agentId)) randomizedStatusByAgent.delete(agentId);
+  }
+  const randomizedAgents = agents.map((agent, index) => {
+    const agentId = String(agent.id || index);
+    let next = randomizedStatusByAgent.get(agentId);
+    if (!next || now >= next.nextChangeAt) {
+      const previousStatus = next?.status || agent.status;
+      const statusChoices = statuses.filter((candidate) => candidate.status !== previousStatus);
+      const selected = statusChoices[Math.floor(Math.random() * statusChoices.length)] || statuses[0];
+      next = {
+        ...selected,
+        nextChangeAt: now + RANDOM_STATUS_MIN_MS
+          + Math.floor(Math.random() * (RANDOM_STATUS_MAX_MS - RANDOM_STATUS_MIN_MS + 1))
+      };
+      randomizedStatusByAgent.set(agentId, next);
+    }
+    return {
+      ...agent,
+      status: next.status,
+      displayState: next.displayState,
+      pose: undefined,
+      activity: agent.activity ? {
+        ...agent.activity,
+        status: next.displayState.toLowerCase(),
+        derivedStatus: next.status
+      } : agent.activity
+    };
+  });
+  scheduleRandomStatusRefresh();
+  return {
+    ...data,
+    agents: randomizedAgents
+  };
+}
+
+function scheduleRandomStatusRefresh() {
+  clearTimeout(randomStatusTimer);
+  const nextChangeAt = Math.min(
+    ...[...randomizedStatusByAgent.values()].map((entry) => entry.nextChangeAt)
+  );
+  if (!Number.isFinite(nextChangeAt)) return;
+  randomStatusTimer = setTimeout(() => {
+    applyAgentSnapshotData(latestRawAgentSnapshotData, { randomTick: true });
+  }, Math.max(0, nextChangeAt - Date.now()));
+}
+
+function renderAgentLoadError(error) {
+  resetAgentDiscovery();
+  const avatarCompanion = companionMode && companionView === 'avatar';
+  if (avatarCompanion) {
+    renderedCompanionAgentId = '';
+    renderedCompanionAgentSignature = '';
+  }
+  officeMap.className = avatarCompanion
+    ? 'companionAvatarStage'
+    : companionMode ? 'officeMap pixelOfficeWrap agentLoadError' : 'officeMap agentLoadError';
+  officeMap.dataset.renderState = 'error';
+  officeMap.innerHTML = `
+    <div class="${avatarCompanion ? 'companionAvatarEmpty' : 'emptyOffice'} agentLoadFailure">
+      <span>Unable to load agents: ${esc(error.message || error)}</span>
+      <button class="agentLoadRefreshBtn" type="button" data-companion-interactive>Refresh</button>
+    </div>`;
+  officeMap.querySelector('.agentLoadRefreshBtn')?.addEventListener('click', refreshAgents);
+}
+
+function applyDesktopAgentSnapshot(snapshot) {
+  if (!snapshot) return;
+  const version = Number(snapshot.version) || 0;
+  if (snapshot.data && version <= latestDesktopSnapshotVersion) return;
+  if (snapshot.data) {
+    latestDesktopSnapshotVersion = version;
+    applyAgentSnapshotData(snapshot.data);
+  } else if (snapshot.error) {
+    renderAgentLoadError(snapshot.error);
+  }
+}
+
 async function loadAgents() {
   if (agentRefreshInFlight) return;
   agentRefreshInFlight = true;
   const requestGeneration = ++agentRequestGeneration;
   if (!officeMap.firstElementChild) renderAgentDiscoveryLoading();
-  const requestController = new AbortController();
-  agentRequestController = requestController;
-  const requestTimeout = setTimeout(() => requestController.abort(), AGENT_REQUEST_TIMEOUT_MS);
+  let requestController = null;
+  let requestTimeout = null;
   try {
+    if (usesDesktopAgentSnapshots()) {
+      const snapshot = await window.taskfolkDesktop.getAgentSnapshot();
+      if (requestGeneration !== agentRequestGeneration) return;
+      applyDesktopAgentSnapshot(snapshot);
+      return;
+    }
+    requestController = new AbortController();
+    agentRequestController = requestController;
+    requestTimeout = setTimeout(() => requestController.abort(), AGENT_REQUEST_TIMEOUT_MS);
     const data = await api(`/api/agents?t=${Date.now()}`, {
       cache: 'no-store',
       signal: requestController.signal
     });
     if (requestGeneration !== agentRequestGeneration) return;
-    setAvatarVariantRegistry(data.avatarVariants);
-    const weeklyCost = data.weeklyCost || {};
-    latestCronJobs = Array.isArray(data.cronJobs) ? data.cronJobs : [];
-    agentSummary.innerHTML = `
-      <article><strong>${data.summary.total}</strong><span>Total agents</span></article>
-      <article><strong>${data.summary.active}</strong><span>Working</span></article>
-      <article><strong>${data.summary.success || 0}</strong><span>Success</span></article>
-      <article><strong>${data.summary.idle}</strong><span>Idle</span></article>
-      <article><strong>${data.summary.blocked}</strong><span>Blocked</span></article>
-      <article><strong>${data.source === 'sample' ? 'Sample' : 'Live'}</strong><span>${data.sessionStores || 0} session source(s)</span></article>
-      <article><strong>Latest</strong><span>${esc(latestSessionWinner(data))}</span></article>
-      <article><strong>Groups</strong><span>${esc(groupedSessionLine(data.sessionGroupedCounts || {}))}</span></article>
-      <article><strong>${formatNumber(latestCronJobs.length)}</strong><span>Cron jobs</span></article>
-      <article><strong>${formatCost(weeklyCost.estimatedCostUsd)}</strong><span>Weekly cost · ${esc(weeklyCostLine(weeklyCost))}</span></article>`;
-    renderSessionDebugPanel(data);
-    renderCronJobsPanel(latestCronJobs);
-    officeSceneConfig = normalizeOfficeSceneConfig(data.officeScene);
-    const agents = Array.isArray(data.agents) ? data.agents : [];
-    if (!agents.length && !data.openClawWarning && waitForAgentDiscovery()) return;
-    if (!agents.length) renderNoAgentsAvailable();
-    else {
-      resetAgentDiscovery();
-      if (companionMode && companionView === 'avatar') renderCompanionAvatar(agents);
-      else if (agentDisplayMode === 'pixel') renderPixelOffice(agents, data.latestSessions?.[0]);
-      else renderAgentCards(agents);
-    }
+    applyAgentSnapshotData(data);
   } catch (err) {
     if (requestGeneration !== agentRequestGeneration) return;
-    resetAgentDiscovery();
-    const avatarCompanion = companionMode && companionView === 'avatar';
-    if (avatarCompanion) {
-      renderedCompanionAgentId = '';
-      renderedCompanionAgentSignature = '';
-    }
-    officeMap.className = avatarCompanion
-      ? 'companionAvatarStage'
-      : companionMode ? 'officeMap pixelOfficeWrap agentLoadError' : 'officeMap agentLoadError';
-    officeMap.innerHTML = `
-      <div class="${avatarCompanion ? 'companionAvatarEmpty' : 'emptyOffice'} agentLoadFailure">
-        <span>Unable to load agents: ${esc(err.message)}</span>
-        <button class="agentLoadRefreshBtn" type="button" data-companion-interactive>Refresh</button>
-      </div>`;
-    officeMap.querySelector('.agentLoadRefreshBtn')?.addEventListener('click', loadAgents);
+    renderAgentLoadError(err);
   } finally {
-    clearTimeout(requestTimeout);
+    if (requestTimeout) clearTimeout(requestTimeout);
     if (requestGeneration === agentRequestGeneration) {
       agentRequestController = null;
       agentRefreshInFlight = false;
@@ -714,7 +881,21 @@ async function loadAgents() {
   }
 }
 
+async function refreshAgents() {
+  if (!usesDesktopAgentSnapshots()) return loadAgents();
+  try {
+    const snapshot = await window.taskfolkDesktop.refreshAgentSnapshot();
+    applyDesktopAgentSnapshot(snapshot);
+  } catch (error) {
+    renderAgentLoadError(error);
+  }
+}
+
 function forceReloadAgents() {
+  if (companionMode) {
+    window.dispatchEvent(new Event('taskfolk:force-reload'));
+    return;
+  }
   agentRequestGeneration += 1;
   agentRequestController?.abort();
   agentRequestController = null;
@@ -740,47 +921,107 @@ function agentMeta(agent) {
   return `${relativeTime(agent.lastSeen)}${agent.sessionFile ? ` · ${agent.sessionFile}` : ''}${agent.logFile ? ` · ${agent.logFile}` : ''}`;
 }
 
+function agentCardSignature(agent) {
+  const activity = agent.activity || {};
+  return JSON.stringify({
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    status: agent.status,
+    displayState: agent.displayState,
+    task: agent.task,
+    sessions: agent.sessions,
+    workspacePath: agent.workspacePath,
+    sessionFile: agent.sessionFile,
+    logFile: agent.logFile,
+    activity: {
+      channelBadge: activity.channelBadge,
+      status: activity.status,
+      derivedStatus: activity.derivedStatus,
+      sessionKeyShort: activity.sessionKeyShort,
+      startedAt: activity.startedAt,
+      endedAt: activity.endedAt,
+      runtimeMs: activity.startedAt && !activity.endedAt ? null : activity.runtimeMs,
+      totalTokens: activity.totalTokens,
+      inputTokens: activity.inputTokens,
+      outputTokens: activity.outputTokens,
+      estimatedCostUsd: activity.estimatedCostUsd,
+      agentHarnessId: activity.agentHarnessId,
+      sandboxed: activity.sandboxed,
+      sandboxMode: activity.sandboxMode,
+      timestampSource: activity.timestampSource,
+      skills: activity.skills
+    }
+  });
+}
+
+function updateAgentCard(desk, agent, signature) {
+  const activity = agent.activity || {};
+  const tokenLine = tokenCostLine(activity);
+  const runtime = durationLabel(runDuration(agent));
+  const skills = Array.isArray(activity.skills) ? activity.skills.slice(0, 4) : [];
+  const extraBadges = [
+    activity.channelBadge,
+    activity.status ? `raw ${activity.status}` : null,
+    activity.derivedStatus ? `ui ${activity.derivedStatus}` : null,
+    agent.sessions ? `${agent.sessions} sessions` : null
+  ].filter(Boolean);
+  const detailRows = [
+    agent.workspacePath ? { label: 'Workspace', value: agent.workspacePath } : null,
+    activity.sessionKeyShort ? { label: 'Session', value: activity.sessionKeyShort } : null,
+    runtime ? { label: 'Runtime', value: runtime, live: 'runtime' } : null,
+    tokenLine ? { label: 'Tokens', value: tokenLine } : null,
+    activity.agentHarnessId ? { label: 'Harness', value: activity.agentHarnessId } : null,
+    activity.sandboxed || activity.sandboxMode ? { label: 'Sandbox', value: activity.sandboxMode || 'sandboxed' } : null,
+    activity.timestampSource ? { label: 'Timestamp source', value: activity.timestampSource } : null
+  ].filter(Boolean);
+  desk.className = `agentDesk ${agent.status}`;
+  desk.dataset.agentId = String(agent.id || '');
+  desk.dataset.renderSignature = signature;
+  desk.innerHTML = `
+    <div class="agentAvatar">${esc(agent.name).slice(0, 1).toUpperCase()}</div>
+    <div>
+      <h3>${esc(agent.name)}</h3>
+      <p>${esc(agent.role)}</p>
+      <div class="agentBadges">
+        <span>${esc(agentStateLabel(agent))}</span>
+        ${extraBadges.map((badge) => `<span>${esc(badge)}</span>`).join('')}
+      </div>
+      <small>${esc(agent.task)}</small>
+      ${detailRows.length ? `<dl class="agentDetails">${detailRows.map(({ label, value, live }) => `<div><dt>${esc(label)}</dt><dd${live ? ` data-agent-live="${live}"` : ''}>${esc(value)}</dd></div>`).join('')}</dl>` : ''}
+      ${skills.length ? `<div class="agentSkills">${skills.map((skill) => `<span>${esc(skill)}</span>`).join('')}</div>` : ''}
+      <small class="agentMeta">${esc(agentMeta(agent))}</small>
+    </div>`;
+}
+
+function updateAgentCardLiveText(desk, agent) {
+  const meta = desk.querySelector('.agentMeta');
+  if (meta) meta.textContent = agentMeta(agent);
+  const runtime = desk.querySelector('[data-agent-live="runtime"]');
+  if (runtime) runtime.textContent = durationLabel(runDuration(agent));
+}
+
 function renderAgentCards(agents) {
   officeMap.className = 'officeMap';
-  officeMap.innerHTML = '';
-  for (const agent of agents) {
-    const activity = agent.activity || {};
-    const tokenLine = tokenCostLine(activity);
-    const runtime = durationLabel(runDuration(agent));
-    const skills = Array.isArray(activity.skills) ? activity.skills.slice(0, 4) : [];
-    const extraBadges = [
-      activity.channelBadge,
-      activity.status ? `raw ${activity.status}` : null,
-      activity.derivedStatus ? `ui ${activity.derivedStatus}` : null,
-      agent.sessions ? `${agent.sessions} sessions` : null
-    ].filter(Boolean);
-    const detailRows = [
-      agent.workspacePath ? ['Workspace', agent.workspacePath] : null,
-      activity.sessionKeyShort ? ['Session', activity.sessionKeyShort] : null,
-      runtime ? ['Runtime', runtime] : null,
-      tokenLine ? ['Tokens', tokenLine] : null,
-      activity.agentHarnessId ? ['Harness', activity.agentHarnessId] : null,
-      activity.sandboxed || activity.sandboxMode ? ['Sandbox', activity.sandboxMode || 'sandboxed'] : null,
-      activity.timestampSource ? ['Timestamp source', activity.timestampSource] : null
-    ].filter(Boolean);
-    const desk = document.createElement('article');
-    desk.className = `agentDesk ${agent.status}`;
-    desk.innerHTML = `
-      <div class="agentAvatar">${esc(agent.name).slice(0, 1).toUpperCase()}</div>
-      <div>
-        <h3>${esc(agent.name)}</h3>
-        <p>${esc(agent.role)}</p>
-        <div class="agentBadges">
-          <span>${esc(agentStateLabel(agent))}</span>
-          ${extraBadges.map((badge) => `<span>${esc(badge)}</span>`).join('')}
-        </div>
-        <small>${esc(agent.task)}</small>
-        ${detailRows.length ? `<dl class="agentDetails">${detailRows.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>` : ''}
-        ${skills.length ? `<div class="agentSkills">${skills.map((skill) => `<span>${esc(skill)}</span>`).join('')}</div>` : ''}
-        <small class="agentMeta">${esc(agentMeta(agent))}</small>
-      </div>`;
-    officeMap.append(desk);
+  officeMap.dataset.renderState = 'cards';
+  if ([...officeMap.children].some((child) => !child.classList.contains('agentDesk'))) {
+    officeMap.replaceChildren();
   }
+  const existing = new Map(
+    [...officeMap.querySelectorAll('.agentDesk[data-agent-id]')]
+      .map((desk) => [desk.dataset.agentId, desk])
+  );
+  agents.forEach((agent, index) => {
+    const agentId = String(agent.id || '');
+    const signature = agentCardSignature(agent);
+    const desk = existing.get(agentId) || document.createElement('article');
+    if (desk.dataset.renderSignature !== signature) updateAgentCard(desk, agent, signature);
+    else updateAgentCardLiveText(desk, agent);
+    const currentAtIndex = officeMap.children[index];
+    if (currentAtIndex !== desk) officeMap.insertBefore(desk, currentAtIndex || null);
+    existing.delete(agentId);
+  });
+  for (const desk of existing.values()) desk.remove();
 }
 
 function pixelPosition(index, total) {
@@ -950,6 +1191,130 @@ function renderPixelLatestSession(latest) {
     </div>`;
 }
 
+function pixelAgentPresentation(agent, index, agents, sceneConfig, roomState) {
+  const useMeetingPose = roomState.meetingMode && agent.status === 'active';
+  const position = pixelPosition(index, agents.length + sceneConfig.emptyDesks);
+  const thoughtId = `pixel-agent-thought-${index}`;
+  const signature = JSON.stringify({
+    id: agent.id,
+    name: agent.name,
+    status: agent.status,
+    stateLabel: agentStateLabel(agent),
+    task: agent.task,
+    role: pixelRole(agent),
+    activityLevel: activityLevel(agent),
+    ageClass: agentAgeClass(agent),
+    pose: pixelAgentPose(agent, useMeetingPose),
+    variant: avatarVariant(agent),
+    useMeetingPose
+  });
+  return { useMeetingPose, position, thoughtId, signature };
+}
+
+function pixelOfficeLayoutSignature(agents, sceneConfig) {
+  return JSON.stringify({
+    sceneConfig,
+    agentIds: agents.map((agent) => String(agent.id || ''))
+  });
+}
+
+function pixelLatestSessionSignature(latestSession) {
+  if (!latestSession) return 'empty';
+  return JSON.stringify({
+    key: latestSession.key,
+    shortKey: latestSession.shortKey,
+    status: latestSession.status,
+    derivedStatus: latestSession.derivedStatus,
+    channelBadge: latestSession.channelBadge,
+    model: latestSession.model
+  });
+}
+
+function updatePixelOfficeState(agents, latestSession, roomState, metrics, sceneConfig) {
+  const scene = officeMap.querySelector('.pixelOfficeScene');
+  if (scene) {
+    scene.className = `pixelOfficeScene ${roomState.timeClass} floor-${sceneConfig.floor} window-${sceneConfig.windowView} ${agents.length > 8 ? 'crowdedOffice' : ''} ${agents.length > 14 ? 'denseOffice' : ''} ${agents.length > 20 ? 'packedOffice' : ''} ${roomState.officeClass}`;
+  }
+  const roomCounts = {
+    working: roomState.active,
+    success: roomState.success,
+    idle: roomState.idle,
+    blocked: roomState.blocked
+  };
+  for (const [state, count] of Object.entries(roomCounts)) {
+    const element = officeMap.querySelector(`[data-office-state="${state}"]`);
+    if (element) element.textContent = String(count);
+  }
+  const agentCount = officeMap.querySelector('[data-office-agent-count]');
+  if (agentCount) agentCount.textContent = String(agents.length);
+
+  const latestSignature = pixelLatestSessionSignature(latestSession);
+  if (latestSignature !== renderedPixelLatestSessionSignature) {
+    const currentLatest = officeMap.querySelector('.pixelLatestSession');
+    if (currentLatest) currentLatest.outerHTML = renderPixelLatestSession(latestSession);
+    renderedPixelLatestSessionSignature = latestSignature;
+  }
+
+  const latestTime = officeMap.querySelector('[data-office-latest-time]');
+  if (latestTime) latestTime.textContent = formatTimestamp(metrics.latestMs);
+  const latestRelative = officeMap.querySelector('[data-office-latest-relative]');
+  if (latestRelative) latestRelative.textContent = `updated ${relativeTime(metrics.latestMs)}`;
+  const freshness = officeMap.querySelector('[data-office-freshness]');
+  if (freshness) {
+    freshness.style.width = `${Math.max(12, Math.min(100, Math.round(((Date.now() - (metrics.latestMs || Date.now())) / 1000 / 60) * 10))) % 100}%`;
+  }
+  const cost = officeMap.querySelector('[data-office-cost]');
+  if (cost) cost.textContent = formatCost(metrics.estimatedCostUsd);
+  const tokens = officeMap.querySelector('[data-office-tokens]');
+  if (tokens) tokens.textContent = `${Math.round(metrics.totalTokens / 1000)}k`;
+  const runtime = officeMap.querySelector('[data-office-runtime]');
+  if (runtime) runtime.textContent = durationLabel(metrics.avgRuntime);
+}
+
+function bindPixelAgentInteractions(agentElement) {
+  agentElement.addEventListener('pointerenter', () => fitPixelThoughtBubble(agentElement));
+  agentElement.addEventListener('focus', () => fitPixelThoughtBubble(agentElement));
+}
+
+function updatePixelAgentElement(agentElement, labelElement, agent, presentation) {
+  const { useMeetingPose, position, thoughtId, signature } = presentation;
+  agentElement.className = `pixelAgent ${agent.status} ${useMeetingPose ? 'meeting' : ''} role-${pixelRole(agent)} ${activityLevel(agent)} ${agentAgeClass(agent)}`;
+  agentElement.style.left = `${position.left}%`;
+  agentElement.style.top = `${position.top}%`;
+  agentElement.setAttribute('aria-label', `${agent.name} is ${agentStateLabel(agent)}`);
+  agentElement.setAttribute('aria-describedby', thoughtId);
+  agentElement.dataset.renderSignature = signature;
+  agentElement.innerHTML = `
+    <div class="pixelAgentThought" id="${thoughtId}" role="tooltip">${esc(agent.task)}</div>
+    ${pixelAgentScene(agent, useMeetingPose)}`;
+  if (labelElement) {
+    labelElement.className = `pixelAgentName ${agent.status}`;
+    labelElement.style.left = `${position.left}%`;
+    labelElement.style.top = `${position.top + 3}%`;
+    labelElement.textContent = agent.name;
+  }
+  bindPixelAgentInteractions(agentElement);
+}
+
+function updateChangedPixelAgents(agents, sceneConfig, roomState) {
+  const agentElements = new Map(
+    [...officeMap.querySelectorAll('.pixelAgent[data-agent-id]')]
+      .map((element) => [element.dataset.agentId, element])
+  );
+  const labelElements = new Map(
+    [...officeMap.querySelectorAll('.pixelAgentName[data-agent-id]')]
+      .map((element) => [element.dataset.agentId, element])
+  );
+  agents.forEach((agent, index) => {
+    const agentId = String(agent.id || '');
+    const agentElement = agentElements.get(agentId);
+    if (!agentElement) return;
+    const presentation = pixelAgentPresentation(agent, index, agents, sceneConfig, roomState);
+    if (agentElement.dataset.renderSignature === presentation.signature) return;
+    updatePixelAgentElement(agentElement, labelElements.get(agentId), agent, presentation);
+  });
+}
+
 function fitPixelThoughtBubble(agentElement) {
   const bubble = agentElement.querySelector('.pixelAgentThought');
   const scene = agentElement.closest('.pixelOfficeScene');
@@ -1004,9 +1369,18 @@ function fitCompanionThoughtBubble(agentElement) {
 
 function renderPixelOffice(agents, latestSession = null) {
   officeMap.className = 'officeMap pixelOfficeWrap';
+  officeMap.dataset.renderState = 'pixel';
   const roomState = pixelRoomState(agents);
   const metrics = officeMetrics(agents);
   const sceneConfig = normalizeOfficeSceneConfig(officeSceneConfig);
+  const signature = pixelOfficeLayoutSignature(agents, sceneConfig);
+  if (signature === renderedPixelOfficeSignature && officeMap.querySelector('.pixelOfficeScene')) {
+    updateChangedPixelAgents(agents, sceneConfig, roomState);
+    updatePixelOfficeState(agents, latestSession, roomState, metrics, sceneConfig);
+    return;
+  }
+  renderedPixelOfficeSignature = signature;
+  renderedPixelLatestSessionSignature = pixelLatestSessionSignature(latestSession);
   const emptyDesks = Array.from({ length: sceneConfig.emptyDesks }, (_, index) => {
     const position = pixelPosition(agents.length + index, agents.length + sceneConfig.emptyDesks);
     return `
@@ -1016,13 +1390,17 @@ function renderPixelOffice(agents, latestSession = null) {
   }).join('');
   const labels = [];
   const people = agents.map((agent, index) => {
-    const useMeetingPose = roomState.meetingMode && agent.status === 'active';
-    const position = pixelPosition(index, agents.length + sceneConfig.emptyDesks);
-    const thoughtId = `pixel-agent-thought-${index}`;
+    const { useMeetingPose, position, thoughtId, signature: agentSignature } = pixelAgentPresentation(
+      agent,
+      index,
+      agents,
+      sceneConfig,
+      roomState
+    );
     labels.push(`
-      <span class="pixelAgentName ${esc(agent.status)}" style="left:${position.left}%;top:${position.top + 3}%;">${esc(agent.name)}</span>`);
+      <span class="pixelAgentName ${esc(agent.status)}" data-agent-id="${esc(agent.id || '')}" style="left:${position.left}%;top:${position.top + 3}%;">${esc(agent.name)}</span>`);
     return `
-      <article class="pixelAgent ${esc(agent.status)} ${useMeetingPose ? 'meeting' : ''} role-${pixelRole(agent)} ${activityLevel(agent)} ${agentAgeClass(agent)}" style="left:${position.left}%;top:${position.top}%;" tabindex="0" aria-label="${esc(agent.name)} is ${esc(agentStateLabel(agent))}" aria-describedby="${thoughtId}">
+      <article class="pixelAgent ${esc(agent.status)} ${useMeetingPose ? 'meeting' : ''} role-${pixelRole(agent)} ${activityLevel(agent)} ${agentAgeClass(agent)}" data-agent-id="${esc(agent.id || '')}" data-render-signature="${esc(agentSignature)}" style="left:${position.left}%;top:${position.top}%;" tabindex="0" aria-label="${esc(agent.name)} is ${esc(agentStateLabel(agent))}" aria-describedby="${thoughtId}">
         <div class="pixelAgentThought" id="${thoughtId}" role="tooltip">${esc(agent.task)}</div>
         ${pixelAgentScene(agent, useMeetingPose)}
       </article>`;
@@ -1036,24 +1414,24 @@ function renderPixelOffice(agents, latestSession = null) {
         <div class="pixelStatusBoard">
           <div class="pixelStatusBoardHeader">
             <span>Wall status board</span>
-            <strong>${formatTimestamp(metrics.latestMs)}</strong>
+            <strong data-office-latest-time>${formatTimestamp(metrics.latestMs)}</strong>
           </div>
           <div class="pixelStatusLights">
-            <span class="working" title="Working">${roomState.active}</span>
-            <span class="success" title="Success">${roomState.success}</span>
-            <span class="idle" title="Idle">${roomState.idle}</span>
-            <span class="blocked" title="Blocked">${roomState.blocked}</span>
+            <span class="working" data-office-state="working" title="Working">${roomState.active}</span>
+            <span class="success" data-office-state="success" title="Success">${roomState.success}</span>
+            <span class="idle" data-office-state="idle" title="Idle">${roomState.idle}</span>
+            <span class="blocked" data-office-state="blocked" title="Blocked">${roomState.blocked}</span>
           </div>
           ${renderPixelLatestSession(latestSession)}
           <div class="pixelStatusBoardStats">
-            <div><strong>${agents.length}</strong><span>Agents</span></div>
-            <div><strong>${formatCost(metrics.estimatedCostUsd)}</strong><span>Cost</span></div>
-            <div><strong>${Math.round(metrics.totalTokens / 1000)}k</strong><span>Tokens</span></div>
-            <div><strong>${durationLabel(metrics.avgRuntime)}</strong><span>Avg run</span></div>
+            <div><strong data-office-agent-count>${agents.length}</strong><span>Agents</span></div>
+            <div><strong data-office-cost>${formatCost(metrics.estimatedCostUsd)}</strong><span>Cost</span></div>
+            <div><strong data-office-tokens>${Math.round(metrics.totalTokens / 1000)}k</strong><span>Tokens</span></div>
+            <div><strong data-office-runtime>${durationLabel(metrics.avgRuntime)}</strong><span>Avg run</span></div>
           </div>
           <div class="pixelStatusStrip">
-            <span class="fill" style="width:${Math.max(12, Math.min(100, Math.round(((Date.now() - (metrics.latestMs || Date.now())) / 1000 / 60) * 10))) % 100}%"></span>
-            <em>updated ${relativeTime(metrics.latestMs)}</em>
+            <span class="fill" data-office-freshness style="width:${Math.max(12, Math.min(100, Math.round(((Date.now() - (metrics.latestMs || Date.now())) / 1000 / 60) * 10))) % 100}%"></span>
+            <em data-office-latest-relative>updated ${relativeTime(metrics.latestMs)}</em>
           </div>
         </div>
         <div class="pixelCabinet"></div>
@@ -1069,13 +1447,13 @@ function renderPixelOffice(agents, latestSession = null) {
     </div>`;
 
   for (const agentElement of officeMap.querySelectorAll('.pixelAgent')) {
-    agentElement.addEventListener('pointerenter', () => fitPixelThoughtBubble(agentElement));
-    agentElement.addEventListener('focus', () => fitPixelThoughtBubble(agentElement));
+    bindPixelAgentInteractions(agentElement);
   }
 }
 
 function renderCompanionAvatar(agents) {
   officeMap.className = 'companionAvatarStage';
+  officeMap.dataset.renderState = 'companion';
   const agent = companionAgentId === MOST_RECENT_AGENT_ID
     ? [...agents].sort((left, right) => agentRecencyMs(right) - agentRecencyMs(left))[0]
     : agents.find((candidate) => String(candidate.id) === companionAgentId) || agents[0];
@@ -1099,8 +1477,7 @@ function renderCompanionAvatar(agents) {
     scenePose,
     agent.displayState,
     agent.avatarVariant,
-    agent.task,
-    agentRecencyMs(agent)
+    agent.task
   ].join(':');
   if (signature === renderedCompanionAgentSignature) return;
   const switchedAgent = Boolean(renderedCompanionAgentId && renderedCompanionAgentId !== agentId);
@@ -1465,7 +1842,7 @@ pixelFullscreenBtn.onclick = togglePixelFullscreen;
 agentAutoRefreshBtn.onclick = () => setAgentAutoRefresh(!agentAutoRefresh);
 sessionDebugToggleBtn.onclick = () => setSessionDebugVisible(!sessionDebugVisible);
 cronJobsToggleBtn.onclick = () => setCronJobsVisible(!cronJobsVisible);
-document.querySelector('#refreshBtn').onclick = () => currentView === 'files' ? loadDir() : loadAgents();
+document.querySelector('#refreshBtn').onclick = () => currentView === 'files' ? loadDir() : refreshAgents();
 document.querySelector('#closePreviewBtn').onclick = hidePreviewPanel;
 fullscreenPreviewBtn.onclick = togglePreviewFullscreen;
 editPreviewBtn.onclick = showEditor;
@@ -1482,9 +1859,20 @@ try {
     }
   });
 } catch {}
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && currentView === 'agents' && agentAutoRefresh) loadAgents();
-});
+function applyResourceVisibility() {
+  const suspended = document.hidden;
+  document.documentElement.classList.toggle('resource-suspended', suspended);
+  if (suspended) {
+    clearTimeout(agentRefreshTimer);
+    agentRefreshTimer = null;
+    clearAgentDiscoveryRetry();
+    return;
+  }
+  if (currentView === 'agents' && agentAutoRefresh) loadAgents();
+}
+
+document.addEventListener('visibilitychange', applyResourceVisibility);
+applyResourceVisibility();
 document.addEventListener('keydown', (event) => {
   if (!companionMode && event.key === 'Escape' && document.body.classList.contains('pixel-office-fullscreen')) {
     setPixelFullscreen(false);
@@ -1509,6 +1897,10 @@ document.querySelector('#uploadForm').onsubmit = async (event) => {
 setPreviewEmpty();
 setSessionDebugVisible(sessionDebugVisible);
 setCronJobsVisible(cronJobsVisible);
+if (usesDesktopAgentSnapshots()) {
+  desktopSnapshotUnsubscribe = window.taskfolkDesktop.subscribeAgentSnapshots(applyDesktopAgentSnapshot);
+  window.addEventListener('unload', () => desktopSnapshotUnsubscribe?.(), { once: true });
+}
 async function initApp() {
   await loadAppConfig();
   const initialView = !companionMode && pageParams.get('view') === 'files' ? 'files' : 'agents';

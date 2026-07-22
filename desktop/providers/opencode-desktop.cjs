@@ -9,8 +9,6 @@ const {
   singleOpenCodeAgent
 } = require('./opencode.cjs');
 
-const ACTIVE_ACTIVITY_MS = 30_000;
-
 function defaultOpenCodeDbPath({ platform = process.platform, env = process.env, home = os.homedir() } = {}) {
   if (env.OPENCODE_DB && env.OPENCODE_DB !== ':memory:') return path.resolve(env.OPENCODE_DB);
   if (env.XDG_DATA_HOME) return path.join(env.XDG_DATA_HOME, 'opencode', 'opencode.db');
@@ -109,9 +107,11 @@ function rowStatus(row, nowMs) {
   if (/pending|running/.test(toolStatus)) return 'busy';
   const incompleteAssistant = row.message_role === 'assistant' && !row.message_completed;
   const waitingForAssistant = row.message_role === 'user';
-  if ((incompleteAssistant || waitingForAssistant) && nowMs - rowActivityMs(row) <= ACTIVE_ACTIVITY_MS) {
-    return 'busy';
-  }
+  // Model inference can be quiet for much longer than 30 seconds. The missing
+  // completion timestamp is OpenCode's durable lifecycle signal, so keep the
+  // session busy until it records completion or an error. A user message has
+  // the same meaning: OpenCode is still expected to produce its reply.
+  if (incompleteAssistant || waitingForAssistant) return 'busy';
   return 'idle';
 }
 
@@ -179,7 +179,6 @@ async function fetchOpenCodeDesktopAgents({
 }
 
 module.exports = {
-  ACTIVE_ACTIVITY_MS,
   agentsFromRows,
   defaultOpenCodeDbPath,
   fetchOpenCodeDesktopAgents,

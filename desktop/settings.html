@@ -22,7 +22,7 @@
           <option value="remote">Connect to a remote server</option>
         </select>
       </label>
-      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. Agents can come from local or remote OpenClaw, OpenCode, VS Code Copilot, Codex, Claude, and Gemini.</p>
+      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. Agents can come from local or remote OpenClaw, OpenCode, VS Code Copilot, Codex, Claude, Gemini, Antigravity, Ollama, and LM Studio.</p>
       <div id="remoteConnectionFields" class="remoteConnectionFields">
         <label>
           <span>Taskfolk URL</span>
@@ -43,6 +43,7 @@
           <select id="displayMode" name="displayMode">
             <option value="office">Full office</option>
             <option value="avatar">Single avatar</option>
+            <option value="random">Random status showcase</option>
           </select>
         </label>
         <label id="agentField">
@@ -94,8 +95,8 @@
         <label id="openCodeGroupingField">
           <span>OpenCode agents</span>
           <select id="openCodeGrouping" name="openCodeGrouping">
-            <option value="project">One agent per project</option>
             <option value="single">One agent for all projects</option>
+            <option value="project">One agent per project</option>
           </select>
           <small>Choose whether projects keep separate avatars or share one OpenCode avatar.</small>
         </label>
@@ -118,7 +119,7 @@
       <section class="integrationField">
         <label class="checkRow">
           <input id="openClawEnabled" name="openClawEnabled" type="checkbox" />
-          <span class="integrationLabel"><img class="integrationIcon integrationIconPixel" src="./assets/openclaw.svg" alt="" />Connect to an OpenClaw instance</span>
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/openclaw.png" alt="" />Connect to an OpenClaw instance</span>
         </label>
         <label id="openClawUrlField">
           <span>OpenClaw gateway URL</span>
@@ -147,8 +148,8 @@
         <label id="vsCodeCopilotGroupingField">
           <span>VS Code Copilot agents</span>
           <select id="vsCodeCopilotGrouping" name="vsCodeCopilotGrouping">
-            <option value="project">One agent per project</option>
             <option value="single">One agent for all projects</option>
+            <option value="project">One agent per project</option>
           </select>
           <small>Reads local VS Code chat metadata only. Prompts, responses, tool output, and credentials stay private.</small>
         </label>
@@ -161,8 +162,8 @@
         <label id="codexGroupingField">
           <span>Codex agents</span>
           <select id="codexGrouping" name="codexGrouping">
-            <option value="project">One agent per project</option>
             <option value="single">One agent for all projects</option>
+            <option value="project">One agent per project</option>
           </select>
           <small>Reads local task titles, project paths, models, timestamps, and lifecycle event kinds only. Prompt bodies, responses, tool output, and credentials stay private.</small>
         </label>
@@ -175,8 +176,8 @@
         <label id="claudeGroupingField">
           <span>Claude agents</span>
           <select id="claudeGrouping" name="claudeGrouping">
-            <option value="project">One agent per project</option>
             <option value="single">One agent for all projects</option>
+            <option value="project">One agent per project</option>
           </select>
           <small>Reads local Claude session metadata only. Cloud-only Cowork sessions are not visible because Anthropic does not expose their live status locally.</small>
         </label>
@@ -189,8 +190,8 @@
         <label id="geminiGroupingField">
           <span>Gemini agents</span>
           <select id="geminiGrouping" name="geminiGrouping">
-            <option value="project">One agent per project</option>
             <option value="single">One agent for all projects</option>
+            <option value="project">One agent per project</option>
           </select>
           <small>Reads local Gemini CLI session metadata and detects the local VS Code Code Assist agent process. The consumer Gemini app, ordinary Code Assist chats, and inline completions are not exposed locally.</small>
         </label>
@@ -203,15 +204,59 @@
         <label id="antigravityGroupingField">
           <span>Antigravity agents</span>
           <select id="antigravityGrouping" name="antigravityGrouping">
-            <option value="project">One agent per project, plus conversations</option>
             <option value="single">One agent for all Antigravity activity</option>
+            <option value="project">One agent per project, plus conversations</option>
           </select>
           <small>Conversations in each project share one agent; chats outside a project share one Conversations agent. Prompts, responses, tool output, artifacts, and Google credentials stay private.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="ollamaEnabled" name="ollamaEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/ollama.png" alt="" />Track Ollama Desktop chats</span>
+        </label>
+        <label id="ollamaGroupingField">
+          <span>Ollama agents</span>
+          <select id="ollamaGrouping" name="ollamaGrouping">
+            <option value="single">One agent for all Ollama activity</option>
+            <option value="chat">One agent per active chat</option>
+          </select>
+          <small>Ollama Desktop chats use local title, model, stream state, and timestamps only. Prompts and responses stay private.</small>
+        </label>
+        <label id="ollamaUrlField">
+          <span>Ollama server URL</span>
+          <input id="ollamaUrl" name="ollamaUrl" type="url" value="http://127.0.0.1:11434" />
+          <small>For terminal and API clients, loaded models from <code>/api/ps</code> are used as a fallback because Ollama does not expose their chat sessions.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="lmStudioEnabled" name="lmStudioEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/lmstudio.svg" alt="" />Track LM Studio Desktop chats</span>
+        </label>
+        <label id="lmStudioGroupingField">
+          <span>LM Studio agents</span>
+          <select id="lmStudioGrouping" name="lmStudioGrouping">
+            <option value="single">One agent for all LM Studio chats</option>
+            <option value="chat">One agent per active chat</option>
+          </select>
+          <small>Local Desktop chats use title and timestamp metadata plus generation status. Prompts and responses stay private.</small>
+        </label>
+        <label id="lmStudioUrlField">
+          <span>LM Studio server URL</span>
+          <input id="lmStudioUrl" name="lmStudioUrl" type="url" value="http://127.0.0.1:1234" />
+          <small>Local Desktop chat tracking does not require the API server. Remote URLs fall back to loaded-model tracking.</small>
+        </label>
+        <label id="lmStudioTokenField">
+          <span>LM Studio API token <small>optional</small></span>
+          <input id="lmStudioApiToken" name="lmStudioApiToken" type="password" autocomplete="off" />
+          <small>Only required when authentication is enabled in LM Studio.</small>
         </label>
       </section>
       <div class="configActions" aria-label="Configuration file actions">
         <button id="importConfigButton" class="secondaryButton" type="button">Import Conf</button>
         <button id="exportConfigButton" class="secondaryButton hidden" type="button">Export Conf</button>
+        <button id="resetConfigButton" class="secondaryButton dangerButton hidden" type="button">Reset Conf…</button>
       </div>
       <p id="configStatus" class="integrationStatus" role="status"></p>
       <button id="connectButton" type="submit">Run and open office</button>

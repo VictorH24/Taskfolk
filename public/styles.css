@@ -2721,3 +2721,9 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   }
 }
 @media (max-width: 800px) { .dashboardHero { flex-direction: column; } .sessionDebugGrid, .cronJobsLayout { grid-template-columns: 1fr; } .officeMap { grid-template-columns: 1fr; min-height: auto; } .agentDesk { width: auto; } }
+
+html.resource-suspended *,
+html.resource-suspended *::before,
+html.resource-suspended *::after {
+  animation-play-state: paused !important;
+}

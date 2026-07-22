@@ -11,7 +11,7 @@ const CODEX_GROUPING_SINGLE = 'single';
 const ROLLOUT_TAIL_BYTES = 256 * 1024;
 
 function normalizeCodexGrouping(value) {
-  return value === CODEX_GROUPING_SINGLE ? CODEX_GROUPING_SINGLE : CODEX_GROUPING_PROJECT;
+  return value === CODEX_GROUPING_PROJECT ? CODEX_GROUPING_PROJECT : CODEX_GROUPING_SINGLE;
 }
 
 function codexHome({ env = process.env, home = os.homedir() } = {}) {

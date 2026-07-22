@@ -80,7 +80,7 @@ function normalizeProjectDirectory(value) {
 }
 
 function normalizeOpenCodeGrouping(value) {
-  return value === OPENCODE_GROUPING_SINGLE ? OPENCODE_GROUPING_SINGLE : OPENCODE_GROUPING_PROJECT;
+  return value === OPENCODE_GROUPING_PROJECT ? OPENCODE_GROUPING_PROJECT : OPENCODE_GROUPING_SINGLE;
 }
 
 function singleOpenCodeAgent(agent) {

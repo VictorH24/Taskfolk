@@ -53,6 +53,7 @@ Taskfolk opens the **Setup** window on first launch. The simplest configuration 
 2. Set **Display** to one of the following:
    - **Full office** shows every connected agent in the pixel office.
    - **Single avatar** shows one transparent desktop companion.
+   - **Random status showcase** replaces the normal office presentation. Existing agents keep their assigned folk while their statuses change independently every 30–60 seconds. If no agents are configured, the office shows one generated agent with a random folk. The mode remains active for the office and every added folk until you choose another Display mode in Setup or quit the app. The next launch returns to Full office. Random mode does not change live agent data or saved avatar assignments.
 3. If using **Single avatar**, choose an agent or select **Most recently updated (automatic)**. You can also set a custom width and height.
 4. Set **Window opacity**.
 5. Choose whether to enable:
@@ -136,6 +137,24 @@ Gemini CLI projects appear while the CLI is running. The Gemini Code Assist VS C
 
 Antigravity activity appears while the app or its local language server is running. Conversations in the same project share one agent named for the project, while all chats outside projects share one **Antigravity · Conversations** agent. Taskfolk reads Antigravity's separate title and project metadata plus local lifecycle fields; it does not publish prompts, responses, tool output, artifacts, or Google credentials.
 
+### Ollama
+
+1. Enable **Track Ollama Desktop chats**.
+2. Keep the default `http://127.0.0.1:11434` URL for a local Ollama install, or enter another reachable Ollama server URL.
+3. Choose **One agent per active chat** or **One agent for all Ollama activity**.
+
+Ollama Desktop chats are linked through the app's local database using chat identity, model, lifecycle state, and timestamps. Because Ollama currently stores an empty chat-title field, Taskfolk uses a one-line excerpt of at most the first 160 characters of the chat's first user message as its session label; no later message or remaining prompt text is loaded. Taskfolk also reads start/progress/stop markers from the tail of Ollama's server log so the working animation follows live inference and switches to idle when the response completes. Thinking, tool data, attachments, and log text are never published. Terminal and third-party API chats do not expose chat identity, so they fall back to `/api/ps`; for those clients, the working state represents only the model's load/keep-alive window.
+
+### LM Studio
+
+1. Enable **Track LM Studio Desktop chats**.
+2. Keep the default `http://127.0.0.1:1234` URL for local Desktop tracking.
+3. Choose **One agent per active chat** or **One agent for all LM Studio chats**.
+
+For local LM Studio Desktop, Taskfolk reads conversation title and timestamp metadata from `~/.lmstudio/conversations` and combines it with `lms ps --json` generation status. The current chat works only while a prediction is running and returns to idle when generation finishes; a merely loaded model no longer keeps the avatar working. Prompt and response text, system prompts, tool data, attachments, and model files are not retained or published.
+
+For a remote LM Studio URL, Desktop chat files are not available. Taskfolk falls back to loaded-model tracking through `/api/v1/models`; enter an API token only if authentication is enabled on that remote server.
+
 ## 5. Open Setup again
 
 To change connections, integrations, display mode, opacity, or window behavior later, use any of these methods:
@@ -196,6 +215,7 @@ Use these buttons at the bottom of Setup:
 
 - **Export Conf** saves the current Setup configuration as `taskfolk-config.json`.
 - **Import Conf** loads a previously exported JSON configuration. Review the imported settings, then open the office to apply them.
+- **Reset Conf…** warns for confirmation, then removes the saved Setup configuration, encrypted credentials, integration choices, and window preferences. The current office closes and Setup returns to its fresh-install defaults.
 
 Saved credentials remain encrypted. They may need to be entered again after moving an exported configuration to another Mac. Treat exported configuration files as private because they can contain encrypted credentials, device identity data, server addresses, and window preferences.
 

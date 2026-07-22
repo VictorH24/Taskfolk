@@ -11,7 +11,7 @@ const GEMINI_GROUPING_SINGLE = 'single';
 const MAX_SESSIONS_SCANNED = 500;
 
 function normalizeGeminiGrouping(value) {
-  return value === GEMINI_GROUPING_SINGLE ? GEMINI_GROUPING_SINGLE : GEMINI_GROUPING_PROJECT;
+  return value === GEMINI_GROUPING_PROJECT ? GEMINI_GROUPING_PROJECT : GEMINI_GROUPING_SINGLE;
 }
 
 function geminiHome({ env = process.env, home = os.homedir() } = {}) {

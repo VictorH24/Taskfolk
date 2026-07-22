@@ -11,7 +11,7 @@ const ANTIGRAVITY_GROUPING_PROJECT = 'project';
 const ANTIGRAVITY_GROUPING_SINGLE = 'single';
 
 function normalizeAntigravityGrouping(value) {
-  return value === ANTIGRAVITY_GROUPING_SINGLE ? ANTIGRAVITY_GROUPING_SINGLE : ANTIGRAVITY_GROUPING_PROJECT;
+  return value === ANTIGRAVITY_GROUPING_PROJECT ? ANTIGRAVITY_GROUPING_PROJECT : ANTIGRAVITY_GROUPING_SINGLE;
 }
 
 function antigravityHome({ env = process.env, home = os.homedir() } = {}) {

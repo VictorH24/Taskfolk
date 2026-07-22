@@ -109,7 +109,7 @@ The packaged desktop app uses the universal digital-agent icon at `desktop/icon.
 
 Choose one of two office sources:
 
-- **Run in this app** starts a private Taskfolk server on a loopback port selected during the first launch and saved for reuse on later launches. It requires no separately running Taskfolk server and offers local OpenClaw, OpenCode, Codex, Claude, Gemini, and VS Code Copilot agents. The folder-view module is disabled by default in this mode. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
+- **Run in this app** starts a private Taskfolk server on a loopback port selected during the first launch and saved for reuse on later launches. It requires no separately running Taskfolk server and offers local OpenClaw, OpenCode, Codex, Claude, Gemini, Antigravity, Ollama, LM Studio, and VS Code Copilot agents. The folder-view module is disabled by default in this mode. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
 - **Connect to a remote server** uses a running Taskfolk URL (for example `http://127.0.0.1:3000`), its gateway token, and optional gateway password. The companion exchanges those credentials for the normal Taskfolk session cookie.
 
 Remote credentials are never placed in the URL and are encrypted with Electron `safeStorage` when operating-system encryption is available. You can switch office sources later from **Setup**.
@@ -179,6 +179,18 @@ For the Gemini Code Assist VS Code extension, Taskfolk detects the extension's l
 In **Setup**, enable **Track Google Antigravity agents**, then choose **One agent per project, plus conversations** or **One agent for all Antigravity activity**. No Google credential, server, or Taskfolk-specific extension is required. Taskfolk discovers Antigravity's local agent logs under `ANTIGRAVITY_HOME/brain` or `~/.gemini/antigravity/brain` and shows activity only while the Antigravity app or its local language server is running.
 
 The connector reads Antigravity's separate generated-title index, project marker and workspace URI plus session IDs, lifecycle states, step types and sources, and timestamps. Conversations belonging to the same project share one stable agent and avatar. All chats marked outside a project are folded into one **Antigravity · Conversations** agent. Transcript content is deliberately discarded, so prompts, responses, reasoning, tool input and output, artifacts, and Google credentials are not published.
+
+### Track Ollama Desktop chats
+
+In **Setup**, enable **Track Ollama Desktop chats**, enter the Ollama server URL (the default is `http://127.0.0.1:11434`), then choose **One agent per active chat** or **One agent for all Ollama activity**. For Ollama Desktop, Taskfolk opens the app's local SQLite index read-only and retains only chat ID, model name, lifecycle timestamps, and a one-line session label. Ollama currently leaves its dedicated chat-title field empty, so Taskfolk derives that label inside SQLite from at most the first 160 characters of the first user message. It does not load the remainder of that prompt or any later message content, thinking, tool arguments/results, attachments, credentials, or model files.
+
+While Ollama Desktop is open, its assistant-row timestamps and server-log task lifecycle markers drive the working animation, and the latest completed chat remains visible as idle. The log reader retains only task start/progress/stop state; it does not publish log text. For terminal and third-party API clients, Ollama does not expose chat identity through its public server API, so Taskfolk falls back to the read-only `/api/ps` endpoint. In that fallback, a loaded model is shown as working for its keep-alive window and is removed after it unloads; it is not presented as a specific chat.
+
+### Track LM Studio Desktop chats
+
+In **Setup**, enable **Track LM Studio Desktop chats**, then choose **One agent per active chat** or **One agent for all LM Studio chats**. For a local LM Studio URL (the default is `http://127.0.0.1:1234`), the API server does not need to be enabled. Taskfolk reads the newest Desktop conversation's title and timestamps from `~/.lmstudio/conversations`, then uses the read-only `lms ps --json` generation and queue status to switch that chat between working and idle. The latest completed chat remains visible as idle while LM Studio Desktop is open.
+
+The connector reads only the bounded JSON header needed for conversation ID, title, and user/assistant timestamps; prompt and response text, system prompts, tools, attachments, and model files are not retained or published. LM Studio documents the conversation location but does not guarantee its JSON structure, so the reader is deliberately narrow and failure-tolerant. For a remote LM Studio URL, Desktop conversation files are unavailable and Taskfolk falls back to loaded-model instances from `GET /api/v1/models`. If remote API authentication is enabled, the token is encrypted with Electron `safeStorage`; managed launches may provide `LM_STUDIO_API_TOKEN` or `LM_API_TOKEN`.
 
 The Taskfolk server keeps desktop-published runtime agents in memory and expires them after 90 seconds without an update. Override this with `RUNTIME_AGENT_TTL_MS` if needed.
 

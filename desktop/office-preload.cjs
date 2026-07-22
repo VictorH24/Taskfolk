@@ -1,10 +1,32 @@
-const { ipcRenderer, webFrame } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
+
+contextBridge.exposeInMainWorld('taskfolkDesktop', Object.freeze({
+  getAgentSnapshot: () => ipcRenderer.invoke('office:agents:get'),
+  refreshAgentSnapshot: () => ipcRenderer.invoke('office:agents:refresh'),
+  subscribeAgentSnapshots(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, snapshot) => callback(snapshot);
+    ipcRenderer.on('office:agents-snapshot', listener);
+    return () => ipcRenderer.removeListener('office:agents-snapshot', listener);
+  }
+}));
 
 const avatarMode = new URLSearchParams(window.location.search).get('companionView') === 'avatar';
 const loadingLabel = avatarMode ? 'Loading avatar' : 'Loading office';
 
 ipcRenderer.on('office:system-resume', () => {
   window.dispatchEvent(new Event('taskfolk:system-resume'));
+});
+
+function publishRendererVisibility() {
+  ipcRenderer.send('office-window:visibility', !document.hidden);
+}
+
+document.addEventListener('visibilitychange', publishRendererVisibility);
+window.addEventListener('DOMContentLoaded', publishRendererVisibility, { once: true });
+
+window.addEventListener('taskfolk:force-reload', () => {
+  ipcRenderer.send('office-window:reload');
 });
 
 webFrame.insertCSS(`

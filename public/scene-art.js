@@ -386,6 +386,26 @@
 
   window.addEventListener('error', handleImageError, true);
   const workingImagesReady = loadWorkingImages();
-  if (typeof window.setInterval === 'function') window.setInterval(loadWorkingImages, 30_000);
+  let workingImagesTimer = null;
+  function scheduleWorkingImageRefresh() {
+    if (typeof window.setTimeout !== 'function') return;
+    window.clearTimeout(workingImagesTimer);
+    workingImagesTimer = null;
+    if (typeof document === 'object' && document.hidden) return;
+    workingImagesTimer = window.setTimeout(async () => {
+      await loadWorkingImages();
+      scheduleWorkingImageRefresh();
+    }, 30_000);
+  }
+  if (typeof document === 'object') document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      window.clearTimeout(workingImagesTimer);
+      workingImagesTimer = null;
+    } else {
+      void loadWorkingImages();
+      scheduleWorkingImageRefresh();
+    }
+  });
+  scheduleWorkingImageRefresh();
   window.SceneArt = { sceneMarkup, workingImagesReady };
 })();

@@ -146,7 +146,9 @@ function normalizedSessionStatus(session, nowMs) {
   if (session?.startedAt && !session?.endedAt && !/done|complete|finish|idle|success/.test(raw)) return 'active';
   const updatedAt = sessionUpdatedMs(session);
   if (!raw && updatedAt && nowMs - updatedAt <= 2 * 60 * 1000) return 'active';
-  if (/done|complete|finish|success|succeeded/.test(raw) && updatedAt && nowMs - updatedAt <= 30_000) return 'success';
+  // OpenClaw gateway snapshots may expose a completed run only as a freshly
+  // updated idle session, without an observable active -> idle transition.
+  if (/done|complete|finish|idle|success|succeeded/.test(raw) && updatedAt && nowMs - updatedAt <= 30_000) return 'success';
   return 'idle';
 }
 

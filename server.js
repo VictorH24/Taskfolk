@@ -66,6 +66,7 @@ const DEFAULT_MODULES = { folderView: { enabled: FOLDER_VIEW_ENABLED } };
 const AGENT_ACTIVE_MS = Number(process.env.AGENT_ACTIVE_MS || 2 * 60 * 1000);
 const AGENT_SUCCESS_MS = Number(process.env.AGENT_SUCCESS_MS || 2 * 60 * 1000);
 const AGENT_IDLE_MS = Number(process.env.AGENT_IDLE_MS || 30 * 60 * 1000);
+const AGENT_FILE_SNAPSHOT_CACHE_MAX_MS = Number(process.env.AGENT_FILE_SNAPSHOT_CACHE_MAX_MS || 60 * 1000);
 const RUNTIME_AGENT_TTL_MS = Number(process.env.RUNTIME_AGENT_TTL_MS || 90 * 1000);
 const GATEWAY_AUTH_TOKEN_ENV = String(process.env.GATEWAY_AUTH_TOKEN || '').trim();
 const GATEWAY_AUTH_PASSWORD_ENV = String(process.env.GATEWAY_AUTH_PASSWORD || '').trim();
@@ -175,6 +176,9 @@ const DEFAULT_AGENTS = [
 ];
 const CONFIGURED_AGENT_IDLE_TASK = 'Configured in OpenClaw; no session activity yet';
 const runtimeAgentSources = new Map();
+const jsonFileCache = new Map();
+let cronJobsFileSnapshotCache = null;
+let sessionAgentsSnapshotCache = null;
 let openClawGatewayCache = null;
 let openClawGatewayRequest = null;
 let openClawGatewayLastWarning = '';
@@ -197,9 +201,10 @@ function normalizeRuntimeAgent(agent, provider, index, previousAgent = null) {
   const completed = /\b(done|complete|completed|finished|success|succeeded)\b/i.test(String(agent?.activity?.status || ''));
   const previousSuccessAt = timestampMs(previousAgent?.activity?.successAt);
   const transitionedToIdle = previousAgent?.status === 'active' && reportedStatus === 'idle';
+  const reportedSuccessAt = (reportedStatus === 'success' || completed) ? lastSeenMs : 0;
   const successAt = transitionedToIdle
     ? nowMs
-    : previousSuccessAt || ((reportedStatus === 'success' || completed) ? lastSeenMs : 0);
+    : Math.max(previousSuccessAt, reportedSuccessAt);
   const successIsCurrent = successAt > 0 && nowMs - successAt <= AGENT_SUCCESS_MS;
   const status = ['active', 'blocked'].includes(reportedStatus)
     ? reportedStatus
@@ -302,12 +307,50 @@ function normalizeAgent(agent, index) {
   };
 }
 
-async function readJsonIfPresent(filePath) {
+function statFingerprint(stat) {
+  if (!stat) return 'missing';
+  return [stat.mtimeMs, stat.ctimeMs, stat.size, stat.ino || 0].join(':');
+}
+
+async function fileFingerprint(filePath) {
   try {
-    return parseJsonWithComments(await fs.readFile(filePath, 'utf8'));
+    return statFingerprint(await fs.stat(filePath));
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return 'missing';
+    throw error;
+  }
+}
+
+async function dependencyFingerprint(filePaths) {
+  const versions = await Promise.all(filePaths.map(async (filePath) => (
+    `${path.resolve(filePath)}:${await fileFingerprint(filePath)}`
+  )));
+  return versions.join('|');
+}
+
+async function readJsonIfPresent(filePath) {
+  const resolvedPath = path.resolve(filePath);
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const before = await fs.stat(resolvedPath);
+      const fingerprint = statFingerprint(before);
+      const cached = jsonFileCache.get(resolvedPath);
+      if (cached?.fingerprint === fingerprint) return cached.value;
+      const text = await fs.readFile(resolvedPath, 'utf8');
+      const after = await fs.stat(resolvedPath);
+      if (fingerprint !== statFingerprint(after) && attempt === 0) continue;
+      const value = parseJsonWithComments(text);
+      jsonFileCache.set(resolvedPath, { fingerprint: statFingerprint(after), value });
+      return value;
+    }
+    return null;
   } catch (err) {
-    if (err.code === 'ENOENT' || err.code === 'EISDIR') return null;
-    console.warn(`Unable to read OpenClaw config at ${filePath}: ${err.message}`);
+    if (err.code === 'ENOENT' || err.code === 'EISDIR' || err.code === 'ENOTDIR') {
+      jsonFileCache.delete(resolvedPath);
+      return null;
+    }
+    console.warn(`Unable to read OpenClaw config at ${resolvedPath}: ${err.message}`);
+    jsonFileCache.delete(resolvedPath);
     return null;
   }
 }
@@ -584,6 +627,7 @@ async function writeAvatarConfig(value) {
     `${JSON.stringify({ updatedAt: new Date().toISOString(), ...normalized }, null, 2)}\n`,
     'utf8'
   );
+  jsonFileCache.delete(AVATAR_ASSIGNMENTS_PATH);
   return normalized;
 }
 
@@ -847,7 +891,7 @@ function sessionTimestampInfo(entry, fallbackMs) {
   return { ms: timestampMs(fallbackMs), source: 'file mtime', usedFileMtime: true };
 }
 
-function statusFromSessionEntry(entry, lastSeenMs) {
+function statusFromSessionEntry(entry, lastSeenMs, nowMs = Date.now()) {
   const rawStatus = String(entry.status || entry.state || '').trim().toLowerCase();
   if (entry.abortedLastRun || /\b(error|failed|failure|exception|blocked|fatal|aborted|cancelled|canceled)\b/i.test(rawStatus)) {
     return 'blocked';
@@ -857,12 +901,26 @@ function statusFromSessionEntry(entry, lastSeenMs) {
   }
   const completed = Boolean(entry.endedAt) || /\b(done|complete|completed|finished|idle|success|succeeded)\b/i.test(rawStatus);
   if (completed) {
-    return Date.now() - (lastSeenMs || 0) <= AGENT_SUCCESS_MS ? 'success' : 'idle';
+    return nowMs - (lastSeenMs || 0) <= AGENT_SUCCESS_MS ? 'success' : 'idle';
   }
   if (entry.startedAt && !entry.endedAt && !/\b(done|complete|completed|idle|finished|success|succeeded)\b/i.test(rawStatus)) {
     return 'active';
   }
-  return statusFromActivity(lastSeenMs || 0, rawStatus);
+  return statusFromActivity(lastSeenMs || 0, rawStatus, nowMs);
+}
+
+function nextSessionStatusChangeAt(entry, lastSeenMs, nowMs) {
+  const rawStatus = String(entry.status || entry.state || '').trim().toLowerCase();
+  if (entry.abortedLastRun || /\b(error|failed|failure|exception|blocked|fatal|aborted|cancelled|canceled)\b/i.test(rawStatus)) return Infinity;
+  if (/\b(active|running|working|busy|streaming|processing|in[-_ ]?progress|started)\b/i.test(rawStatus)) return Infinity;
+  const completed = Boolean(entry.endedAt) || /\b(done|complete|completed|finished|idle|success|succeeded)\b/i.test(rawStatus);
+  if (completed) {
+    const boundary = (lastSeenMs || 0) + AGENT_SUCCESS_MS + 1;
+    return boundary > nowMs ? boundary : Infinity;
+  }
+  if (entry.startedAt && !entry.endedAt) return Infinity;
+  const boundary = (lastSeenMs || 0) + AGENT_ACTIVE_MS + 1;
+  return boundary > nowMs ? boundary : Infinity;
 }
 
 function sessionLabel(key, entry) {
@@ -1306,30 +1364,54 @@ async function cronJobsSnapshot() {
       byId: new Map()
     };
   }
+  const jobsPath = path.join(OPENCLAW_CRON_DIR, 'jobs.json');
+  const statePath = path.join(OPENCLAW_CRON_DIR, 'jobs-state.json');
+  const fingerprint = await dependencyFingerprint([
+    OPENCLAW_STATE_DB_PATH,
+    `${OPENCLAW_STATE_DB_PATH}-wal`,
+    `${OPENCLAW_STATE_DB_PATH}-shm`,
+    jobsPath,
+    statePath
+  ]);
+  const nowMs = Date.now();
+  if (cronJobsFileSnapshotCache?.fingerprint === fingerprint
+    && nowMs < cronJobsFileSnapshotCache.validUntilMs) {
+    return cronJobsFileSnapshotCache.value;
+  }
   const dbJobs = await readCronJobsFromDb();
   if (dbJobs) {
-    return {
+    const value = {
       cronDir: OPENCLAW_CRON_DIR,
       dbPath: OPENCLAW_STATE_DB_PATH,
       jobs: dbJobs,
       byId: new Map(dbJobs.map((job) => [job.id, job]))
     };
+    cronJobsFileSnapshotCache = {
+      fingerprint,
+      validUntilMs: nowMs + Math.max(1_000, AGENT_FILE_SNAPSHOT_CACHE_MAX_MS),
+      value
+    };
+    return value;
   }
-  const jobsPath = path.join(OPENCLAW_CRON_DIR, 'jobs.json');
-  const statePath = path.join(OPENCLAW_CRON_DIR, 'jobs-state.json');
   const jobsStore = await readJsonIfPresent(jobsPath);
   const stateStore = await readJsonIfPresent(statePath) || {};
   const jobs = cronJobsFromStore(jobsStore)
     .filter((job) => job.id)
     .map((job) => normalizeCronJob(job, stateStore[job.id] || {}))
     .sort((a, b) => Math.max(b.lastRunAtMs || 0, b.nextRunAtMs || 0, b.createdAtMs || 0) - Math.max(a.lastRunAtMs || 0, a.nextRunAtMs || 0, a.createdAtMs || 0));
-  return {
+  const value = {
     cronDir: OPENCLAW_CRON_DIR,
     jobsPath,
     statePath,
     jobs,
     byId: new Map(jobs.map((job) => [job.id, job]))
   };
+  cronJobsFileSnapshotCache = {
+    fingerprint,
+    validUntilMs: nowMs + Math.max(1_000, AGENT_FILE_SNAPSHOT_CACHE_MAX_MS),
+    value
+  };
+  return value;
 }
 
 async function cronJobRuns(jobId, limit = 24) {
@@ -1408,11 +1490,24 @@ async function cronJobRuns(jobId, limit = 24) {
 async function sessionAgents() {
   const cron = await cronJobsSnapshot();
   const files = await listSessionStoreFiles(OPENCLAW_SESSIONS_DIR);
+  const nowMs = Date.now();
+  const fingerprint = JSON.stringify({
+    files: files
+      .map(({ abs, stat }) => [path.resolve(abs), statFingerprint(stat)])
+      .sort((left, right) => left[0].localeCompare(right[0])),
+    cronJobs: cron.jobs
+  });
+  if (sessionAgentsSnapshotCache?.fingerprint === fingerprint
+    && nowMs < sessionAgentsSnapshotCache.validUntilMs) {
+    return sessionAgentsSnapshotCache.value;
+  }
   const byId = new Map();
   const debug = [];
   const latestSessions = [];
   const groupedCounts = {};
-  const weeklySinceMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const weeklyWindowMs = 7 * 24 * 60 * 60 * 1000;
+  const weeklySinceMs = nowMs - weeklyWindowMs;
+  let validUntilMs = nowMs + Math.max(1_000, AGENT_FILE_SNAPSHOT_CACHE_MAX_MS);
   const weeklyCost = {
     sinceMs: weeklySinceMs,
     estimatedCostUsd: 0,
@@ -1447,6 +1542,7 @@ async function sessionAgents() {
       if (!id) continue;
       const timestampInfo = sessionTimestampInfo(entry, stat.mtimeMs);
       const ts = timestampInfo.ms;
+      validUntilMs = Math.min(validUntilMs, nextSessionStatusChangeAt(entry, ts, nowMs));
       const badge = sessionChannelBadge(key, entry);
       const cronSession = cronSessionLabel(key, cron.byId);
       groupedCounts[badge] = (groupedCounts[badge] || 0) + 1;
@@ -1454,6 +1550,7 @@ async function sessionAgents() {
         weeklyCost.estimatedCostUsd += Number.isFinite(Number(entry.estimatedCostUsd)) ? Number(entry.estimatedCostUsd) : 0;
         weeklyCost.totalTokens += Number.isFinite(Number(entry.totalTokens)) ? Number(entry.totalTokens) : 0;
         weeklyCost.sessionCount += 1;
+        validUntilMs = Math.min(validUntilMs, ts + weeklyWindowMs + 1);
       }
       fileLatestMs = Math.max(fileLatestMs, ts);
       entryCount += 1;
@@ -1467,7 +1564,7 @@ async function sessionAgents() {
         channelBadge: badge,
         model: entry.model || entry.modelOverride || entry.modelProvider || entry.providerOverride || entry.provider || null,
         status: entry.status || null,
-        derivedStatus: statusFromSessionEntry(entry, ts),
+        derivedStatus: statusFromSessionEntry(entry, ts, nowMs),
         timestampMs: ts,
         timestamp: ts ? new Date(ts).toISOString() : null,
         timestampSource: timestampInfo.source,
@@ -1494,7 +1591,7 @@ async function sessionAgents() {
         existing.lastSeen = new Date(ts).toISOString();
         existing.sessionFile = path.relative(OPENCLAW_SESSIONS_DIR, abs);
         existing.role = model || existing.role;
-        existing.status = statusFromSessionEntry(entry, ts);
+        existing.status = statusFromSessionEntry(entry, ts, nowMs);
         existing.workspacePath = workspacePathFromValue(entry) || existing.workspacePath;
         existing.activity = safeSessionActivity(key, entry, existing.status, ts, timestampInfo, cron.byId);
       }
@@ -1515,7 +1612,7 @@ async function sessionAgents() {
     });
   }
 
-  return {
+  const value = {
     agents: [...byId.values()]
     .sort((a, b) => b.lastSeenMs - a.lastSeenMs)
     .slice(0, 24)
@@ -1533,6 +1630,8 @@ async function sessionAgents() {
       since: new Date(weeklySinceMs).toISOString()
     }
   };
+  sessionAgentsSnapshotCache = { fingerprint, validUntilMs, value };
+  return value;
 }
 
 function keyParts(value) {
@@ -1578,9 +1677,9 @@ function mergeRuntimeAgent(runtimeAgent, configAgents, listedAgents, merged) {
   return true;
 }
 
-function statusFromActivity(lastSeenMs, task = '') {
+function statusFromActivity(lastSeenMs, task = '', nowMs = Date.now()) {
   if (/\b(error|failed|failure|exception|blocked|fatal)\b/i.test(task)) return 'blocked';
-  const age = Date.now() - lastSeenMs;
+  const age = nowMs - lastSeenMs;
   if (age <= AGENT_ACTIVE_MS) return 'active';
   if (age <= AGENT_IDLE_MS) return 'idle';
   return 'idle';
@@ -1617,6 +1716,7 @@ async function writeAgentState(stateFile) {
     agents: stateFile?.agents && typeof stateFile.agents === 'object' && !Array.isArray(stateFile.agents) ? stateFile.agents : {}
   };
   await fs.writeFile(AGENT_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+  jsonFileCache.delete(AGENT_STATE_PATH);
   return normalized;
 }
 

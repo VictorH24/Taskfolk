@@ -661,6 +661,12 @@ assignmentList.addEventListener('click', async (event) => {
   if (removeRuntimeButton) {
     const id = removeRuntimeButton.dataset.removeRuntimeAgent;
     const key = removeRuntimeButton.dataset.assignmentKey || id;
+    const agent = agents.find((entry) => entry.id === id);
+    const name = agent?.name || id;
+    const confirmed = window.confirm(
+      `Remove ${name}?\n\nThis forgets its avatar, custom name, and disabled state. The agent may reappear with default settings the next time its provider reports it.`
+    );
+    if (!confirmed) return;
     assignmentStatus.textContent = `Removing ${id}…`;
     try {
       await api(`/api/runtime-agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -707,6 +713,12 @@ assignmentList.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-delete-agent]');
   if (!button) return;
   const id = button.dataset.deleteAgent;
+  const manualAgent = manualAgents.find((agent) => agent.id === id);
+  const name = manualAgent?.name || id;
+  const confirmed = window.confirm(
+    `Delete ${name}?\n\nThis permanently deletes the manual agent, including its token and avatar assignment. This action cannot be undone.`
+  );
+  if (!confirmed) return;
   manualAgents = manualAgents.filter((agent) => agent.id !== id);
   delete assignments[id];
   delete customNames[id];

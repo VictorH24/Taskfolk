@@ -55,9 +55,9 @@ async function isVsCodeRunning({ platform = process.platform, run = runProcess }
 }
 
 function normalizeVsCodeCopilotGrouping(value) {
-  return value === VSCODE_COPILOT_GROUPING_SINGLE
-    ? VSCODE_COPILOT_GROUPING_SINGLE
-    : VSCODE_COPILOT_GROUPING_PROJECT;
+  return value === VSCODE_COPILOT_GROUPING_PROJECT
+    ? VSCODE_COPILOT_GROUPING_PROJECT
+    : VSCODE_COPILOT_GROUPING_SINGLE;
 }
 
 function openReadOnlyDatabase(dbPath, DatabaseSyncImpl) {

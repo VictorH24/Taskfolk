@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('clawOffice', {
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   importConfig: () => ipcRenderer.invoke('settings:import-config'),
   exportConfig: () => ipcRenderer.invoke('settings:export-config'),
+  resetConfig: () => ipcRenderer.invoke('settings:reset-config'),
   connect: (settings) => ipcRenderer.invoke('settings:connect', settings),
   testOpenClaw: (settings) => ipcRenderer.invoke('settings:openclaw-test', settings),
   onError: (callback) => ipcRenderer.on('settings:error', (_event, message) => callback(message)),

@@ -12,7 +12,7 @@ const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
 const MAX_TRANSCRIPTS_SCANNED = 500;
 
 function normalizeClaudeGrouping(value) {
-  return value === CLAUDE_GROUPING_SINGLE ? CLAUDE_GROUPING_SINGLE : CLAUDE_GROUPING_PROJECT;
+  return value === CLAUDE_GROUPING_PROJECT ? CLAUDE_GROUPING_PROJECT : CLAUDE_GROUPING_SINGLE;
 }
 
 function claudeHome({ env = process.env, home = os.homedir() } = {}) {
