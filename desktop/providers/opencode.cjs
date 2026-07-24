@@ -44,7 +44,7 @@ function statusType(value) {
 
 function normalizedStatus(value) {
   const raw = statusType(value);
-  if (/error|failed|blocked|retry/.test(raw)) return 'blocked';
+  if (/approval|permission|error|failed|blocked|retry/.test(raw)) return 'blocked';
   if (/busy|running|working|active|streaming|processing/.test(raw)) return 'active';
   return 'idle';
 }
@@ -125,11 +125,12 @@ function taskForSession(session, rawStatus) {
   return `OpenCode session${project ? ` in ${project}` : ''}`;
 }
 
-function normalizeSession(session, statusValue, nowMs) {
+function normalizeSession(session, statusValue, nowMs, { awaitingApproval = false } = {}) {
   const sessionId = String(session?.id || session?.sessionID || '').trim();
   if (!sessionId) return null;
-  const rawStatus = statusType(statusValue);
-  const status = normalizedStatus(statusValue);
+  const rawStatus = awaitingApproval ? 'approval' : statusType(statusValue);
+  const isApproval = awaitingApproval || /approval|permission/.test(rawStatus);
+  const status = isApproval ? 'blocked' : normalizedStatus(statusValue);
   const sourceUpdatedMs = sessionUpdatedMs(session) || nowMs;
   const updatedMs = status === 'idle' ? sourceUpdatedMs : nowMs;
   const directory = String(session?.directory || session?.path || '').trim();
@@ -147,8 +148,8 @@ function normalizeSession(session, statusValue, nowMs) {
     workspacePath: directory || null,
     source: 'opencode',
     avatarAssignmentKey: project.assignmentKey,
-    displayState: status === 'active' ? 'Working' : status === 'blocked' ? 'Blocked' : 'Idle',
-    pose: status === 'active' ? 'working' : status === 'blocked' ? 'blocked' : null,
+    displayState: isApproval ? 'Needs approval' : status === 'active' ? 'Working' : status === 'blocked' ? 'Blocked' : 'Idle',
+    pose: isApproval ? 'approval' : status === 'active' ? 'working' : status === 'blocked' ? 'blocked' : null,
     activity: {
       provider: 'opencode',
       status: rawStatus,
@@ -160,6 +161,26 @@ function normalizeSession(session, statusValue, nowMs) {
       agent: agent || null
     }
   };
+}
+
+function permissionSessionId(permission) {
+  return String(permission?.sessionID || permission?.sessionId || permission?.session_id || '').trim();
+}
+
+function agentActivityMs(agent) {
+  const activityMs = Number(agent?.activity?.updatedAt);
+  if (Number.isFinite(activityMs) && activityMs > 0) return activityMs;
+  const lastSeenMs = Date.parse(String(agent?.lastSeen || ''));
+  return Number.isFinite(lastSeenMs) ? lastSeenMs : 0;
+}
+
+function preferOpenCodeAgent(left, right) {
+  if (!left) return right || null;
+  if (!right) return left;
+  const leftApproval = left?.activity?.status === 'approval' || left?.pose === 'approval';
+  const rightApproval = right?.activity?.status === 'approval' || right?.pose === 'approval';
+  if (leftApproval !== rightApproval) return leftApproval ? left : right;
+  return agentActivityMs(right) > agentActivityMs(left) ? right : left;
 }
 
 async function fetchOpenCodeAgents({
@@ -177,34 +198,49 @@ async function fetchOpenCodeAgents({
   const authorization = password
     ? `Basic ${Buffer.from(`${String(username || 'opencode')}:${String(password)}`).toString('base64')}`
     : '';
-  const [statuses, sessions] = await Promise.all([
+  const [statuses, sessions, permissions] = await Promise.all([
     fetchJson(fetchImpl, endpoint(normalizedUrl, '/session/status'), signal, authorization),
-    fetchJson(fetchImpl, endpoint(normalizedUrl, '/session'), signal, authorization)
+    fetchJson(fetchImpl, endpoint(normalizedUrl, '/session'), signal, authorization),
+    fetchJson(fetchImpl, endpoint(normalizedUrl, '/permission'), signal, authorization).catch(() => [])
   ]);
   const statusById = statuses && typeof statuses === 'object' && !Array.isArray(statuses) ? statuses : {};
   const sessionList = Array.isArray(sessions) ? sessions : [];
+  const permissionList = Array.isArray(permissions) ? permissions : [];
+  const approvalIds = new Set(permissionList.map(permissionSessionId).filter(Boolean));
   const byId = new Map(sessionList.map((session) => [String(session?.id || session?.sessionID || ''), session]));
   const nowMs = now();
   if (normalizeOpenCodeGrouping(grouping) === OPENCODE_GROUPING_SINGLE) {
     const latestSession = [...sessionList]
-      .sort((left, right) => sessionUpdatedMs(right) - sessionUpdatedMs(left))[0];
+      .sort((left, right) => Number(approvalIds.has(String(right?.id || right?.sessionID || '')))
+        - Number(approvalIds.has(String(left?.id || left?.sessionID || '')))
+        || sessionUpdatedMs(right) - sessionUpdatedMs(left))[0];
     if (!latestSession) return [];
     const latestId = String(latestSession?.id || latestSession?.sessionID || '');
-    const agent = normalizeSession(latestSession, statusById[latestId], nowMs);
+    const agent = normalizeSession(latestSession, statusById[latestId], nowMs, {
+      awaitingApproval: approvalIds.has(latestId)
+    });
     return agent ? [singleOpenCodeAgent(agent)] : [];
   }
   const activeIds = Object.entries(statusById)
     .filter(([, value]) => normalizedStatus(value) !== 'idle')
     .map(([id]) => id);
   const latestId = [...sessionList].sort((left, right) => sessionUpdatedMs(right) - sessionUpdatedMs(left))[0]?.id;
-  const selectedIds = [...new Set(activeIds.length ? activeIds : (latestId ? [String(latestId)] : []))]
+  const selectedIds = [...new Set(
+    approvalIds.size || activeIds.length
+      ? [...approvalIds, ...activeIds]
+      : (latestId ? [String(latestId)] : [])
+  )]
     .sort((left, right) => sessionUpdatedMs(byId.get(right)) - sessionUpdatedMs(byId.get(left)));
   const normalizedAgents = selectedIds
-    .map((id) => normalizeSession(byId.get(id) || { id }, statusById[id], nowMs))
+    .map((id) => normalizeSession(byId.get(id) || { id }, statusById[id], nowMs, {
+      awaitingApproval: approvalIds.has(id)
+    }))
     .filter(Boolean)
     .sort((left, right) => {
-      const statusDelta = (right.status === 'active' ? 2 : right.status === 'blocked' ? 1 : 0)
-        - (left.status === 'active' ? 2 : left.status === 'blocked' ? 1 : 0);
+      const rank = (agent) => agent.activity?.status === 'approval'
+        ? 3
+        : agent.status === 'active' ? 2 : agent.status === 'blocked' ? 1 : 0;
+      const statusDelta = rank(right) - rank(left);
       return statusDelta || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
     });
   const agentsByProject = new Map();
@@ -225,6 +261,7 @@ module.exports = {
   normalizeOpenCodeUrl,
   normalizeProjectDirectory,
   normalizedStatus,
+  preferOpenCodeAgent,
   projectIdentity,
   singleOpenCodeAgent,
   statusType

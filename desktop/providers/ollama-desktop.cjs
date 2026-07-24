@@ -116,6 +116,23 @@ function openReadOnlyDatabase(dbPath, DatabaseSyncImpl) {
 }
 
 function chatRows(db, limit) {
+  let approvalExpression = '0';
+  try {
+    const toolCallTable = db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tool_calls' LIMIT 1"
+    ).get();
+    if (toolCallTable) {
+      approvalExpression = `EXISTS (
+        SELECT 1
+        FROM tool_calls pending_tool
+        WHERE pending_tool.message_id = m.id
+          AND (
+            pending_tool.function_result IS NULL
+            OR TRIM(pending_tool.function_result) = ''
+          )
+      )`;
+    }
+  } catch {}
   return db.prepare(`
     SELECT
       c.id,
@@ -134,7 +151,8 @@ function chatRows(db, limit) {
       m.stream AS message_stream,
       m.model_name,
       m.created_at AS message_created,
-      m.updated_at AS message_updated
+      m.updated_at AS message_updated,
+      ${approvalExpression} AS awaiting_approval
     FROM chats c
     JOIN messages m ON m.id = (
       SELECT latest.id
@@ -198,25 +216,30 @@ function agentFromRow(row, nowMs, forceActive = false) {
   const model = String(row?.model_name || '').trim();
   const title = cleanSessionTitle(row?.title);
   const updatedAt = rowActivityMs(row) || nowMs;
-  const active = rowIsActive(row, nowMs)
-    || (forceActive && nowMs - updatedAt <= MAX_INCOMPLETE_ASSISTANT_MS);
+  const awaitingApproval = Boolean(row?.awaiting_approval)
+    && !Boolean(row?.message_stream)
+    && !forceActive;
+  const active = !awaitingApproval && (
+    rowIsActive(row, nowMs)
+    || (forceActive && nowMs - updatedAt <= MAX_INCOMPLETE_ASSISTANT_MS)
+  );
   const task = title || (model ? `Chat with ${model}` : 'Ollama Desktop chat');
   return {
     id: identity.id,
     name: title ? `Ollama · ${title}` : model ? `Ollama · ${model}` : 'Ollama',
     role: `Ollama Desktop${model ? ` · ${model}` : ''}`,
-    status: active ? 'active' : 'idle',
+    status: awaitingApproval ? 'blocked' : active ? 'active' : 'idle',
     task: task.slice(0, 240),
-    lastSeen: new Date(active ? nowMs : updatedAt).toISOString(),
+    lastSeen: new Date(awaitingApproval || active ? nowMs : updatedAt).toISOString(),
     workspacePath: null,
     source: 'ollama-desktop',
     avatarAssignmentKey: identity.assignmentKey,
-    displayState: active ? 'Working' : 'Idle',
-    pose: active ? 'working' : null,
+    displayState: awaitingApproval ? 'Needs approval' : active ? 'Working' : 'Idle',
+    pose: awaitingApproval ? 'approval' : active ? 'working' : null,
     activity: {
       provider: 'ollama-desktop',
-      status: active ? 'streaming' : 'idle',
-      derivedStatus: active ? 'active' : 'idle',
+      status: awaitingApproval ? 'approval' : active ? 'streaming' : 'idle',
+      derivedStatus: awaitingApproval ? 'blocked' : active ? 'active' : 'idle',
       updatedAt,
       sessionLabel: task.slice(0, 120),
       sessionKeyShort: chatId,
@@ -228,8 +251,9 @@ function agentFromRow(row, nowMs, forceActive = false) {
 
 function agentsFromRows(rows, nowMs, maxAgents = 24, grouping = 'chat', serverBusy = false) {
   const agents = rows.map((row, index) => agentFromRow(row, nowMs, serverBusy && index === 0)).filter(Boolean);
+  const approvals = agents.filter((agent) => agent.pose === 'approval');
   const active = agents.filter((agent) => agent.status === 'active');
-  const selected = (active.length ? active : agents.slice(0, 1)).slice(0, maxAgents);
+  const selected = (approvals.length ? approvals : active.length ? active : agents.slice(0, 1)).slice(0, maxAgents);
   if (grouping === 'single' && selected[0]) {
     return [{
       ...selected[0],
@@ -276,6 +300,7 @@ module.exports = {
   defaultOllamaPidPath,
   defaultOllamaServerLogPath,
   fetchOllamaDesktopAgents,
+  chatRows,
   isOllamaDesktopRunning,
   pidFileIsLive,
   rowActivityMs,

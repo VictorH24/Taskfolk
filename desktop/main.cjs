@@ -7,7 +7,8 @@ const {
   DEFAULT_OPENCODE_URL,
   fetchOpenCodeAgents,
   normalizeOpenCodeGrouping,
-  normalizeOpenCodeUrl
+  normalizeOpenCodeUrl,
+  preferOpenCodeAgent
 } = require('./providers/opencode.cjs');
 const { fetchOpenCodeDesktopAgents } = require('./providers/opencode-desktop.cjs');
 const {
@@ -975,13 +976,6 @@ function scheduleOpenCodeSync() {
   }
 }
 
-function openCodeAgentActivityMs(agent) {
-  const activityMs = Number(agent?.activity?.updatedAt);
-  if (Number.isFinite(activityMs) && activityMs > 0) return activityMs;
-  const lastSeenMs = Date.parse(String(agent?.lastSeen || ''));
-  return Number.isFinite(lastSeenMs) ? lastSeenMs : 0;
-}
-
 async function syncOpenCodeAdapter() {
   if (openCodeSyncInFlight) {
     scheduleOpenCodeSync();
@@ -1028,12 +1022,14 @@ async function syncOpenCodeAdapter() {
     const grouping = normalizeOpenCodeGrouping(config.openCodeGrouping);
     let agents;
     if (grouping === 'single') {
-      agents = [...desktopAgents, ...serverAgents]
-        .sort((left, right) => openCodeAgentActivityMs(right) - openCodeAgentActivityMs(left))
-        .slice(0, 1);
+      const preferred = [...desktopAgents, ...serverAgents]
+        .reduce((current, candidate) => preferOpenCodeAgent(current, candidate), null);
+      agents = preferred ? [preferred] : [];
     } else {
       const agentsById = new Map(desktopAgents.map((agent) => [agent.id, agent]));
-      for (const agent of serverAgents) agentsById.set(agent.id, agent);
+      for (const agent of serverAgents) {
+        agentsById.set(agent.id, preferOpenCodeAgent(agentsById.get(agent.id), agent));
+      }
       agents = [...agentsById.values()];
     }
     if (!agents.length && serverError && desktopError) {

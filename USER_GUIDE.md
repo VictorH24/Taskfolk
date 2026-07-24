@@ -11,7 +11,7 @@ Taskfolk is a desktop companion that turns activity from AI coding tools into a 
 ![Taskfolk open the Dmg](docs/user-guide-install.png)
 
 1. Download the Taskfolk `.dmg` file.
-2. Open **Finder**, go to **Downloads**, and double-click the DMG. For example, the file may be named `Taskfolk-1.0.1-arm64.dmg`.
+2. Open **Finder**, go to **Downloads**, and double-click the DMG. For example, the file may be named `Taskfolk-1.x.x-arm64.dmg`.
 3. When the installer window opens, drag the **Taskfolk** app onto the **Applications** folder icon.
 4. Wait for macOS to finish copying the app.
 5. Eject the Taskfolk installer by clicking the eject icon beside it in the Finder sidebar.

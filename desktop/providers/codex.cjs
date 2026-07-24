@@ -98,19 +98,34 @@ function readRolloutActivity(rolloutPath) {
       const lines = buffer.toString('utf8').split(/\r?\n/);
       let latestMs = 0;
       let latestSignal = '';
+      const pendingApprovalCalls = new Set();
       for (const line of lines) {
         if (!line.trim()) continue;
         let record;
         try { record = JSON.parse(line); } catch { continue; }
         const timestampMs = Date.parse(String(record?.timestamp || ''));
         if (Number.isFinite(timestampMs)) latestMs = Math.max(latestMs, timestampMs);
-        if (record?.type !== 'event_msg') continue;
-        const eventType = String(record?.payload?.type || '');
-        if (['task_started', 'task_complete', 'turn_aborted', 'stream_error', 'error'].includes(eventType)) {
-          latestSignal = eventType;
+        if (record?.type === 'response_item') {
+          const itemType = String(record?.payload?.type || '');
+          const callId = String(record?.payload?.call_id || '');
+          if (['custom_tool_call', 'function_call'].includes(itemType)) {
+            const input = String(record?.payload?.input ?? record?.payload?.arguments ?? '');
+            if (callId && /require_escalated/.test(input)) pendingApprovalCalls.add(callId);
+          } else if (['custom_tool_call_output', 'function_call_output'].includes(itemType) && callId) {
+            pendingApprovalCalls.delete(callId);
+          }
+          continue;
+        }
+        if (record?.type === 'event_msg') {
+          const eventType = String(record?.payload?.type || '');
+          if (['task_started', 'task_complete', 'turn_aborted', 'stream_error', 'error'].includes(eventType)) {
+            latestSignal = eventType;
+          }
         }
       }
-      if (latestSignal || length === size) return { latestMs, latestSignal };
+      if (latestSignal || pendingApprovalCalls.size || length === size) {
+        return { latestMs, latestSignal, awaitingApproval: pendingApprovalCalls.size > 0 };
+      }
       length = Math.min(size, length * 2);
     }
     return null;
@@ -144,7 +159,8 @@ function agentFromRow(row, nowMs) {
   );
   const recent = updatedAt > 0 && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS;
   const signal = activity?.latestSignal || '';
-  const blocked = recent && ['stream_error', 'error'].includes(signal);
+  const awaitingApproval = Boolean(activity?.awaitingApproval);
+  const blocked = awaitingApproval || (recent && ['stream_error', 'error'].includes(signal));
   // A turn remains active until Codex writes an explicit terminal lifecycle
   // event. Long-running quiet tools must not become idle based on age alone.
   const active = signal === 'task_started'
@@ -164,11 +180,11 @@ function agentFromRow(row, nowMs) {
     workspacePath: cwd,
     source: 'codex',
     avatarAssignmentKey: project.assignmentKey,
-    displayState: blocked ? 'Blocked' : active ? 'Working' : 'Idle',
-    pose: blocked ? 'blocked' : active ? 'working' : null,
+    displayState: awaitingApproval ? 'Needs approval' : blocked ? 'Blocked' : active ? 'Working' : 'Idle',
+    pose: awaitingApproval ? 'approval' : blocked ? 'blocked' : active ? 'working' : null,
     activity: {
       provider: 'codex',
-      status: blocked ? 'error' : active ? 'busy' : 'idle',
+      status: awaitingApproval ? 'approval' : blocked ? 'error' : active ? 'busy' : 'idle',
       derivedStatus: status,
       updatedAt: updatedAt || nowMs,
       sessionLabel: title ? title.slice(0, 120) : 'Codex task',

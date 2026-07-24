@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { version: TASKFOLK_VERSION } = require('../../package.json');
 
 const DEFAULT_OPENCLAW_URL = 'ws://127.0.0.1:18789';
 const DEFAULT_MAX_SESSIONS = 200;
@@ -162,6 +163,56 @@ function sessionRows(payload) {
   return Array.isArray(payload?.sessions) ? payload.sessions : [];
 }
 
+function approvalRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ['approvals', 'requests', 'pending', 'items']) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  return [];
+}
+
+function approvalValue(approval, keys) {
+  const sources = [
+    approval,
+    approval?.request,
+    approval?.payload,
+    approval?.context,
+    approval?.metadata,
+    approval?.systemRunPlan
+  ];
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue;
+    for (const key of keys) {
+      const value = String(source[key] || '').trim();
+      if (value) return value;
+    }
+  }
+  return '';
+}
+
+function approvalSessionKey(approval) {
+  return approvalValue(approval, ['sessionKey', 'session_key', 'sessionId', 'sessionID']);
+}
+
+function approvalAgentId(approval) {
+  const explicit = approvalValue(approval, ['agentId', 'agent_id']);
+  return explicit || sessionAgentId({ key: approvalSessionKey(approval) });
+}
+
+function approvalTargets(payloads) {
+  const sessionKeys = new Set();
+  const agentIds = new Set();
+  for (const payload of payloads || []) {
+    for (const approval of approvalRows(payload)) {
+      const sessionKey = approvalSessionKey(approval);
+      const agentId = approvalAgentId(approval);
+      if (sessionKey) sessionKeys.add(sessionKey);
+      if (agentId) agentIds.add(agentId);
+    }
+  }
+  return { sessionKeys, agentIds };
+}
+
 function agentName(agent, id) {
   return String(agent?.name || agent?.identity?.name || agent?.label || id).trim() || id;
 }
@@ -192,21 +243,35 @@ function workspacePath(agent, session) {
   ).trim() || null;
 }
 
-function normalizeOpenClawAgents(agentsPayload, sessionsPayload, { now = Date.now } = {}) {
+function normalizeOpenClawAgents(agentsPayload, sessionsPayload, {
+  now = Date.now,
+  approvalPayloads = []
+} = {}) {
   const nowMs = now();
   const sessions = sessionRows(sessionsPayload);
   const sessionsByAgent = new Map();
+  const approvals = approvalTargets(approvalPayloads);
   for (const session of sessions) {
     const id = sessionAgentId(session);
     if (!id) continue;
-    const current = sessionsByAgent.get(id);
-    if (!current || sessionUpdatedMs(session) > sessionUpdatedMs(current)) sessionsByAgent.set(id, session);
+    const rows = sessionsByAgent.get(id) || [];
+    rows.push(session);
+    sessionsByAgent.set(id, rows);
   }
 
   return configuredAgentRows(agentsPayload).map((agent, index) => {
     const id = String(agent?.id || agent?.agentId || `openclaw-agent-${index + 1}`).trim();
-    const session = sessionsByAgent.get(id);
-    const status = session ? normalizedSessionStatus(session, nowMs) : 'idle';
+    const agentSessions = sessionsByAgent.get(id) || [];
+    agentSessions.sort((left, right) => sessionUpdatedMs(right) - sessionUpdatedMs(left));
+    const approvalSession = agentSessions.find((candidate) => {
+      const key = String(candidate?.key || candidate?.sessionKey || candidate?.sessionId || '').trim();
+      return approvals.sessionKeys.has(key);
+    });
+    const awaitingApproval = Boolean(approvalSession || approvals.agentIds.has(id));
+    const session = approvalSession || agentSessions[0];
+    const status = awaitingApproval
+      ? 'blocked'
+      : (session ? normalizedSessionStatus(session, nowMs) : 'idle');
     // A configured agent without a matching session has no activity timestamp.
     // Using the poll time here makes an untouched agent look perpetually fresh.
     const updatedAt = sessionUpdatedMs(session);
@@ -222,11 +287,11 @@ function normalizeOpenClawAgents(agentsPayload, sessionsPayload, { now = Date.no
       workspacePath: workspacePath(agent, session),
       source: 'openclaw',
       avatarAssignmentKey: `runtime:openclaw:${id}`,
-      displayState: status === 'active' ? 'Working' : status === 'blocked' ? 'Blocked' : status === 'success' ? 'Done' : 'Idle',
-      pose: status === 'active' ? 'working' : status === 'blocked' ? 'blocked' : null,
+      displayState: awaitingApproval ? 'Needs approval' : status === 'active' ? 'Working' : status === 'blocked' ? 'Blocked' : status === 'success' ? 'Done' : 'Idle',
+      pose: awaitingApproval ? 'approval' : status === 'active' ? 'working' : status === 'blocked' ? 'blocked' : null,
       activity: {
         provider: 'openclaw',
-        status: rawSessionStatus(session) || (session ? 'idle' : 'configured'),
+        status: awaitingApproval ? 'approval' : (rawSessionStatus(session) || (session ? 'idle' : 'configured')),
         derivedStatus: status,
         updatedAt: updatedAt || null,
         sessionLabel: session ? sessionLabel(session).slice(0, 120) : 'Configured agent',
@@ -287,14 +352,16 @@ function gatewayRpcBatch({
         if (deviceToken && !token) auth.deviceToken = String(deviceToken);
         if (password) auth.password = String(password);
         const role = 'operator';
-        const scopes = ['operator.read'];
+        const scopes = requests.some((request) => /(?:^|\.)approval(?:\.|$)/.test(request.method))
+          ? ['operator.read', 'operator.approvals']
+          : ['operator.read'];
         const clientId = deviceIdentity ? 'cli' : 'gateway-client';
         const clientMode = deviceIdentity ? 'cli' : 'backend';
         const nonce = String(frame?.payload?.nonce || '');
         send('connect', {
           minProtocol: OPENCLAW_PROTOCOL_VERSION,
           maxProtocol: OPENCLAW_PROTOCOL_VERSION,
-          client: { id: clientId, displayName: 'Taskfolk', version: '1.0.0', platform: process.platform, mode: clientMode },
+          client: { id: clientId, displayName: 'Taskfolk', version: TASKFOLK_VERSION, platform: process.platform, mode: clientMode },
           role,
           scopes,
           caps: [],
@@ -310,7 +377,7 @@ function gatewayRpcBatch({
             nonce
           }),
           locale: 'en-US',
-          userAgent: 'taskfolk-desktop/1.0.0'
+          userAgent: 'taskfolk-desktop'
         }, 'connect');
         return;
       }
@@ -370,7 +437,25 @@ async function fetchOpenClawAgents({
       }
     ]
   });
-  return normalizeOpenClawAgents(payloads.agents, payloads.sessions, { now });
+  let approvalPayloads = [];
+  try {
+    const approvalResult = await rpcImpl({
+      baseUrl,
+      token,
+      deviceToken,
+      password,
+      deviceIdentity,
+      onDeviceToken,
+      WebSocketImpl,
+      timeoutMs,
+      requests: [
+        { key: 'execApprovals', method: 'exec.approval.list', params: {} },
+        { key: 'pluginApprovals', method: 'plugin.approval.list', params: {} }
+      ]
+    });
+    approvalPayloads = [approvalResult.execApprovals, approvalResult.pluginApprovals];
+  } catch {}
+  return normalizeOpenClawAgents(payloads.agents, payloads.sessions, { now, approvalPayloads });
 }
 
 async function fetchOpenClawSnapshot({
@@ -405,8 +490,26 @@ async function fetchOpenClawSnapshot({
       { key: 'cron', method: 'cron.list', params: { includeDisabled: true, limit: 200 } }
     ]
   });
+  let approvalPayloads = [];
+  try {
+    const approvalResult = await rpcImpl({
+      baseUrl,
+      token,
+      deviceToken,
+      password,
+      deviceIdentity,
+      onDeviceToken,
+      WebSocketImpl,
+      timeoutMs,
+      requests: [
+        { key: 'execApprovals', method: 'exec.approval.list', params: {} },
+        { key: 'pluginApprovals', method: 'plugin.approval.list', params: {} }
+      ]
+    });
+    approvalPayloads = [approvalResult.execApprovals, approvalResult.pluginApprovals];
+  } catch {}
   return {
-    agents: normalizeOpenClawAgents(payloads.agents, payloads.sessions, { now }),
+    agents: normalizeOpenClawAgents(payloads.agents, payloads.sessions, { now, approvalPayloads }),
     sessions: sessionRows(payloads.sessions),
     config: payloads.config?.config || payloads.config?.value || payloads.config || null,
     cronJobs: Array.isArray(payloads.cron?.jobs) ? payloads.cron.jobs : []
@@ -459,5 +562,7 @@ module.exports = {
   normalizeOpenClawAgents,
   normalizeOpenClawUrl,
   normalizedSessionStatus,
+  approvalAgentId,
+  approvalSessionKey,
   sessionAgentId
 };

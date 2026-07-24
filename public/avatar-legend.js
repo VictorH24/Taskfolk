@@ -42,7 +42,10 @@ function setAvatarVariantRegistry(value) {
     label: Number.isInteger(variant.version) ? `Variant ${variant.version}` : variant.id,
     description: variant.name,
     src: `./avatar-scenes/variants/${encodeURIComponent(variant.id)}/sheet.png`,
-    fallbackSrc: `./avatar-scenes/variants/${encodeURIComponent(variant.id)}/working.gif`
+    fallbackSrcs: [
+      `./avatar-scenes/variants/${encodeURIComponent(variant.id)}/working.webp`,
+      `./avatar-scenes/variants/${encodeURIComponent(variant.id)}/working.gif`
+    ]
   }));
 }
 
@@ -129,7 +132,7 @@ function renderAvatarSheets() {
   legendGrid.innerHTML = AVATAR_SHEETS.map((sheet) => `
     <article class="avatarSheetCard">
       <span class="avatarSheetImage">
-        <img src="${esc(sheet.src)}" data-fallback-src="${esc(sheet.fallbackSrc)}" alt="${esc(sheet.label)} avatar preview" loading="lazy" draggable="false" />
+        <img src="${esc(sheet.src)}" data-fallback-srcs="${esc(sheet.fallbackSrcs.join('|'))}" data-fallback-index="0" alt="${esc(sheet.label)} avatar preview" loading="lazy" draggable="false" />
         <canvas class="avatarSheetCanvas" role="img" aria-label="${esc(sheet.label)} avatar preview with transparent background" hidden></canvas>
       </span>
       <span class="avatarSheetMeta">
@@ -210,12 +213,14 @@ function makeSheetBackgroundTransparent(image) {
 function renderTransparentSheetBackgrounds() {
   legendGrid.querySelectorAll('.avatarSheetImage img').forEach((image) => {
     const useWorkingFallback = () => {
-      const fallbackSrc = image.dataset.fallbackSrc;
-      if (!fallbackSrc || image.dataset.fallbackApplied === 'true') return;
-      image.dataset.fallbackApplied = 'true';
+      const fallbackSrcs = (image.dataset.fallbackSrcs || '').split('|').filter(Boolean);
+      const fallbackIndex = Number(image.dataset.fallbackIndex || 0);
+      const fallbackSrc = fallbackSrcs[fallbackIndex];
+      if (!fallbackSrc) return;
+      image.dataset.fallbackIndex = String(fallbackIndex + 1);
       image.src = fallbackSrc;
     };
-    image.addEventListener('error', useWorkingFallback, { once: true });
+    image.addEventListener('error', useWorkingFallback);
     image.addEventListener('load', () => makeSheetBackgroundTransparent(image), { once: true });
     if (image.complete) {
       if (image.naturalWidth && image.naturalHeight) makeSheetBackgroundTransparent(image);

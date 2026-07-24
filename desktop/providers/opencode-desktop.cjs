@@ -1,4 +1,5 @@
 const { execFile } = require('node:child_process');
+const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -9,6 +10,9 @@ const {
   singleOpenCodeAgent
 } = require('./opencode.cjs');
 
+const APPROVAL_LOG_TAIL_BYTES = 256 * 1024;
+const APPROVAL_MAX_AGE_MS = 12 * 60 * 60_000;
+
 function defaultOpenCodeDbPath({ platform = process.platform, env = process.env, home = os.homedir() } = {}) {
   if (env.OPENCODE_DB && env.OPENCODE_DB !== ':memory:') return path.resolve(env.OPENCODE_DB);
   if (env.XDG_DATA_HOME) return path.join(env.XDG_DATA_HOME, 'opencode', 'opencode.db');
@@ -16,6 +20,10 @@ function defaultOpenCodeDbPath({ platform = process.platform, env = process.env,
     return path.join(env.LOCALAPPDATA || env.APPDATA || path.join(home, 'AppData', 'Local'), 'opencode', 'opencode.db');
   }
   return path.join(home, '.local', 'share', 'opencode', 'opencode.db');
+}
+
+function defaultOpenCodeLogPath(options = {}) {
+  return path.join(path.dirname(defaultOpenCodeDbPath(options)), 'log', 'opencode.log');
 }
 
 function runProcess(file, args) {
@@ -96,7 +104,8 @@ function rowActivityMs(row) {
   return Math.max(Number(row.session_updated) || 0, Number(row.message_updated) || 0, Number(row.part_updated) || 0);
 }
 
-function rowStatus(row, nowMs) {
+function rowStatus(row, nowMs, awaitingApproval = false) {
+  if (awaitingApproval) return 'approval';
   if (row.message_error) return 'error';
   const toolStatus = String(row.tool_status || '').toLowerCase();
   if (/error|failed|rejected/.test(toolStatus)) return 'error';
@@ -113,6 +122,52 @@ function rowStatus(row, nowMs) {
   // the same meaning: OpenCode is still expected to produce its reply.
   if (incompleteAssistant || waitingForAssistant) return 'busy';
   return 'idle';
+}
+
+function readOpenCodeApprovalSessions(
+  logPath = defaultOpenCodeLogPath(),
+  nowMs = Date.now(),
+  maxAgeMs = APPROVAL_MAX_AGE_MS
+) {
+  let handle;
+  try {
+    handle = fs.openSync(logPath, 'r');
+    const size = fs.fstatSync(handle).size;
+    if (!size) return new Set();
+    const length = Math.min(size, APPROVAL_LOG_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    fs.readSync(handle, buffer, 0, length, size - length);
+    const lines = buffer.toString('utf8').split(/\r?\n/);
+    const pending = new Map();
+    let currentSessionId = '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const timestampMs = Date.parse(line.match(/\btimestamp=([^\s]+)/)?.[1] || '');
+      const sessionId = line.match(/\bsession\.id=([^\s]+)/)?.[1] || '';
+      if (sessionId && /\bmessage=(?:loop|process|stream)\b/.test(line)) {
+        if (pending.has(sessionId) && /\bmessage=loop\b/.test(line)
+          && timestampMs > pending.get(sessionId)) {
+          pending.delete(sessionId);
+        }
+        currentSessionId = sessionId;
+      }
+      if (sessionId && /\bmessage="exiting loop"/.test(line)) {
+        pending.delete(sessionId);
+        if (currentSessionId === sessionId) currentSessionId = '';
+        continue;
+      }
+      if (/\bmessage=asking\b/.test(line) && currentSessionId && Number.isFinite(timestampMs)) {
+        pending.set(currentSessionId, timestampMs);
+      }
+    }
+    return new Set([...pending]
+      .filter(([, askedAt]) => nowMs - askedAt >= 0 && nowMs - askedAt <= maxAgeMs)
+      .map(([sessionId]) => sessionId));
+  } catch {
+    return new Set();
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
 }
 
 function modelFromRow(row) {
@@ -138,21 +193,37 @@ function agentFromRow(row, nowMs, rawStatus = rowStatus(row, nowMs)) {
   };
 }
 
-function agentsFromRows(rows, nowMs, maxAgents, grouping = 'project') {
+function agentsFromRows(rows, nowMs, maxAgents, grouping = 'project', approvalSessionIds = new Set()) {
   if (normalizeOpenCodeGrouping(grouping) === 'single') {
-    const latestRow = [...rows].sort((left, right) => rowActivityMs(right) - rowActivityMs(left))[0];
-    return latestRow ? [singleOpenCodeAgent(agentFromRow(latestRow, nowMs))] : [];
+    const rank = (row) => rowStatus(row, nowMs, approvalSessionIds.has(String(row.id))) === 'approval' ? 1 : 0;
+    const latestRow = [...rows].sort((left, right) => rank(right) - rank(left)
+      || rowActivityMs(right) - rowActivityMs(left))[0];
+    return latestRow
+      ? [singleOpenCodeAgent(agentFromRow(
+        latestRow,
+        nowMs,
+        rowStatus(latestRow, nowMs, approvalSessionIds.has(String(latestRow.id)))
+      ))]
+      : [];
   }
   const projects = new Map();
   for (const row of rows) {
     const projectKey = normalizeProjectDirectory(row.directory) || `session:${row.id}`;
-    const candidate = { row, rawStatus: rowStatus(row, nowMs) };
+    const candidate = {
+      row,
+      rawStatus: rowStatus(row, nowMs, approvalSessionIds.has(String(row.id)))
+    };
     const existing = projects.get(projectKey);
-    if (!existing || rowActivityMs(candidate.row) > rowActivityMs(existing.row)) projects.set(projectKey, candidate);
+    const candidatePriority = candidate.rawStatus === 'approval' ? 1 : 0;
+    const existingPriority = existing?.rawStatus === 'approval' ? 1 : 0;
+    if (!existing || candidatePriority > existingPriority
+      || candidatePriority === existingPriority && rowActivityMs(candidate.row) > rowActivityMs(existing.row)) {
+      projects.set(projectKey, candidate);
+    }
   }
   const selected = [...projects.values()]
     .sort((left, right) => {
-      const rank = (entry) => entry.rawStatus === 'error' ? 2 : entry.rawStatus === 'busy' ? 1 : 0;
+      const rank = (entry) => entry.rawStatus === 'approval' ? 3 : entry.rawStatus === 'error' ? 2 : entry.rawStatus === 'busy' ? 1 : 0;
       return rank(right) - rank(left) || rowActivityMs(right.row) - rowActivityMs(left.row);
     })
     .slice(0, maxAgents);
@@ -161,6 +232,7 @@ function agentsFromRows(rows, nowMs, maxAgents, grouping = 'project') {
 
 async function fetchOpenCodeDesktopAgents({
   dbPath = defaultOpenCodeDbPath(),
+  logPath = defaultOpenCodeLogPath(),
   DatabaseSyncImpl,
   processRunning,
   maxAgents = 24,
@@ -172,7 +244,15 @@ async function fetchOpenCodeDesktopAgents({
   const db = openReadOnlyDatabase(dbPath, DatabaseSyncImpl);
   try {
     const limit = Math.max(1, Math.min(Number(maxAgents) || 24, 24));
-    return agentsFromRows(sessionRows(db, Math.max(500, limit * 50)), now(), limit, grouping);
+    const nowMs = now();
+    const approvalSessionIds = readOpenCodeApprovalSessions(logPath, nowMs);
+    return agentsFromRows(
+      sessionRows(db, Math.max(500, limit * 50)),
+      nowMs,
+      limit,
+      grouping,
+      approvalSessionIds
+    );
   } finally {
     db.close();
   }
@@ -181,7 +261,9 @@ async function fetchOpenCodeDesktopAgents({
 module.exports = {
   agentsFromRows,
   defaultOpenCodeDbPath,
+  defaultOpenCodeLogPath,
   fetchOpenCodeDesktopAgents,
   isOpenCodeDesktopRunning,
+  readOpenCodeApprovalSessions,
   rowStatus
 };

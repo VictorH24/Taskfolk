@@ -165,6 +165,7 @@ function sessionFiles(brainRoot, maxFiles = MAX_SESSIONS_SCANNED, summaries = ne
         projectId: String(summary.projectId || ''),
         workspacePath: String(summary.workspacePath || ''),
         transcriptPath,
+        conversationPath: path.join(path.dirname(brainRoot), 'conversations', `${entry.name}.db`),
         mtimeMs: stat.mtimeMs
       });
     } catch {}
@@ -172,6 +173,25 @@ function sessionFiles(brainRoot, maxFiles = MAX_SESSIONS_SCANNED, summaries = ne
   return candidates
     .sort((left, right) => right.mtimeMs - left.mtimeMs)
     .slice(0, Math.max(1, Number(maxFiles) || MAX_SESSIONS_SCANNED));
+}
+
+function readConversationApproval(conversationPath, DatabaseSyncImpl) {
+  if (!conversationPath || !fs.existsSync(conversationPath)) return false;
+  let db;
+  try {
+    const DatabaseSync = DatabaseSyncImpl || require('node:sqlite').DatabaseSync;
+    db = new DatabaseSync(conversationPath, { readOnly: true });
+    const row = db.prepare(
+      'SELECT status, length(permissions) AS permissionBytes FROM steps ORDER BY idx DESC LIMIT 1'
+    ).get();
+    // CORTEX_STEP_STATUS_WAITING = 9. A permissions payload distinguishes a
+    // user authorization prompt from other internal waiting states.
+    return Number(row?.status) === 9 && Number(row?.permissionBytes) > 0;
+  } catch {
+    return false;
+  } finally {
+    try { db?.close(); } catch {}
+  }
 }
 
 function readSessionMetadata(candidate) {
@@ -199,6 +219,7 @@ function readSessionMetadata(candidate) {
       source: latest.source,
       type: latest.type,
       status: latest.status,
+      awaitingApproval: readConversationApproval(candidate.conversationPath),
       updatedAt: Math.max(candidate.mtimeMs || 0, latest.updatedAt)
     } : null;
   } catch {
@@ -236,6 +257,7 @@ function sessionGroup(metadata) {
 function lifecycle(metadata, nowMs) {
   const recent = nowMs - metadata.updatedAt <= ACTIVE_ACTIVITY_MS;
   const status = metadata.status.toUpperCase();
+  if (metadata.awaitingApproval) return { status: 'blocked', displayState: 'Needs approval', pose: 'approval' };
   if (/ERROR|FAILED|CANCELLED|ABORTED/.test(status)) return { status: 'blocked', displayState: 'Blocked', pose: null };
   const awaitingModel = metadata.source.toUpperCase().startsWith('USER')
     || metadata.type.toUpperCase() === 'USER_INPUT';
@@ -265,7 +287,7 @@ function createAgent(metadata, group, nowMs) {
     pose: state.pose,
     activity: {
       provider: 'antigravity',
-      status: state.status === 'active' ? 'busy' : state.status,
+      status: state.pose === 'approval' ? 'approval' : state.status === 'active' ? 'busy' : state.status,
       derivedStatus: state.status,
       updatedAt: metadata.updatedAt,
       sessionLabel: task,
@@ -282,8 +304,11 @@ function agentsFromSessions(candidates, nowMs, maxAgents, grouping = ANTIGRAVITY
     .map(readSessionMetadata)
     .filter(Boolean)
     .map((metadata) => ({ metadata, group: sessionGroup(metadata), state: lifecycle(metadata, nowMs) }))
-    .sort((left, right) => Number(right.state.status === 'active') - Number(left.state.status === 'active')
-      || right.metadata.updatedAt - left.metadata.updatedAt);
+    .sort((left, right) => {
+      const priority = (entry) => entry.state.pose === 'approval' ? 2 : Number(entry.state.status === 'active');
+      return priority(right) - priority(left)
+        || right.metadata.updatedAt - left.metadata.updatedAt;
+    });
   const byGroup = new Map();
   for (const session of sessions) {
     if (!byGroup.has(session.group.key)) {
@@ -332,6 +357,7 @@ module.exports = {
   normalizeAntigravityGrouping,
   parseAntigravityProcesses,
   protobufFields,
+  readConversationApproval,
   readSessionMetadata,
   readSummaryMetadata,
   readSummaryTitles,

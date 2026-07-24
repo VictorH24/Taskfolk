@@ -108,7 +108,38 @@ function sessionFileMtime(workspaceStoragePath, sessionId) {
   return 0;
 }
 
-function latestSessionModelState(workspaceStoragePath, sessionId) {
+function setNestedValue(target, key, value) {
+  if (!target || !Array.isArray(key) || !key.length) return;
+  let current = target;
+  for (let index = 0; index < key.length - 1; index += 1) {
+    const part = key[index];
+    if (!current[part] || typeof current[part] !== 'object') {
+      current[part] = Number.isInteger(key[index + 1]) ? [] : {};
+    }
+    current = current[part];
+  }
+  current[key.at(-1)] = value;
+}
+
+function responseNeedsApproval(response) {
+  if (!Array.isArray(response)) return false;
+  return response.some((item) => {
+    if (!item || typeof item !== 'object') return false;
+    if (item.kind === 'toolInvocationSerialized') {
+      // VS Code serializes a tool waiting for confirmation as complete enough to
+      // render, but omits the confirmation decision until the user responds.
+      return Boolean(item.toolCallId)
+        && item.isComplete === true
+        && !Object.prototype.hasOwnProperty.call(item, 'isConfirmed');
+    }
+    if (['confirmation', 'questionCarousel', 'planReview'].includes(item.kind)) {
+      return item.isUsed !== true;
+    }
+    return item.kind === 'elicitationSerialized' && item.state === 'pending';
+  });
+}
+
+function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
   let sessionPath = '';
   for (const extension of ['jsonl', 'json']) {
     const candidate = path.join(workspaceStoragePath, 'chatSessions', `${sessionId}.${extension}`);
@@ -130,26 +161,33 @@ function latestSessionModelState(workspaceStoragePath, sessionId) {
     const lines = buffer.toString('utf8').split(/\r?\n/);
     let latestRequest = -1;
     let latestState = null;
+    let latestResponse = [];
+
+    function useRequest(request, index) {
+      if (index < latestRequest) return;
+      latestRequest = index;
+      latestState = request?.modelState && typeof request.modelState === 'object'
+        ? request.modelState
+        : null;
+      latestResponse = Array.isArray(request?.response) ? request.response : [];
+    }
 
     for (const line of lines) {
       if (!line.trim()) continue;
       let record;
       try { record = JSON.parse(line); } catch { continue; }
 
-      if (record?.kind === 0 && Array.isArray(record?.v?.requests)) {
-        const index = record.v.requests.length - 1;
-        const state = record.v.requests[index]?.modelState;
-        if (index >= latestRequest && state && typeof state === 'object') {
-          latestRequest = index;
-          latestState = state;
-        }
+      const snapshot = record?.kind === 0 ? record.v : record;
+      if (Array.isArray(snapshot?.requests)) {
+        const index = snapshot.requests.length - 1;
+        if (index >= 0) useRequest(snapshot.requests[index], index);
       }
 
       const key = record?.k;
       if (record?.kind === 2 && Array.isArray(key) && key.length === 1
         && key[0] === 'requests' && Array.isArray(record.v) && record.v.length) {
-        latestRequest += record.v.length;
-        latestState = null;
+        const firstIndex = latestRequest + 1;
+        useRequest(record.v.at(-1), firstIndex + record.v.length - 1);
         continue;
       }
       if (!Array.isArray(key) || key[0] !== 'requests' || !Number.isInteger(key[1])) continue;
@@ -158,14 +196,26 @@ function latestSessionModelState(workspaceStoragePath, sessionId) {
       if (requestIndex > latestRequest) {
         latestRequest = requestIndex;
         latestState = null;
+        latestResponse = [];
       }
       if (key[2] === 'modelState' && key.length === 3 && record.v && typeof record.v === 'object') {
         latestState = record.v;
       } else if (key[2] === 'modelState' && key[3] === 'completedAt') {
         latestState = { ...(latestState || {}), completedAt: record.v };
+      } else if (key[2] === 'response') {
+        if (record.kind === 2 && key.length === 3 && Array.isArray(record.v)) {
+          latestResponse.push(...record.v);
+        } else if (record.kind === 1 && key.length === 3 && Array.isArray(record.v)) {
+          latestResponse = record.v;
+        } else if (record.kind === 1 && Number.isInteger(key[3])) {
+          setNestedValue(latestResponse, key.slice(3), record.v);
+        }
       }
     }
-    return latestState;
+    return {
+      modelState: latestState,
+      awaitingApproval: responseNeedsApproval(latestResponse)
+    };
   } catch {
     return null;
   } finally {
@@ -173,10 +223,18 @@ function latestSessionModelState(workspaceStoragePath, sessionId) {
   }
 }
 
+function latestSessionModelState(workspaceStoragePath, sessionId) {
+  return latestSessionRuntimeState(workspaceStoragePath, sessionId)?.modelState || null;
+}
+
 function sessionCompletionStatus(workspaceStoragePath, sessionId) {
   const state = latestSessionModelState(workspaceStoragePath, sessionId);
   if (!state) return null;
   return state.completedAt ? 'idle' : 'active';
+}
+
+function sessionNeedsApproval(workspaceStoragePath, sessionId) {
+  return latestSessionRuntimeState(workspaceStoragePath, sessionId)?.awaitingApproval === true;
 }
 
 function projectIdentity(reference) {
@@ -194,8 +252,14 @@ function normalizeSession(entry, reference, workspaceStoragePath, nowMs) {
   const lastMessageMs = Number(entry?.lastMessageDate) || 0;
   const fileMtimeMs = sessionFileMtime(workspaceStoragePath, sessionId);
   const updatedAt = Math.max(lastMessageMs, fileMtimeMs);
-  const explicitStatus = sessionCompletionStatus(workspaceStoragePath, sessionId);
-  const status = explicitStatus || (updatedAt > 0 && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS ? 'active' : 'idle');
+  const runtimeState = latestSessionRuntimeState(workspaceStoragePath, sessionId);
+  const awaitingApproval = runtimeState?.awaitingApproval === true;
+  const explicitStatus = runtimeState?.modelState
+    ? (runtimeState.modelState.completedAt ? 'idle' : 'active')
+    : null;
+  const status = awaitingApproval
+    ? 'blocked'
+    : (explicitStatus || (updatedAt > 0 && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS ? 'active' : 'idle'));
   const workspace = workspaceDetails(reference);
   const project = projectIdentity(reference);
   const title = String(entry?.title || '').trim();
@@ -209,11 +273,11 @@ function normalizeSession(entry, reference, workspaceStoragePath, nowMs) {
     workspacePath: workspace.workspacePath,
     source: 'vscode-copilot',
     avatarAssignmentKey: project.assignmentKey,
-    displayState: status === 'active' ? 'Working' : 'Idle',
-    pose: status === 'active' ? 'working' : null,
+    displayState: awaitingApproval ? 'Needs approval' : (status === 'active' ? 'Working' : 'Idle'),
+    pose: awaitingApproval ? 'approval' : (status === 'active' ? 'working' : null),
     activity: {
       provider: 'vscode-copilot',
-      status: status === 'active' ? 'busy' : 'idle',
+      status: awaitingApproval ? 'approval' : (status === 'active' ? 'busy' : 'idle'),
       derivedStatus: status,
       updatedAt: updatedAt || nowMs,
       sessionLabel: title && title !== 'New Chat' ? title.slice(0, 120) : 'Copilot chat',
@@ -269,7 +333,8 @@ async function fetchVsCodeCopilotAgents({
     if (agent) agents.push(agent);
   }
   agents.sort((left, right) => {
-    const statusDelta = Number(right.status === 'active') - Number(left.status === 'active');
+    const priority = (agent) => agent.status === 'blocked' ? 2 : Number(agent.status === 'active');
+    const statusDelta = priority(right) - priority(left);
     return statusDelta || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
   });
   if (normalizeVsCodeCopilotGrouping(grouping) === VSCODE_COPILOT_GROUPING_SINGLE) {
@@ -291,6 +356,7 @@ module.exports = {
   normalizeVsCodeCopilotGrouping,
   projectIdentity,
   sessionCompletionStatus,
+  sessionNeedsApproval,
   singleVsCodeCopilotAgent,
   workspaceDetails
 };

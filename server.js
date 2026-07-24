@@ -79,6 +79,22 @@ const CUSTOM_AVATAR_VARIANTS_DIR = String(process.env.CUSTOM_AVATAR_VARIANTS_DIR
   : '';
 const AVATAR_VARIANT_FALLBACK = 'v0';
 
+function preferredAnimationFiles(files, pattern) {
+  const preferredByStem = new Map();
+  for (const file of files) {
+    const match = file.match(pattern);
+    if (!match) continue;
+    const stem = match[1].toLowerCase();
+    const current = preferredByStem.get(stem);
+    if (!current || /\.webp$/i.test(file)) preferredByStem.set(stem, file);
+  }
+  return [...preferredByStem.values()].sort((left, right) => {
+    const leftNumber = Number(left.match(/\d+/)?.[0] || 0);
+    const rightNumber = Number(right.match(/\d+/)?.[0] || 0);
+    return leftNumber - rightNumber || left.localeCompare(right);
+  });
+}
+
 function normalizeAvatarScreen(value, fieldName) {
   if (value === undefined) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -119,14 +135,21 @@ async function discoverAvatarVariants() {
     for (const candidate of candidates) {
       const directory = path.join(root, candidate.id);
       try {
-        const [metadataText, workingStat] = await Promise.all([
+        const [metadataText, workingStats] = await Promise.all([
           fs.readFile(path.join(directory, 'avatar.json'), 'utf8'),
-          fs.stat(path.join(directory, 'working.gif'))
+          Promise.all(['working.webp', 'working.gif'].map((file) => (
+            fs.stat(path.join(directory, file)).catch((error) => {
+              if (error?.code === 'ENOENT') return null;
+              throw error;
+            })
+          )))
         ]);
         const metadata = JSON.parse(metadataText);
         const name = typeof metadata?.name === 'string' ? metadata.name.trim() : '';
         if (!name) throw new Error('avatar.json must contain a non-empty "name"');
-        if (!workingStat.isFile()) throw new Error('working.gif is not a file');
+        if (!workingStats.some((stat) => stat?.isFile())) {
+          throw new Error('working.webp or working.gif must be a file');
+        }
         const workingScreen = normalizeAvatarScreen(metadata.workingScreen, 'workingScreen');
         const gaminScreen = normalizeAvatarScreen(metadata.gaminScreen, 'gaminScreen');
         variants.set(candidate.id, Object.freeze({
@@ -2137,25 +2160,20 @@ app.get('/api/avatar-working-animations', async (_req, res, next) => {
     const variants = Object.create(null);
     await Promise.all(AVATAR_VARIANT_REGISTRY.map(async (variant) => {
       const files = await fs.readdir(AVATAR_VARIANT_DIRECTORIES.get(variant.id));
-      const workingAnimations = files
-        .filter((file) => /^working(?:\d+)?\.gif$/i.test(file))
-        .sort((left, right) => {
-          const leftNumber = Number(left.match(/\d+/)?.[0] || 0);
-          const rightNumber = Number(right.match(/\d+/)?.[0] || 0);
-          return leftNumber - rightNumber || left.localeCompare(right);
-        });
+      const workingAnimations = preferredAnimationFiles(
+        files,
+        /^(working(?:\d+)?)\.(?:gif|webp)$/i
+      );
       if (workingAnimations.length) variants[variant.id] = workingAnimations;
     }));
     const sharedScreens = (await fs.readdir(sharedRoot).catch((error) => {
       if (error?.code === 'ENOENT') return [];
       throw error;
-    }))
-      .filter((file) => /^working\d+\.gif$/i.test(file))
-      .sort((left, right) => {
-        const leftNumber = Number(left.match(/\d+/)?.[0] || 0);
-        const rightNumber = Number(right.match(/\d+/)?.[0] || 0);
-        return leftNumber - rightNumber || left.localeCompare(right);
-      });
+    }));
+    const preferredSharedScreens = preferredAnimationFiles(
+      sharedScreens,
+      /^(working\d+)\.(?:gif|webp)$/i
+    );
     const layouts = Object.fromEntries(
       AVATAR_VARIANT_REGISTRY
         .filter((variant) => variant.workingScreen)
@@ -2164,13 +2182,11 @@ app.get('/api/avatar-working-animations', async (_req, res, next) => {
     const gamingScreens = (await fs.readdir(gamingRoot).catch((error) => {
       if (error?.code === 'ENOENT') return [];
       throw error;
-    }))
-      .filter((file) => /^gaming\d+\.gif$/i.test(file))
-      .sort((left, right) => {
-        const leftNumber = Number(left.match(/\d+/)?.[0] || 0);
-        const rightNumber = Number(right.match(/\d+/)?.[0] || 0);
-        return leftNumber - rightNumber || left.localeCompare(right);
-      });
+    }));
+    const preferredGamingScreens = preferredAnimationFiles(
+      gamingScreens,
+      /^(gaming\d+)\.(?:gif|webp)$/i
+    );
     const gamingLayouts = Object.fromEntries(
       AVATAR_VARIANT_REGISTRY
         .filter((variant) => variant.gaminScreen)
@@ -2179,8 +2195,8 @@ app.get('/api/avatar-working-animations', async (_req, res, next) => {
     res.set('Cache-Control', 'no-store, max-age=0');
     res.json({
       variants,
-      sharedScreens,
-      gamingScreens,
+      sharedScreens: preferredSharedScreens,
+      gamingScreens: preferredGamingScreens,
       canvas: { width: 384, height: 512 },
       layouts,
       gamingLayouts

@@ -9,6 +9,8 @@ const DEFAULT_MAX_AGENTS = 24;
 const GEMINI_GROUPING_PROJECT = 'project';
 const GEMINI_GROUPING_SINGLE = 'single';
 const MAX_SESSIONS_SCANNED = 500;
+const APPROVAL_STATUS_PATTERN = /^(?:confirming|awaiting[_ -]?approval|waiting[_ -]?for[_ -]?confirmation|approval[_ -]?required|requires[_ -]?approval|pending[_ -]?approval)$/i;
+const TERMINAL_TOOL_STATUS_PATTERN = /^(?:executing|success|succeeded|error|failed|cancelled|canceled|complete|completed|done)$/i;
 
 function normalizeGeminiGrouping(value) {
   return value === GEMINI_GROUPING_PROJECT ? GEMINI_GROUPING_PROJECT : GEMINI_GROUPING_SINGLE;
@@ -93,7 +95,7 @@ function sessionFiles(tmpRoot, maxFiles = MAX_SESSIONS_SCANNED) {
     let chats = [];
     try { chats = fs.readdirSync(chatsRoot, { withFileTypes: true }); } catch { continue; }
     for (const chat of chats) {
-      if (!chat.isFile() || !chat.name.endsWith('.json')) continue;
+      if (!chat.isFile() || !/\.jsonl?$/i.test(chat.name)) continue;
       const transcriptPath = path.join(chatsRoot, chat.name);
       try {
         const stat = fs.statSync(transcriptPath);
@@ -106,10 +108,84 @@ function sessionFiles(tmpRoot, maxFiles = MAX_SESSIONS_SCANNED) {
     .slice(0, Math.max(1, Number(maxFiles) || MAX_SESSIONS_SCANNED));
 }
 
+function parseSessionRecord(contents) {
+  const source = String(contents || '').trim();
+  if (!source) return null;
+  try {
+    return JSON.parse(source);
+  } catch {}
+
+  let record = null;
+  for (const line of source.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const update = JSON.parse(line);
+      if (!update || typeof update !== 'object' || Array.isArray(update)) continue;
+      if (!record) record = {};
+      if (update.$set && typeof update.$set === 'object' && !Array.isArray(update.$set)) {
+        Object.assign(record, update.$set);
+      } else {
+        Object.assign(record, update);
+      }
+    } catch {}
+  }
+  return record;
+}
+
+function toolCallId(value) {
+  return String(
+    value?.callId || value?.call_id || value?.toolCallId || value?.tool_call_id ||
+    value?.functionCall?.id || value?.toolCall?.id || ''
+  ).trim();
+}
+
+function sessionNeedsApproval(record) {
+  const messages = Array.isArray(record?.messages) ? record.messages.slice(-12) : [record];
+  const pendingById = new Map();
+  let anonymousPending = false;
+
+  function visit(value) {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+
+    const id = toolCallId(value);
+    const status = String(value.status || value.state || value.phase || '').trim();
+    const type = String(value.type || value.eventType || value.kind || '').trim();
+    const explicitPending = APPROVAL_STATUS_PATTERN.test(status)
+      || /^(?:tool[_ -]?call[_ -]?confirmation|tool[_ -]?confirmation[_ -]?request)$/i.test(type)
+      || value.awaitingApproval === true
+      || value.requiresApproval === true
+      || value.confirmationRequired === true;
+    const terminal = TERMINAL_TOOL_STATUS_PATTERN.test(status)
+      || /^(?:tool[_ -]?result|tool[_ -]?call[_ -]?response)$/i.test(type);
+
+    if (explicitPending) {
+      if (id) pendingById.set(id, true);
+      else anonymousPending = true;
+    } else if (terminal) {
+      if (id) pendingById.delete(id);
+      else anonymousPending = false;
+    }
+
+    for (const child of Object.values(value)) {
+      if (child && typeof child === 'object') visit(child);
+    }
+  }
+
+  visit(messages);
+  return anonymousPending || pendingById.size > 0;
+}
+
 function readSessionMetadata(candidate) {
   try {
-    const record = JSON.parse(fs.readFileSync(candidate.transcriptPath, 'utf8'));
-    const sessionId = String(record?.sessionId || path.basename(candidate.transcriptPath, '.json')).trim();
+    const record = parseSessionRecord(fs.readFileSync(candidate.transcriptPath, 'utf8'));
+    if (!record) return null;
+    const sessionId = String(
+      record.sessionId || path.basename(candidate.transcriptPath).replace(/\.jsonl?$/i, '')
+    ).trim();
     const workspacePath = String(record?.projectRoot || record?.cwd || candidate.workspacePath || '').trim();
     const title = String(record?.summary || record?.title || '').trim();
     const model = String(record?.model || record?.metadata?.model || '').trim();
@@ -119,6 +195,7 @@ function readSessionMetadata(candidate) {
       workspacePath,
       title,
       model,
+      awaitingApproval: sessionNeedsApproval(record),
       updatedAt: Math.max(candidate.mtimeMs || 0, Number.isFinite(timestamp) ? timestamp : 0)
     };
   } catch {
@@ -140,25 +217,26 @@ function createAgent({ workspacePath, metadata, client, nowMs }) {
   const projectName = path.basename(resolvedPath) || 'Workspace';
   const project = projectIdentity(resolvedPath);
   const updatedAt = metadata?.updatedAt || nowMs;
-  const active = Boolean(metadata) && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS;
+  const awaitingApproval = metadata?.awaitingApproval === true;
+  const active = !awaitingApproval && Boolean(metadata) && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS;
   const isCodeAssist = client === 'vscode';
   const task = metadata?.title || `${isCodeAssist ? 'Gemini Code Assist' : 'Gemini'} session in ${projectName}`;
   return {
     id: project.id,
     name: `Gemini · ${projectName}`,
     role: isCodeAssist ? 'VS Code · Gemini Code Assist' : 'Gemini CLI',
-    status: active ? 'active' : 'idle',
+    status: awaitingApproval ? 'blocked' : active ? 'active' : 'idle',
     task: task.slice(0, 240),
     lastSeen: new Date(updatedAt).toISOString(),
     workspacePath: resolvedPath,
     source: 'gemini',
     avatarAssignmentKey: project.assignmentKey,
-    displayState: active ? 'Working' : 'Idle',
-    pose: active ? 'working' : null,
+    displayState: awaitingApproval ? 'Needs approval' : active ? 'Working' : 'Idle',
+    pose: awaitingApproval ? 'approval' : active ? 'working' : null,
     activity: {
       provider: 'gemini',
-      status: active ? 'busy' : 'idle',
-      derivedStatus: active ? 'active' : 'idle',
+      status: awaitingApproval ? 'approval' : active ? 'busy' : 'idle',
+      derivedStatus: awaitingApproval ? 'blocked' : active ? 'active' : 'idle',
       updatedAt,
       sessionLabel: task.slice(0, 120),
       sessionKeyShort: metadata?.sessionId || project.id,
@@ -188,7 +266,8 @@ function agentsFromSessions(candidates, processes, nowMs, maxAgents, grouping = 
     }
   }
   const agents = [...byProject.values()].sort((left, right) => {
-    return Number(right.status === 'active') - Number(left.status === 'active')
+    const priority = (agent) => agent.pose === 'approval' ? 2 : Number(agent.status === 'active');
+    return priority(right) - priority(left)
       || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
   });
   if (normalizeGeminiGrouping(grouping) === GEMINI_GROUPING_SINGLE) {
@@ -222,7 +301,9 @@ module.exports = {
   normalizeGeminiGrouping,
   parseGeminiProcesses,
   parseLsofCwd,
+  parseSessionRecord,
   projectIdentity,
   readSessionMetadata,
+  sessionNeedsApproval,
   sessionFiles
 };

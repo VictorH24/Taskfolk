@@ -5,7 +5,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 const CONVERSATION_HEADER_BYTES = 4 * 1024;
+const CONVERSATION_APPROVAL_SCAN_LIMIT = 8;
 const DEFAULT_MAX_AGENTS = 24;
+const APPROVAL_STATUS_PATTERN = /^(?:awaiting[_ -]?approval|waiting[_ -]?(?:for[_ -]?)?(?:approval|confirmation)|pending[_ -]?approval|approval[_ -]?required|requires[_ -]?(?:approval|confirmation)|confirmation[_ -]?required)$/i;
+const TERMINAL_TOOL_STATUS_PATTERN = /^(?:approved|denied|rejected|executing|success|succeeded|error|failed|cancelled|canceled|complete|completed|done)$/i;
 
 function lmStudioHome({ env = process.env, home = os.homedir() } = {}) {
   return path.resolve(env.LMSTUDIO_HOME || env.LM_STUDIO_HOME || path.join(home, '.lmstudio'));
@@ -91,6 +94,65 @@ function readConversationHeader(filePath, {
   }
 }
 
+function toolCallId(value) {
+  return String(
+    value?.callId || value?.call_id || value?.toolCallId || value?.tool_call_id ||
+    value?.id || value?.toolCallRequest?.id || value?.toolCallResult?.toolCallId || ''
+  ).trim();
+}
+
+function conversationNeedsApproval(record) {
+  const messages = Array.isArray(record?.messages)
+    ? record.messages.map((message) => {
+      if (!Array.isArray(message?.versions)) return message;
+      const selected = Number(message.currentlySelected);
+      return message.versions[Number.isInteger(selected) ? selected : 0] || message.versions[0];
+    }).filter(Boolean)
+    : [record];
+  const pendingById = new Set();
+  let anonymousPending = false;
+
+  function visit(value) {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    const type = String(value.type || value.kind || value.eventType || '').trim();
+    const status = String(value.status || value.state || value.approvalStatus || '').trim();
+    const id = toolCallId(value);
+    const request = /^(?:toolCallRequest|tool_call_request|tool_call)$/i.test(type);
+    const result = /^(?:toolCallResult|tool_call_result|tool_result)$/i.test(type);
+    const pending = request
+      || APPROVAL_STATUS_PATTERN.test(status)
+      || value.awaitingApproval === true
+      || value.requiresApproval === true
+      || value.confirmationRequired === true;
+    const terminal = result || TERMINAL_TOOL_STATUS_PATTERN.test(status);
+    if (pending) {
+      if (id) pendingById.add(id);
+      else anonymousPending = true;
+    } else if (terminal) {
+      if (id) pendingById.delete(id);
+      else anonymousPending = false;
+    }
+    for (const child of Object.values(value)) {
+      if (child && typeof child === 'object') visit(child);
+    }
+  }
+
+  visit(messages);
+  return anonymousPending || pendingById.size > 0;
+}
+
+function readConversationApproval(filePath, readFile = fs.readFileSync) {
+  try {
+    return conversationNeedsApproval(JSON.parse(readFile(filePath, 'utf8')));
+  } catch {
+    return false;
+  }
+}
+
 function conversationRows(conversationsPath = defaultLmStudioConversationsPath(), maxRows = 240) {
   let entries = [];
   try { entries = fs.readdirSync(conversationsPath, { withFileTypes: true }); } catch { return []; }
@@ -108,11 +170,13 @@ function conversationRows(conversationsPath = defaultLmStudioConversationsPath()
     .filter(Boolean)
     .sort((left, right) => right.fileUpdatedAt - left.fileUpdatedAt)
     .slice(0, maxRows)
-    .map(({ entry, filePath, fileUpdatedAt }) => {
+    .map(({ entry, filePath, fileUpdatedAt }, index) => {
       try {
         return {
           id: entry.name.replace(/\.conversation\.json$/, ''),
           ...readConversationHeader(filePath),
+          awaitingApproval: index < CONVERSATION_APPROVAL_SCAN_LIMIT
+            && readConversationApproval(filePath),
           fileUpdatedAt
         };
       } catch {
@@ -176,22 +240,24 @@ function agentFromConversation(row, nowMs, active = false, activeModel = '') {
   const title = cleanSessionTitle(row?.title);
   const task = title || 'LM Studio Desktop chat';
   const updatedAt = conversationActivityMs(row) || nowMs;
+  const awaitingApproval = row?.awaitingApproval === true;
+  const working = active && !awaitingApproval;
   return {
     id: identity.id,
     name: title ? `LM Studio · ${title}` : 'LM Studio',
     role: `LM Studio Desktop${activeModel ? ` · ${activeModel}` : ''}`,
-    status: active ? 'active' : 'idle',
+    status: awaitingApproval ? 'blocked' : working ? 'active' : 'idle',
     task,
-    lastSeen: new Date(active ? nowMs : updatedAt).toISOString(),
+    lastSeen: new Date(awaitingApproval || working ? nowMs : updatedAt).toISOString(),
     workspacePath: null,
     source: 'lmstudio-desktop',
     avatarAssignmentKey: identity.assignmentKey,
-    displayState: active ? 'Working' : 'Idle',
-    pose: active ? 'working' : null,
+    displayState: awaitingApproval ? 'Needs approval' : working ? 'Working' : 'Idle',
+    pose: awaitingApproval ? 'approval' : working ? 'working' : null,
     activity: {
       provider: 'lmstudio-desktop',
-      status: active ? 'streaming' : 'idle',
-      derivedStatus: active ? 'active' : 'idle',
+      status: awaitingApproval ? 'approval' : working ? 'streaming' : 'idle',
+      derivedStatus: awaitingApproval ? 'blocked' : working ? 'active' : 'idle',
       updatedAt,
       sessionLabel: task,
       sessionKeyShort: chatId.slice(0, 160),
@@ -207,8 +273,10 @@ function agentsFromConversations(rows, modelStatuses, nowMs, maxAgents = DEFAULT
   const agents = rows
     .map((row, index) => agentFromConversation(row, nowMs, busy && index === 0, index === 0 ? busyModels[0]?.displayName : ''))
     .filter(Boolean);
+  const approvals = agents.filter((agent) => agent.pose === 'approval');
   const active = agents.filter((agent) => agent.status === 'active');
-  const selected = (active.length ? active : agents.slice(0, 1)).slice(0, Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, DEFAULT_MAX_AGENTS)));
+  const selected = (approvals.length ? approvals : active.length ? active : agents.slice(0, 1))
+    .slice(0, Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, DEFAULT_MAX_AGENTS)));
   if (grouping === 'single' && selected[0]) {
     return [{
       ...selected[0],
@@ -244,6 +312,7 @@ async function fetchLmStudioDesktopAgents({
 }
 
 module.exports = {
+  CONVERSATION_APPROVAL_SCAN_LIMIT,
   CONVERSATION_HEADER_BYTES,
   agentFromConversation,
   agentsFromConversations,
@@ -259,6 +328,8 @@ module.exports = {
   modelIsBusy,
   parseConversationHeader,
   parseLmStudioModelStatuses,
+  conversationNeedsApproval,
+  readConversationApproval,
   readConversationHeader,
   readLmStudioModelStatuses
 };

@@ -3,6 +3,7 @@
     working: 'working.gif',
     success: 'success.gif',
     blocked: 'blocked.gif',
+    approval: 'approval.gif',
     sleeping: 'sleeping.gif',
     reading: 'reading.gif',
     gaming: 'gaming.png',
@@ -27,20 +28,22 @@
     return key || 'v0';
   }
 
-  function gifVariantPaths(variant, image) {
+  function variantImagePaths(variant, image) {
     const variantId = variantKey(variant);
     const encodedVariant = encodeURIComponent(variantId);
-    const revision = variantId === 'v23' && image.replace(/\.png$/i, '.gif') === 'gaming.gif'
+    const gifImage = image.replace(/\.(?:png|webp)$/i, '.gif');
+    const revision = variantId === 'v23' && gifImage === 'gaming.gif'
       ? '?rev=horizontal-3'
       : '';
     return [
-      `./avatar-scenes/variants/${encodedVariant}/${image.replace(/\.png$/i, '.gif')}${revision}`,
-      `./avatar-scenes/variants/${encodedVariant}/${image.replace(/\.gif$/i, '.png')}`
+      `./avatar-scenes/variants/${encodedVariant}/${gifImage.replace(/\.gif$/i, '.webp')}${revision}`,
+      `./avatar-scenes/variants/${encodedVariant}/${gifImage}${revision}`,
+      `./avatar-scenes/variants/${encodedVariant}/${gifImage.replace(/\.gif$/i, '.png')}`
     ];
   }
 
   function imagePaths(image, variant) {
-    return gifVariantPaths(variantKey(variant), image);
+    return variantImagePaths(variantKey(variant), image);
   }
 
   function animatedVariantId(variant) {
@@ -93,27 +96,40 @@
   }
 
   function pathsForAvatarImage(image, variant) {
-    if (image === 'working.gif') return imagePaths(image, variant);
-    if (/^gaming\.(?:gif|png)$/i.test(image)) return imagePaths(image, variant);
-    return [imagePaths(image, variant)[0], ...imagePaths('working.gif', variant)];
+    if (/^working\.(?:gif|webp)$/i.test(image)) return imagePaths(image, variant);
+    if (/^gaming\.(?:gif|png|webp)$/i.test(image)) return imagePaths(image, variant);
+    if (image === 'approval.gif') {
+      return [
+        ...imagePaths('approval.gif', variant),
+        ...imagePaths('blocked.gif', variant),
+        ...imagePaths('working.gif', variant)
+      ];
+    }
+    return [...imagePaths(image, variant), ...imagePaths('working.gif', variant)];
   }
 
   function layeredPaths(variantId) {
     return [
       `./avatar-scenes/variants/${encodeURIComponent(variantKey(variantId))}/working_alpha.png`,
-      ...gifVariantPaths(variantId, 'working.gif')
+      ...variantImagePaths(variantId, 'working.gif')
     ];
   }
 
   function gamingLayeredPaths(variantId) {
     return [
       `./avatar-scenes/variants/${encodeURIComponent(variantKey(variantId))}/gaming_alpha.png`,
-      ...gifVariantPaths(variantId, 'gaming.gif')
+      ...variantImagePaths(variantId, 'gaming.gif')
     ];
   }
 
   function fallbackSources(paths) {
     return paths.slice(1).join('|');
+  }
+
+  function sharedScreenPaths(kind, image) {
+    const paths = [`./avatar-scenes/${kind}-screens/${image}`];
+    if (/\.webp$/i.test(image)) paths.push(paths[0].replace(/\.webp$/i, '.gif'));
+    return paths;
   }
 
   function layoutStyle(variantId, kind = 'working') {
@@ -139,17 +155,22 @@
     stack.classList.toggle('is-layered', isLayered);
     stack.dataset.gamingKind = isLayered ? 'shared' : 'avatar';
     stack.style.cssText = isLayered ? layoutStyle(variantId, 'gaming') : '';
-    art.dataset.animation = isLayered ? animation.image.replace(/\.gif$/i, '') : 'gaming';
+    art.dataset.animation = isLayered ? animation.image.replace(/\.(?:gif|webp)$/i, '') : 'gaming';
     art.dataset.fallbackIndex = '0';
     art.dataset.fallbackSrcs = fallbackSources(artPaths);
-    art.dataset.canonicalSrc = gifVariantPaths(variantId, 'gaming.gif')[0];
+    art.dataset.canonicalSrc = variantImagePaths(variantId, 'gaming.gif')[0];
     art.src = artPaths[0];
     if (isLayered) {
+      const screenPaths = sharedScreenPaths('gaming', animation.image);
       screen.hidden = false;
-      screen.src = `./avatar-scenes/gaming-screens/${animation.image}`;
+      screen.dataset.fallbackIndex = '0';
+      screen.dataset.fallbackSrcs = fallbackSources(screenPaths);
+      screen.src = screenPaths[0];
     } else {
       screen.hidden = true;
       screen.removeAttribute('src');
+      delete screen.dataset.fallbackIndex;
+      delete screen.dataset.fallbackSrcs;
     }
   }
 
@@ -163,17 +184,22 @@
     stack.classList.toggle('is-layered', isLayered);
     stack.dataset.workingKind = isLayered ? 'shared' : 'avatar';
     stack.style.cssText = isLayered ? layoutStyle(variantId) : '';
-    art.dataset.animation = animation.image.replace(/\.gif$/i, '');
+    art.dataset.animation = animation.image.replace(/\.(?:gif|webp)$/i, '');
     art.dataset.fallbackIndex = '0';
     art.dataset.fallbackSrcs = fallbackSources(artPaths);
-    art.dataset.canonicalSrc = gifVariantPaths(variantId, 'working.gif')[0];
+    art.dataset.canonicalSrc = variantImagePaths(variantId, 'working.gif')[0];
     art.src = artPaths[0];
     if (isLayered) {
+      const screenPaths = sharedScreenPaths('working', animation.image);
       screen.hidden = false;
-      screen.src = `./avatar-scenes/working-screens/${animation.image}`;
+      screen.dataset.fallbackIndex = '0';
+      screen.dataset.fallbackSrcs = fallbackSources(screenPaths);
+      screen.src = screenPaths[0];
     } else {
       screen.hidden = true;
       screen.removeAttribute('src');
+      delete screen.dataset.fallbackIndex;
+      delete screen.dataset.fallbackSrcs;
     }
   }
 
@@ -221,7 +247,7 @@
       const changedVariants = new Set();
       for (const [variantId, images] of Object.entries(payload?.variants || {})) {
         const safeImages = Array.isArray(images)
-          ? images.filter((image) => /^working(?:\d+)?\.gif$/i.test(image))
+          ? images.filter((image) => /^working(?:\d+)?\.(?:gif|webp)$/i.test(image))
           : [];
         if (!safeImages.length) continue;
         const current = workingImagesByVariant.get(variantId) || [];
@@ -232,13 +258,13 @@
       }
 
       const nextShared = Array.isArray(payload?.sharedScreens)
-        ? payload.sharedScreens.filter((image) => /^working\d+\.gif$/i.test(image))
+        ? payload.sharedScreens.filter((image) => /^working\d+\.(?:gif|webp)$/i.test(image))
         : [];
       const sharedChanged = nextShared.length !== sharedWorkingImages.length
         || nextShared.some((image, index) => image !== sharedWorkingImages[index]);
       sharedWorkingImages = nextShared;
       const nextGaming = Array.isArray(payload?.gamingScreens)
-        ? payload.gamingScreens.filter((image) => /^gaming\d+\.gif$/i.test(image))
+        ? payload.gamingScreens.filter((image) => /^gaming\d+\.(?:gif|webp)$/i.test(image))
         : [];
       const gamingChanged = nextGaming.length !== sharedGamingImages.length
         || nextGaming.some((image, index) => image !== sharedGamingImages[index]);
@@ -278,14 +304,25 @@
         refreshVisibleGamingImages(gamingVariants);
       }
     } catch (_error) {
-      // The canonical working.gif remains available when discovery is offline.
+      // The canonical working animation remains available when discovery is offline.
     }
+  }
+
+  function useNextFallback(image) {
+    const sources = (image.dataset.fallbackSrcs || '').split('|').filter(Boolean);
+    const index = Number(image.dataset.fallbackIndex || 0);
+    const nextSource = sources[index];
+    if (!nextSource) return false;
+    image.dataset.fallbackIndex = String(index + 1);
+    image.src = nextSource;
+    return true;
   }
 
   function handleImageError(event) {
     const image = event.target;
     if (!(image instanceof HTMLImageElement)) return;
     if (image.classList.contains('sceneWorkingScreen')) {
+      if (useNextFallback(image)) return;
       const stack = image.closest('.sceneWorkingStack');
       const art = stack?.querySelector('.sceneArt--working, .sceneArt--meeting');
       if (!stack || !art) return;
@@ -297,6 +334,7 @@
       return;
     }
     if (image.classList.contains('sceneGamingScreen')) {
+      if (useNextFallback(image)) return;
       const stack = image.closest('.sceneGamingStack');
       const art = stack?.querySelector('.sceneArt--gaming');
       if (!stack || !art) return;
@@ -308,12 +346,7 @@
       return;
     }
     if (!image.classList.contains('sceneArt')) return;
-    const sources = (image.dataset.fallbackSrcs || '').split('|').filter(Boolean);
-    const index = Number(image.dataset.fallbackIndex || 0);
-    const nextSource = sources[index];
-    if (!nextSource) return;
-    image.dataset.fallbackIndex = String(index + 1);
-    image.src = nextSource;
+    useNextFallback(image);
   }
 
   function esc(value) {
@@ -328,7 +361,7 @@
           src="${paths[0]}"
           data-fallback-srcs="${esc(fallbackSources(paths))}"
           data-fallback-index="0"
-          data-animation="${esc(animation.image.replace(/\.gif$/i, ''))}"
+          data-animation="${esc(animation.image.replace(/\.(?:gif|webp)$/i, ''))}"
           data-animation-key="${esc(animationKey)}"
           data-avatar-variant="${esc(variantKey(variant))}"
           alt="${title}"
@@ -354,6 +387,8 @@
     const title = esc(label || '');
     const caption = showLabel && title ? `<span class="sceneCaption">${title}</span>` : '';
     const art = artMarkup({ poseClass, roleClass, paths, animation, animationKey, variant, title });
+    const workingScreenPaths = isLayered ? sharedScreenPaths('working', animation.image) : [];
+    const gamingScreenPaths = isGamingLayered ? sharedScreenPaths('gaming', animation.image) : [];
     const visual = usesWorkingAnimation && variantId
       ? `<span
           class="sceneWorkingStack${isLayered ? ' is-layered' : ''}"
@@ -362,8 +397,8 @@
           data-avatar-variant="${esc(variantKey(variant))}"
           style="${isLayered ? layoutStyle(variantId) : ''}"
         >
-          <img class="sceneWorkingScreen"${isLayered ? ` src="./avatar-scenes/working-screens/${esc(animation.image)}"` : ' hidden'} alt="" draggable="false" />
-          ${art.replace('draggable="false"', `data-canonical-src="${esc(gifVariantPaths(variantId, 'working.gif')[0])}" draggable="false"`)}
+          <img class="sceneWorkingScreen"${isLayered ? ` src="${esc(workingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(workingScreenPaths))}" data-fallback-index="0"` : ' hidden'} alt="" draggable="false" />
+          ${art.replace('draggable="false"', `data-canonical-src="${esc(variantImagePaths(variantId, 'working.gif')[0])}" draggable="false"`)}
         </span>`
       : usesGamingAnimation && variantId
         ? `<span
@@ -373,8 +408,8 @@
           data-avatar-variant="${esc(variantKey(variant))}"
           style="${isGamingLayered ? layoutStyle(variantId, 'gaming') : ''}"
         >
-          <img class="sceneGamingScreen"${isGamingLayered ? ` src="./avatar-scenes/gaming-screens/${esc(animation.image)}"` : ' hidden'} alt="" draggable="false" />
-          ${art.replace('draggable="false"', `data-canonical-src="${esc(gifVariantPaths(variantId, 'gaming.gif')[0])}" draggable="false"`)}
+          <img class="sceneGamingScreen"${isGamingLayered ? ` src="${esc(gamingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(gamingScreenPaths))}" data-fallback-index="0"` : ' hidden'} alt="" draggable="false" />
+          ${art.replace('draggable="false"', `data-canonical-src="${esc(variantImagePaths(variantId, 'gaming.gif')[0])}" draggable="false"`)}
         </span>`
         : art;
     return `

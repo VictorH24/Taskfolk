@@ -5,6 +5,7 @@ const DEFAULT_MAX_AGENTS = 24;
 const LM_STUDIO_GROUPING_CHAT = 'chat';
 const LM_STUDIO_GROUPING_MODEL = 'model';
 const LM_STUDIO_GROUPING_SINGLE = 'single';
+const APPROVAL_STATUS_PATTERN = /^(?:awaiting[_ -]?approval|waiting[_ -]?(?:for[_ -]?)?(?:approval|confirmation)|pending[_ -]?approval|approval[_ -]?required|requires[_ -]?(?:approval|confirmation)|confirmation[_ -]?required)$/i;
 
 function normalizeLmStudioUrl(value) {
   const url = new URL(String(value || DEFAULT_LM_STUDIO_URL).trim());
@@ -49,6 +50,20 @@ function bytesLabel(value) {
   return `${amount >= 10 || exponent === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[exponent]}`;
 }
 
+function hasExplicitApproval(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some(hasExplicitApproval);
+  const status = String(
+    value.approval_status || value.approvalStatus || value.tool_call_status ||
+    value.toolCallStatus || value.status || value.state || ''
+  ).trim();
+  if (APPROVAL_STATUS_PATTERN.test(status)
+    || value.awaitingApproval === true
+    || value.requiresApproval === true
+    || value.confirmationRequired === true) return true;
+  return Object.values(value).some((child) => child && typeof child === 'object' && hasExplicitApproval(child));
+}
+
 function normalizeLoadedInstance(model, instance, baseUrl, nowMs) {
   const modelKey = String(model?.key || '').trim();
   const instanceId = String(instance?.id || modelKey).trim();
@@ -63,22 +78,23 @@ function normalizeLoadedInstance(model, instance, baseUrl, nowMs) {
   const contextLength = Number(config.context_length);
   const parallel = Number(config.parallel);
   const roleDetails = [parameterSize, quantization, format, memory].filter(Boolean).join(' · ');
+  const awaitingApproval = hasExplicitApproval(instance);
   return {
     id: identity.id,
     name: `LM Studio · ${displayName}`,
     role: `LM Studio${roleDetails ? ` · ${roleDetails}` : ''}`,
-    status: 'active',
+    status: awaitingApproval ? 'blocked' : 'active',
     task: 'Model loaded',
     lastSeen: new Date(nowMs).toISOString(),
     workspacePath: null,
     source: 'lmstudio',
     avatarAssignmentKey: identity.assignmentKey,
-    displayState: 'Working',
-    pose: 'working',
+    displayState: awaitingApproval ? 'Needs approval' : 'Working',
+    pose: awaitingApproval ? 'approval' : 'working',
     activity: {
       provider: 'lmstudio',
-      status: 'loaded',
-      derivedStatus: 'active',
+      status: awaitingApproval ? 'approval' : 'loaded',
+      derivedStatus: awaitingApproval ? 'blocked' : 'active',
       updatedAt: nowMs,
       sessionLabel: displayName.slice(0, 120),
       sessionKeyShort: instanceId.slice(0, 20),
@@ -117,7 +133,9 @@ async function fetchLmStudioAgents({
     .flatMap((model) => (Array.isArray(model?.loaded_instances) ? model.loaded_instances : [])
       .map((instance) => normalizeLoadedInstance(model, instance, normalizedUrl, nowMs)))
     .filter(Boolean)
-    .sort((left, right) => left.name.localeCompare(right.name) || left.activity.instanceId.localeCompare(right.activity.instanceId));
+    .sort((left, right) => Number(right.pose === 'approval') - Number(left.pose === 'approval')
+      || left.name.localeCompare(right.name)
+      || left.activity.instanceId.localeCompare(right.activity.instanceId));
   if (normalizeLmStudioGrouping(grouping) === LM_STUDIO_GROUPING_SINGLE) {
     if (!agents[0]) return [];
     const modelNames = [...new Set(agents.map((agent) => agent.activity.model))];
@@ -144,6 +162,7 @@ module.exports = {
   LM_STUDIO_GROUPING_SINGLE,
   bytesLabel,
   fetchLmStudioAgents,
+  hasExplicitApproval,
   instanceIdentity,
   lmStudioEndpoint,
   normalizeLmStudioGrouping,

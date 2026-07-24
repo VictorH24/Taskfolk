@@ -23,6 +23,10 @@ function defaultClaudeProjectsRoot(options = {}) {
   return path.join(claudeHome(options), 'projects');
 }
 
+function defaultClaudeSessionsRoot(options = {}) {
+  return path.join(claudeHome(options), 'sessions');
+}
+
 function runProcess(file, args) {
   return new Promise((resolve, reject) => {
     execFile(file, args, { encoding: 'utf8', timeout: 2_000, windowsHide: true }, (error, stdout) => {
@@ -68,6 +72,41 @@ function transcriptFiles(projectsRoot, maxFiles = MAX_TRANSCRIPTS_SCANNED) {
   return candidates
     .sort((left, right) => right.mtimeMs - left.mtimeMs)
     .slice(0, Math.max(1, Number(maxFiles) || MAX_TRANSCRIPTS_SCANNED));
+}
+
+function processExists(pid) {
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readLiveSessions(sessionsRoot, { isProcessAlive = processExists } = {}) {
+  const sessions = new Map();
+  let entries = [];
+  try { entries = fs.readdirSync(sessionsRoot, { withFileTypes: true }); } catch { return sessions; }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    try {
+      const file = path.join(sessionsRoot, entry.name);
+      const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const pid = Number(record?.pid || path.basename(entry.name, '.json'));
+      const sessionId = String(record?.sessionId || record?.session_id || '').trim();
+      if (!Number.isInteger(pid) || pid <= 0 || !sessionId || !isProcessAlive(pid)) continue;
+      const stat = fs.statSync(file);
+      sessions.set(sessionId, {
+        pid,
+        sessionId,
+        cwd: String(record?.cwd || '').trim(),
+        status: String(record?.status || '').trim().toLowerCase(),
+        waitingFor: String(record?.waitingFor || record?.waiting_for || '').trim(),
+        updatedAt: stat.mtimeMs
+      });
+    } catch {}
+  }
+  return sessions;
 }
 
 function recordTimestampMs(record) {
@@ -134,14 +173,20 @@ function projectIdentity(cwd) {
   };
 }
 
-function agentFromTranscript(candidate, nowMs) {
+function agentFromTranscript(candidate, nowMs, liveSessions = new Map()) {
   const metadata = readTranscriptMetadata(candidate.transcriptPath);
   if (!metadata) return null;
+  const liveSession = liveSessions.get(metadata.sessionId);
   const updatedAt = Math.max(candidate.mtimeMs || 0, metadata.updatedAt || 0);
+  const observedAt = Math.max(updatedAt, liveSession?.updatedAt || 0);
   const recent = updatedAt > 0 && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS;
-  const blocked = recent && metadata.signal === 'error';
-  const active = recent && metadata.signal === 'active';
-  const status = blocked ? 'blocked' : active ? 'active' : 'idle';
+  const awaitingApproval = liveSession?.status === 'waiting';
+  const blocked = !awaitingApproval && recent && metadata.signal === 'error';
+  const active = !awaitingApproval && (
+    /^(?:busy|working|processing|retry)$/.test(liveSession?.status || '')
+      || (!liveSession && recent && metadata.signal === 'active')
+  );
+  const status = awaitingApproval || blocked ? 'blocked' : active ? 'active' : 'idle';
   const project = projectIdentity(metadata.cwd);
   const projectName = path.basename(metadata.cwd) || 'Workspace';
   const task = metadata.title || `Claude task in ${projectName}`;
@@ -151,17 +196,17 @@ function agentFromTranscript(candidate, nowMs) {
     role: ['Claude Code / Cowork', metadata.model].filter(Boolean).join(' · '),
     status,
     task: task.slice(0, 240),
-    lastSeen: new Date(updatedAt || nowMs).toISOString(),
+    lastSeen: new Date(observedAt || nowMs).toISOString(),
     workspacePath: metadata.cwd,
     source: 'claude',
     avatarAssignmentKey: project.assignmentKey,
-    displayState: blocked ? 'Blocked' : active ? 'Working' : 'Idle',
-    pose: blocked ? 'blocked' : active ? 'working' : null,
+    displayState: awaitingApproval ? 'Needs approval' : blocked ? 'Blocked' : active ? 'Working' : 'Idle',
+    pose: awaitingApproval ? 'approval' : blocked ? 'blocked' : active ? 'working' : null,
     activity: {
       provider: 'claude',
-      status: blocked ? 'error' : active ? 'busy' : 'idle',
+      status: awaitingApproval ? 'approval' : blocked ? 'error' : active ? 'busy' : 'idle',
       derivedStatus: status,
-      updatedAt: updatedAt || nowMs,
+      updatedAt: observedAt || nowMs,
       sessionLabel: task.slice(0, 120),
       sessionKeyShort: metadata.sessionId,
       client: 'local',
@@ -170,10 +215,20 @@ function agentFromTranscript(candidate, nowMs) {
   };
 }
 
-function agentsFromTranscripts(candidates, nowMs, maxAgents, grouping = CLAUDE_GROUPING_PROJECT) {
-  const agents = candidates.map((candidate) => agentFromTranscript(candidate, nowMs)).filter(Boolean);
+function agentsFromTranscripts(
+  candidates,
+  nowMs,
+  maxAgents,
+  grouping = CLAUDE_GROUPING_PROJECT,
+  liveSessions = new Map()
+) {
+  const agents = candidates
+    .map((candidate) => agentFromTranscript(candidate, nowMs, liveSessions))
+    .filter(Boolean);
   agents.sort((left, right) => {
-    const rank = (agent) => agent.status === 'blocked' ? 2 : agent.status === 'active' ? 1 : 0;
+    const rank = (agent) => agent.pose === 'approval'
+      ? 3
+      : agent.status === 'blocked' ? 2 : agent.status === 'active' ? 1 : 0;
     return rank(right) - rank(left) || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
   });
   if (normalizeClaudeGrouping(grouping) === CLAUDE_GROUPING_SINGLE) {
@@ -195,14 +250,19 @@ function agentsFromTranscripts(candidates, nowMs, maxAgents, grouping = CLAUDE_G
 
 async function fetchClaudeAgents({
   projectsRoot = defaultClaudeProjectsRoot(),
+  sessionsRoot = defaultClaudeSessionsRoot(),
   processRunning,
+  liveSessions,
   maxAgents = DEFAULT_MAX_AGENTS,
   grouping = CLAUDE_GROUPING_PROJECT,
   now = Date.now
 } = {}) {
-  const running = processRunning === undefined ? await isClaudeRunning() : Boolean(processRunning);
+  const sessionSnapshot = liveSessions || readLiveSessions(sessionsRoot);
+  const running = processRunning === undefined
+    ? sessionSnapshot.size > 0 || await isClaudeRunning()
+    : Boolean(processRunning);
   if (!running) return [];
-  return agentsFromTranscripts(transcriptFiles(projectsRoot), now(), maxAgents, grouping);
+  return agentsFromTranscripts(transcriptFiles(projectsRoot), now(), maxAgents, grouping, sessionSnapshot);
 }
 
 module.exports = {
@@ -212,10 +272,12 @@ module.exports = {
   agentsFromTranscripts,
   claudeHome,
   defaultClaudeProjectsRoot,
+  defaultClaudeSessionsRoot,
   fetchClaudeAgents,
   isClaudeRunning,
   normalizeClaudeGrouping,
   projectIdentity,
+  readLiveSessions,
   readTranscriptMetadata,
   transcriptFiles
 };

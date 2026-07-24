@@ -1,6 +1,6 @@
 {
   "name": "taskfolk",
-  "version": "1.0.0",
+  "version": "1.0.14",
   "private": true,
   "description": "Taskfolk is a visual mission control dashboard for AI agents and shared workspace tools.",
   "main": "desktop/main.cjs",
@@ -11,6 +11,7 @@
     "test": "node --test test/*.test.cjs",
     "desktop": "electron .",
     "desktop:dist": "electron-builder",
+    "desktop:dist:mac": "electron-builder --mac --universal",
     "desktop:dist:test": "electron-builder --mac -c.mac.identity=- -c.mac.hardenedRuntime=false"
   },
   "dependencies": {
@@ -25,6 +26,7 @@
   "build": {
     "appId": "com.taskfolk.desktop",
     "productName": "Taskfolk",
+    "forceCodeSigning": true,
     "icon": "desktop/icon.png",
     "asar": true,
     "files": [
@@ -34,7 +36,13 @@
       "package.json"
     ],
     "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "notarize": true,
       "extendInfo": {
         "LSUIElement": true
       }
