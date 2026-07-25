@@ -144,6 +144,11 @@ To change connections, integrations, display mode, opacity, or window behavior l
 
 After making changes, click **Run and open office** or **Connect and open office** to save and apply them.
 
+Choose **Check for Updates…** from the companion right-click menu, the Taskfolk
+menu-bar menu, or the **Office** application menu. Taskfolk reports when the
+installed version is current. When a newer signed release is available, choose
+**Download Update**, then **Restart and Update** after the download completes.
+
 ## 5. Use the Config page
 
 **Setup** controls how Taskfolk connects and behaves as a macOS app. **Config** controls the agents, avatars, and appearance of the pixel office.
