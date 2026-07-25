@@ -48,12 +48,13 @@ const FOLDER_VIEW_ENABLED = !LOCAL_DESKTOP_MODE
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
-const MANUAL_AGENT_STATES = ['Working', 'Success', 'Blocked', 'Sleeping', 'Reading', 'Gaming', 'Coffee break', 'Listening', 'Walking'];
+const MANUAL_AGENT_STATES = ['Working', 'Success', 'Blocked', 'Approval', 'Sleeping', 'Reading', 'Gaming', 'Coffee break', 'Listening', 'Walking'];
 const MANUAL_AGENT_STATE_LOOKUP = new Map(MANUAL_AGENT_STATES.map((state) => [agentKey(state), state]));
 const MANUAL_AGENT_POSES = {
   Working: 'working',
   Success: 'success',
   Blocked: 'blocked',
+  Approval: 'approval',
   Sleeping: 'sleeping',
   Reading: 'reading',
   Gaming: 'gaming',
@@ -652,18 +653,6 @@ async function writeAvatarConfig(value) {
   );
   jsonFileCache.delete(AVATAR_ASSIGNMENTS_PATH);
   return normalized;
-}
-
-function configuredAgentsFromEnv() {
-  const raw = process.env.OPENCLAW_AGENTS_JSON;
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(normalizeAgent) : [];
-  } catch (err) {
-    console.warn(`Unable to parse OPENCLAW_AGENTS_JSON: ${err.message}`);
-    return [];
-  }
 }
 
 function agentKey(value) {
@@ -1715,11 +1704,12 @@ function normalizeManualAgentState(value) {
 function statusFromManualState(state) {
   if (state === 'Working') return 'active';
   if (state === 'Success') return 'success';
-  if (state === 'Blocked') return 'blocked';
+  if (state === 'Blocked' || state === 'Approval') return 'blocked';
   return 'idle';
 }
 
 function taskFromManualState(state) {
+  if (state === 'Approval') return 'Needs approval';
   return state === 'Coffee break' ? 'Taking a coffee break' : state;
 }
 
@@ -1785,9 +1775,6 @@ async function configuredAgents() {
       weeklyCost: null
     };
   }
-  const envAgents = configuredAgentsFromEnv();
-  if (envAgents.length) return { agents: envAgents, source: 'env', configLoaded: false, logFiles: 0, weeklyCost: null };
-
   if (OPENCLAW_CONNECTION_MODE === 'none') {
     return {
       agents: [],

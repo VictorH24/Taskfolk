@@ -19,29 +19,7 @@ Taskfolk is a desktop companion that turns activity from AI coding tools into a 
 
 > Run Taskfolk from **Applications**, not from inside the mounted DMG.
 
-## 2. Allow Taskfolk in Privacy & Security
-
-Beta build may be blocked because macOS does not recognize its developer.
-
-If macOS says that Taskfolk cannot be opened because the developer cannot be verified:
-
-![Taskfolk first run](docs/user-guide-first-run.png)
-
-
-1. Try to open Taskfolk once, then dismiss the warning.
-2. Open the **Apple menu → System Settings**.
-3. Select **Privacy & Security** in the sidebar.
-4. Scroll down to the **Security** section.
-5. Find the message that Taskfolk was blocked and click **Open Anyway**.
-6. Authenticate with Touch ID or your Mac password if requested.
-7. In the final confirmation dialog, click **Open**.
-
-This approval is normally required only once for that installed build.
-
-![Taskfolk Provacy & Security](docs/user-guide-allow-beta.png)
-
-
-## 3. Complete the first-run Setup
+## 2. Complete the first-run Setup
 
 Taskfolk opens the **Setup** window on first launch. The simplest configuration is to run the office locally inside the app.
 
@@ -69,7 +47,7 @@ After Taskfolk starts, the full-office view shows the agents and their current a
 
 ![Taskfolk full pixel office with four sample agents](docs/taskfolk_day.gif)
 
-## 4. Configure integrations
+## 3. Configure integrations
 
 You can enable one or several integrations in Setup. For project-based tools, **One agent per project** gives each project its own stable avatar; **One agent for all projects** combines activity into one avatar.
 
@@ -155,7 +133,7 @@ For local LM Studio Desktop, Taskfolk reads conversation title and timestamp met
 
 For a remote LM Studio URL, Desktop chat files are not available. Taskfolk falls back to loaded-model tracking through `/api/v1/models`; enter an API token only if authentication is enabled on that remote server.
 
-## 5. Open Setup again
+## 4. Open Setup again
 
 To change connections, integrations, display mode, opacity, or window behavior later, use any of these methods:
 
@@ -166,7 +144,7 @@ To change connections, integrations, display mode, opacity, or window behavior l
 
 After making changes, click **Run and open office** or **Connect and open office** to save and apply them.
 
-## 6. Use the Config page
+## 5. Use the Config page
 
 **Setup** controls how Taskfolk connects and behaves as a macOS app. **Config** controls the agents, avatars, and appearance of the pixel office.
 
@@ -209,7 +187,7 @@ Expand **Customize Pixel office**, then select:
 
 Changes save automatically and are applied to the office.
 
-## 7. Import or export Setup configuration
+## 6. Import or export Setup configuration
 
 Use these buttons at the bottom of Setup:
 
@@ -231,7 +209,7 @@ Put each avatar in its own folder. Numeric names such as `v28/` remain the conve
 
 Avatar assignments and pixel-office appearance are managed separately on the **Config** page.
 
-## 8. Everyday controls
+## 7. Everyday controls
 
 - Drag inside the Taskfolk window to move it.
 - Drag a window edge to resize it.

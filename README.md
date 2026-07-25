@@ -13,7 +13,11 @@ Taskfolk is a desktop companion that turns your AI coding sessions into a live p
 
 ## Start the companion app
 
-using the latest dmg or running the following commands:
+install from the latest DMG 
+
+![Taskfolk open the Dmg](docs/user-guide-install.png)
+
+or running the following commands:
 
 ```bash
 npm install
@@ -41,32 +45,9 @@ Use **Add Another Folk** from the right-click menu to place multiple independent
 
 These avatars animate in the companion as their live state changes:
 
-| Reading | Working Robot | Working Cat | Coffee break |
-| :---: | :---: | :---: | :---: |
-| ![Animated Taskfolk avatar variant 0 working at a desk](docs/taskfolk-avatar-reading.gif) | ![Animated Taskfolk robot avatar working at a desk](docs/taskfolk-avatar-robot.gif) | ![Animated Taskfolk cat avatar working at a desk](docs/taskfolk-avatar-working.gif) | ![Animated Taskfolk avatar taking a coffee break](docs/taskfolk-avatar-coffee.gif) |
-
-Avatar variants are discovered when the server starts. Each assignable folder under
-`public/avatar-scenes/variants/` must be named `v<number>`, contain the canonical
-`working.gif`, and include an `avatar.json` metadata file:
-
-```json
-{
-  "name": "Tuxedo Cat",
-  "workingScreen": { "left": 112, "top": 95, "width": 156, "height": 89 }
-}
-```
-
-`workingScreen` is optional. Include it when the variant has a `working_alpha.png`
-plate and should use the shared working-screen animation pool.
-
-Add an optional `sheet.png` to the same avatar folder to show the full pose sheet
-in the avatar picker. When `sheet.png` is absent or cannot be loaded, the picker
-uses that avatar's `working.gif` as its preview.
-
-Variants with missing or invalid metadata are skipped with a startup warning. The
-`v0` variant is required and is used whenever a saved assignment references a
-variant that is no longer installed. Restart Taskfolk after adding or removing a
-variant so the registry is rebuilt.
+| Reading | Pending approval | Working Robot | Working Cat | Coffee break |
+| :---: | :---: | :---: | :---: | :---: |
+| ![Animated Taskfolk avatar variant 0 reading](docs/taskfolk-avatar-reading.gif) | ![Animated Taskfolk avatar variant 0 waiting for approval](docs/taskfolk-avatar-approval.gif) | ![Animated Taskfolk robot avatar working at a desk](docs/taskfolk-avatar-robot.gif) | ![Animated Taskfolk cat avatar working at a desk](docs/taskfolk-avatar-working.gif) | ![Animated Taskfolk avatar taking a coffee break](docs/taskfolk-avatar-coffee.gif) |
 
 ### Live coding-session support
 
@@ -78,28 +59,6 @@ variant so the registry is rebuilt.
 - **OpenClaw and manual agents** — connect to a remote Taskfolk server to display configured OpenClaw agents or agents that publish their own status through the API.
 
 Taskfolk reads only the local metadata needed to represent activity. It does not read or publish prompts, response text, tool output, attachments, or credentials. See [Companion app reference](#companion-app-reference) for setup options, privacy details, window controls, and packaging.
-
-## Web dashboard
-
-The same live office is available as a browser dashboard with configuration, shared-folder tools.
-
-![Taskfolk pixel office](docs/user-guide-pixel-office.jpg)
-
-### Dashboard features
-
-- At-a-glance active, success, idle, and blocked agent states.
-- Live agent refreshes from OpenClaw, desktop connectors, manual agents, or `OPENCLAW_AGENTS_JSON`.
-- Light, dark, and system themes.
-- Upload, download, preview, edit, and archive tools in the folder view.
-
-### Run the dashboard locally
-
-```bash
-npm install
-npm start
-```
-
-Open <http://localhost:3000>.
 
 ## Companion app reference
 
@@ -123,6 +82,21 @@ npm run desktop
 ```
 
 Set `TASKFOLK_PASSWORD` too when the gateway requires one. Environment credentials take precedence over saved settings for that launch.
+
+### Options 
+The setup page can choose between the full office and a single live avatar on a transparent background. In avatar mode, choose which connected agent to display; its pose continues to update from the live agent state. The setup page also controls window opacity from 25% to 100%.
+
+Choose **Most recently updated (automatic)** in Setup or the single-avatar right-click menu to follow agent activity automatically. On every live refresh, the companion compares the agents' latest activity timestamps and switches to the avatar whose status or session data changed most recently.
+
+In single-avatar mode, transparent pixels are click-through: clicks and scrolling pass to the application underneath. Opaque avatar pixels remain interactive so they can be dragged or right-clicked to open the companion menu.
+
+The single-avatar right-click menu includes **Avatar Size** presets for Tiny (120×150), Extra Small (150×190), Small (220×280), Medium (300×380), Large (420×540), and Extra Large (560×720). Presets resize around the current window center, remain inside the active screen, and are remembered for the next launch.
+
+Setup also accepts a custom avatar width and height. Values are constrained to 120–1200 pixels wide and 150–1200 pixels high. Use **Reset to 300 × 380** to restore the default avatar dimensions before applying the settings.
+
+Right-click anywhere in the companion window to switch back to **Office View**, choose a different agent from **Single Avatar**, add another independent folk window, change an opacity preset, open **Setup** or the full **Config** page, reload, hide, toggle **Always on Top**, or quit. Setup and Config are also available from the **Office** application menu and tray icon. Config opens in a separate authenticated desktop window and works with both local and remote office modes.
+
+When changing views or reloading, the companion hides the remote page immediately, displays an animated loading indicator, waits for the office or avatar artwork to finish rendering, and then fades the completed view into place.
 
 ### Track OpenCode Desktop and terminal sessions
 
@@ -194,42 +168,63 @@ The connector reads only the bounded JSON header needed for conversation ID, tit
 
 The Taskfolk server keeps desktop-published runtime agents in memory and expires them after 90 seconds without an update. Override this with `RUNTIME_AGENT_TTL_MS` if needed.
 
-The setup page can choose between the full office and a single live avatar on a transparent background. In avatar mode, choose which connected agent to display; its pose continues to update from the live agent state. The setup page also controls window opacity from 25% to 100%.
+## Manual agents
 
-Choose **Most recently updated (automatic)** in Setup or the single-avatar right-click menu to follow agent activity automatically. On every live refresh, the companion compares the agents' latest activity timestamps and switches to the avatar whose status or session data changed most recently.
+The Config page at `/avatar-legend.html` lets you give every discovered agent an optional custom name; clear the field to return to its automatically generated name. It can also add agents that do not come from logs or OpenClaw session stores. Use **Add agent** at the bottom of the live agent list, then choose an avatar variant, set the display name, and copy the generated token. Manual agents can be disabled without deleting their token or avatar assignment; disabled manual agents stay editable on the Config page but are omitted from the office view and cannot update status. Names and manual agents are saved in `avatar-assignments.json` alongside avatar assignments:
 
-In single-avatar mode, transparent pixels are click-through: clicks and scrolling pass to the application underneath. Opaque avatar pixels remain interactive so they can be dragged or right-clicked to open the companion menu.
-
-The single-avatar right-click menu includes **Avatar Size** presets for Tiny (120×150), Extra Small (150×190), Small (220×280), Medium (300×380), Large (420×540), and Extra Large (560×720). Presets resize around the current window center, remain inside the active screen, and are remembered for the next launch.
-
-Setup also accepts a custom avatar width and height. Values are constrained to 120–1200 pixels wide and 150–1200 pixels high. Use **Reset to 300 × 380** to restore the default avatar dimensions before applying the settings.
-
-Right-click anywhere in the companion window to switch back to **Office View**, choose a different agent from **Single Avatar**, add another independent folk window, change an opacity preset, open **Setup** or the full **Config** page, reload, hide, toggle **Always on Top**, or quit. Setup and Config are also available from the **Office** application menu and tray icon. Config opens in a separate authenticated desktop window and works with both local and remote office modes.
-
-When changing views or reloading, the companion hides the remote page immediately, displays an animated loading indicator, waits for the office or avatar artwork to finish rendering, and then fades the completed view into place.
-
-To produce an installer for the current platform:
-
-```bash
-npm run desktop:dist
+```json
+{
+  "assignments": { "manual-example": 2 },
+  "customNames": { "runtime:codex-single": "Release Helper" },
+  "manualAgents": [
+    { "id": "manual-example", "name": "Manual Example", "token": "generated-token", "enabled": true }
+  ]
+}
 ```
 
-Installers are written to `dist/`, which is gitignored.
-
-For a macOS test installer without a Developer ID certificate, produce a complete
-ad-hoc signature instead of leaving the Electron bundle partially signed:
+Manual agents update their current office state through the agent state API:
 
 ```bash
-npm run desktop:dist:test
+curl -X POST http://localhost:3000/api/agent-state \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"generated-token","state":"Working","task":"Handling queue item 42"}'
 ```
 
-macOS will still block this test build because its developer is unidentified. A
-tester should be able to attempt to open it once, then approve it from **System
-Settings → Privacy & Security → Open Anyway**. Ad-hoc signatures are not trusted
-for distribution, so behavior can vary by macOS version. Public releases should
-use Developer ID signing and Apple notarization instead.
+You can also pass the token as `X-Agent-Token` and omit `token` from the JSON body. The accepted states are `Working`, `Success`, `Blocked`, `Approval`, `Sleeping`, `Reading`, `Gaming`, `Coffee break`, `Listening`, and `Walking`. `Approval` uses the approval pose and is counted as blocked until the agent resumes work. API calls update `state.json` in `CONFIG_DIR` (default `/config/state.json`), and `/api/agents` merges that file into the office view so manual agents appear beside detected agents.
 
-## Run in docker
+### Agent status skill
+
+This repo includes a reusable skill at `skills/taskfolk-agent-status/SKILL.md` for agents that should update their own office status. Add the manual agent token to that agent's environment as `TASKFOLK_AGENT_TOKEN`; optionally set `TASKFOLK_AGENT_STATUS_URL` if Taskfolk is not at `http://localhost:3000/api/agent-state`.
+
+Add this to the agent's `SOUL.MD`:
+
+```md
+Use the `taskfolk-agent-status` skill for every task. Set your Taskfolk status to Working before beginning work, and set it to Success before sending the final response.
+```
+
+## Web dashboard
+
+The same live office is available as a browser dashboard with configuration, shared-folder tools when running the server.
+
+![Taskfolk pixel office](docs/user-guide-pixel-office.jpg)
+
+### Dashboard features
+
+- At-a-glance active, success, idle, and blocked agent states.
+- Live agent refreshes from OpenClaw, desktop connectors, or manual agents.
+- Light, dark, and system themes.
+- Upload, download, preview, edit, and archive tools in the folder view.
+
+### Run the dashboard locally
+
+```bash
+npm install
+npm start
+```
+
+Open <http://localhost:3000>.
+
+### Run in docker
 
 ```bash
 docker compose up -d --build
@@ -243,7 +238,7 @@ docker compose -f docker-compose.yml -f docker-compose.FolderModule.yml up -d --
 
 The override sets `FOLDER_VIEW_ENABLED=true` and mounts the configured OpenClaw and development workspaces under `/shared`. Edit its host paths to choose which folders Taskfolk can access. For a non-Compose server launch, set `FOLDER_VIEW_ENABLED=true` directly in the environment.
 
-## Gateway login
+### Gateway login
 
 Taskfolk supports the same auth shape as OpenClaw gateway config:
 
@@ -272,7 +267,7 @@ Docker Compose reads that `.env` file for the `${GATEWAY_AUTH_*}` substitutions 
 
 Leave `GATEWAY_AUTH_SECURE_COOKIE=false` for local plain-HTTP access such as `http://127.0.0.1:3000`. Set it to `true` only when the page is served over HTTPS.
 
-## Agent data
+### Agent data
 
 The standalone server supports three OpenClaw connection modes. Select one with `OPENCLAW_CONNECTION_MODE`:
 
@@ -312,72 +307,3 @@ In `files` mode, the dashboard reads OpenClaw data from these mounted runtime pa
 - `OPENCLAW_SESSIONS_DIR` — defaults to `/openclaw-agents`
 
 It reads configured agents from `openclaw.json`, then overlays safe session metadata from mounted OpenClaw `sessions.json` files. Session stores are expected at paths like `/openclaw-agents/<agentId>/sessions/sessions.json`; transcript `.jsonl` files are not required. Recent session failures mark an agent as blocked.
-
-For local demos or overrides, set `OPENCLAW_AGENTS_JSON` to an array:
-
-```json
-[
-  { "id": "main", "name": "Main Agent", "role": "Coordinator", "status": "active", "task": "Working item 7", "x": 24, "y": 52 }
-]
-```
-
-`status` can be `active`, `success`, `idle`, or `blocked`. If no config or logs are available, the UI falls back to sample agents.
-
-The office scene config can include `emptyDesks` to reserve desk slots in the pixel office. Manage it from the Config page's Pixel office controls, or set it in the saved avatar scene config:
-
-```json
-{
-  "officeScene": { "floor": "wood", "windowView": "sf", "poster": 10, "emptyDesks": 2 }
-}
-```
-
-`poster` is a zero-based index for files in `public/office-scenes/posters`, so `10` renders `poster11.jpeg`.
-
-## Manual agents
-
-The Config page at `/avatar-legend.html` lets you give every discovered agent an optional custom name; clear the field to return to its automatically generated name. It can also add agents that do not come from logs or OpenClaw session stores. Use **Add agent** at the bottom of the live agent list, then choose an avatar variant, set the display name, and copy the generated token. Manual agents can be disabled without deleting their token or avatar assignment; disabled manual agents stay editable on the Config page but are omitted from the office view and cannot update status. Names and manual agents are saved in `avatar-assignments.json` alongside avatar assignments:
-
-```json
-{
-  "assignments": { "manual-example": 2 },
-  "customNames": { "runtime:codex-single": "Release Helper" },
-  "manualAgents": [
-    { "id": "manual-example", "name": "Manual Example", "token": "generated-token", "enabled": true }
-  ]
-}
-```
-
-Manual agents update their current office state through the agent state API:
-
-```bash
-curl -X POST http://localhost:3000/api/agent-state \
-  -H 'Content-Type: application/json' \
-  -d '{"token":"generated-token","state":"Working","task":"Handling queue item 42"}'
-```
-
-You can also pass the token as `X-Agent-Token` and omit `token` from the JSON body. The accepted states are `Working`, `Success`, `Blocked`, `Sleeping`, `Reading`, `Gaming`, `Coffee break`, `Listening`, and `Walking`. API calls update `state.json` in `CONFIG_DIR` (default `/config/state.json`), and `/api/agents` merges that file into the office view so manual agents appear beside detected agents.
-
-### Agent status skill
-
-This repo includes a reusable skill at `skills/taskfolk-agent-status/SKILL.md` for agents that should update their own office status. Add the manual agent token to that agent's environment as `TASKFOLK_AGENT_TOKEN`; optionally set `TASKFOLK_AGENT_STATUS_URL` if Taskfolk is not at `http://localhost:3000/api/agent-state`.
-
-Add this to the agent's `SOUL.MD`:
-
-```md
-Use the `taskfolk-agent-status` skill for every task. Set your Taskfolk status to Working before beginning work, and set it to Success before sending the final response.
-```
-
-### Status calculation
-
-Taskfolk starts from configured agents in `openclaw.json` and overlays matching session/log activity:
-
-- The primary source is `agents.list[]` in `openclaw.json`; each entry uses `id` and `name` for the dashboard card.
-- If `agents.list[]` is missing, config entries under agent-like containers such as `agents`, `agentProfiles`, `agentConfigs`, `assistants`, or `sessions` are used as a fallback.
-- Mounted `sessions.json` files are matched by their path, `agentId` fields, or session keys like `agent:<id>:...`; the newest available session timestamp (including nested message/run metadata and file modification time) becomes the agent's last activity.
-- Log lines are matched by fields like `agentId`, `agent_id`, `agent`, `agentName`, `sessionKey`, `session`, `label`, or `name`.
-- `active`: latest matching session or log timestamp is within `AGENT_ACTIVE_MS` (default 2 minutes).
-- `success`: a completed session remains in its success animation for `AGENT_SUCCESS_MS` (default 2 minutes).
-- `idle`: configured agent has no matching runtime activity, or latest activity is older than the active window.
-- `blocked`: latest task/log text contains `error`, `failed`, `failure`, `exception`, `blocked`, or `fatal`.
-
-If a log line has no timestamp, the log file modification time is used as a fallback. The `/api/agents` response includes `statusRules` so the UI/API makes these thresholds visible.

@@ -1,6 +1,6 @@
 ---
 name: taskfolk-agent-status
-description: Use this skill when an agent should publish its current Taskfolk avatar status through the agent status API, especially from SOUL.MD instructions that require setting Working before a task and Success before finishing.
+description: Use this skill when an agent should publish its current Taskfolk avatar status through the agent status API, especially from SOUL.MD instructions that require setting Working before a task, Approval while waiting for authorization, and Success before finishing.
 ---
 
 # Taskfolk Agent Status
@@ -24,6 +24,8 @@ Before sending the final response after completing the task, update the agent to
 
 If the task becomes blocked, update to `Blocked` with a short task/message explaining the blocker.
 
+If the agent needs user authorization or confirmation before it can continue, update to `Approval` with a short task/message naming the decision or action. After approval arrives, immediately return to `Working` before resuming.
+
 ## Accepted states
 
 Only send one of these states:
@@ -31,6 +33,7 @@ Only send one of these states:
 - `Working`
 - `Success`
 - `Blocked`
+- `Approval`
 - `Sleeping`
 - `Reading`
 - `Gaming`
@@ -72,8 +75,9 @@ The `task` field is optional but recommended. Keep it short because it appears i
 
 1. At task start, call the API with `state: "Working"` and a concise `task`. Use `scripts/update_status.py` if Python is available.
 2. Do the requested work.
-3. If blocked, call the API with `state: "Blocked"` and describe the blocker.
-4. Before the final response, call the API with `state: "Success"` and a task like `Task complete`.
+3. If waiting for user authorization or confirmation, call the API with `state: "Approval"` and name what needs approval. Return to `Working` after approval arrives.
+4. If blocked for another reason, call the API with `state: "Blocked"` and describe the blocker.
+5. Before the final response, call the API with `state: "Success"` and a task like `Task complete`.
 
 ## Minimal helpers
 

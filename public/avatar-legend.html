@@ -62,13 +62,13 @@
           </div>
           <div>
             <dt>States</dt>
-            <dd><code>Working</code>, <code>Success</code>, <code>Blocked</code>, <code>Sleeping</code>, <code>Reading</code>, <code>Gaming</code>, <code>Coffee break</code>, <code>Listening</code>, <code>Walking</code></dd>
+            <dd><code>Working</code>, <code>Success</code>, <code>Blocked</code>, <code>Approval</code>, <code>Sleeping</code>, <code>Reading</code>, <code>Gaming</code>, <code>Coffee break</code>, <code>Listening</code>, <code>Walking</code></dd>
           </div>
         </dl>
         <pre><code id="agentApiCurl">curl -X POST http://localhost:3000/api/agent-state \
   -H 'Content-Type: application/json' \
   -d '{"token":"AGENT_TOKEN","state":"Working","task":"Handling queue item 42"}'</code></pre>
-        <p>Use the token shown on the manual agent row. The optional <code>task</code> field becomes the short status text in the office.</p>
+        <p>Use the token shown on the manual agent row. Send <code>Approval</code> while the agent is waiting for user authorization; it uses the approval pose and is counted as blocked until work resumes. The optional <code>task</code> field becomes the short status text in the office.</p>
       </div>
     </details>
     <details class="agentApiHelp">
@@ -104,7 +104,7 @@
       <div>
         <span class="eyebrow">Avatar sheets</span>
         <h2>One preview per variant</h2>
-        <p>Each generated sheet shows all eight avatar states. Choose avatars only in the Live Agents section above.</p>
+        <p>Each generated sheet shows all ten avatar states, including approval. Choose avatars only in the Live Agents section above.</p>
       </div>
     </section>
     <section id="legendGrid" class="avatarSheetGrid" aria-label="Generated avatar sheets"></section>

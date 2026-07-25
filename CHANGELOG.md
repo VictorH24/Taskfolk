@@ -4,6 +4,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.15 (July 24, 2026)
+- Documenation update
+- API add approval state
+
 ## Version 1.0.14 (July 23, 2026)
 - WebP animation migration
 

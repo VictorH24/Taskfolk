@@ -15,6 +15,7 @@ ACCEPTED_STATES = {
     "Working",
     "Success",
     "Blocked",
+    "Approval",
     "Sleeping",
     "Reading",
     "Gaming",
