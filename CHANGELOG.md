@@ -4,8 +4,12 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.16 (July 24, 2026)
+- Display version in Setup page
+- Add an in-app update check, download progress, and restart-to-install flow to the companion, tray, and Office menus
+
 ## Version 1.0.15 (July 24, 2026)
-- Documenation update
+- Documentation update
 - API add approval state
 
 ## Version 1.0.14 (July 23, 2026)

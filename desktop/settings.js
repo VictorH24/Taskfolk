@@ -1,4 +1,5 @@
 const form = document.querySelector('#settingsForm');
+const appVersion = document.querySelector('#appVersion');
 const connectionModeInput = document.querySelector('#connectionMode');
 const localModeNote = document.querySelector('#localModeNote');
 const remoteConnectionFields = document.querySelector('#remoteConnectionFields');
@@ -160,6 +161,7 @@ function updateConnectionFields() {
 
 async function initialize() {
   const settings = await window.clawOffice.loadSettings();
+  appVersion.textContent = settings.appVersion ? `Version ${settings.appVersion}` : '';
   encryptionAvailable = Boolean(settings.encryptionAvailable);
   connectionModeInput.value = settings.connectionMode === 'remote' ? 'remote' : 'local';
   urlInput.value = settings.url || 'http://127.0.0.1:3000';

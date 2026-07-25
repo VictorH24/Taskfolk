@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, safeStorage, screen, session, Tray } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -93,6 +94,12 @@ let officeWindow = null;
 let settingsWindow = null;
 let configWindow = null;
 let tray = null;
+let updateStatus = 'idle';
+let availableUpdateVersion = '';
+let updateDownloadPercent = 0;
+let updateRequestIsManual = false;
+let updatePromptWindow = null;
+let updateErrorWasShown = false;
 // Packaged macOS builds declare LSUIElement, so they begin in accessory mode
 // before Electron creates any windows. Development builds still need the
 // runtime transition because they use Electron's own bundle metadata.
@@ -1851,6 +1858,181 @@ function additionalAgentMenuItems(targetWindow) {
   }));
 }
 
+function updateDialogWindow() {
+  return updatePromptWindow && !updatePromptWindow.isDestroyed()
+    ? updatePromptWindow
+    : null;
+}
+
+function showUpdateMessage(options) {
+  const targetWindow = updateDialogWindow();
+  return targetWindow
+    ? dialog.showMessageBox(targetWindow, options)
+    : dialog.showMessageBox(options);
+}
+
+function updaterMenuItem(targetWindow = officeWindow) {
+  if (updateStatus === 'checking') {
+    return { label: 'Checking for Updates…', enabled: false };
+  }
+  if (updateStatus === 'downloading') {
+    const progress = updateDownloadPercent > 0 ? ` (${updateDownloadPercent}%)` : '';
+    return { label: `Downloading Taskfolk ${availableUpdateVersion || 'Update'}…${progress}`, enabled: false };
+  }
+  if (updateStatus === 'downloaded') {
+    return {
+      label: `Restart to Update to Taskfolk ${availableUpdateVersion}…`,
+      click: () => confirmInstallUpdate(targetWindow)
+    };
+  }
+  if (updateStatus === 'available') {
+    return {
+      label: `Download Taskfolk ${availableUpdateVersion}…`,
+      click: () => downloadAvailableUpdate(targetWindow)
+    };
+  }
+  return {
+    label: 'Check for Updates…',
+    click: () => checkForTaskfolkUpdates(targetWindow)
+  };
+}
+
+async function showUpdateError(error) {
+  updateStatus = 'idle';
+  updateDownloadPercent = 0;
+  rebuildMenus();
+  if (!updateRequestIsManual || updateErrorWasShown) return;
+  updateErrorWasShown = true;
+  const detail = String(error?.message || error || 'The update service could not be reached.');
+  await showUpdateMessage({
+    type: 'error',
+    title: 'Taskfolk Update',
+    message: 'Taskfolk could not check for updates.',
+    detail
+  });
+  updateRequestIsManual = false;
+}
+
+async function checkForTaskfolkUpdates(targetWindow = officeWindow) {
+  if (updateStatus === 'checking' || updateStatus === 'downloading') return;
+  updatePromptWindow = targetWindow && !targetWindow.isDestroyed() ? targetWindow : null;
+  updateRequestIsManual = true;
+  updateErrorWasShown = false;
+  updateStatus = 'checking';
+  rebuildMenus();
+
+  const runtimeUpdateUrl = String(process.env.TASKFOLK_UPDATE_URL || '').trim();
+  const packagedUpdateConfig = path.join(process.resourcesPath, 'app-update.yml');
+  if (!runtimeUpdateUrl && (!app.isPackaged || !fs.existsSync(packagedUpdateConfig))) {
+    updateStatus = 'idle';
+    rebuildMenus();
+    await showUpdateMessage({
+      type: 'info',
+      title: 'Taskfolk Update',
+      message: app.isPackaged
+        ? 'Updates are not configured for this build.'
+        : 'Update checks are available in packaged builds.',
+      detail: app.isPackaged
+        ? 'Build Taskfolk with its production update-feed URL to enable update checks.'
+        : `This development build is running Taskfolk ${app.getVersion()}.`
+    });
+    updateRequestIsManual = false;
+    return;
+  }
+
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    await showUpdateError(error);
+  }
+}
+
+async function downloadAvailableUpdate(targetWindow = updateDialogWindow()) {
+  if (updateStatus === 'downloading' || updateStatus === 'downloaded') return;
+  updatePromptWindow = targetWindow && !targetWindow.isDestroyed() ? targetWindow : updateDialogWindow();
+  updateStatus = 'downloading';
+  updateDownloadPercent = 0;
+  rebuildMenus();
+  try {
+    await autoUpdater.downloadUpdate();
+  } catch (error) {
+    updateRequestIsManual = true;
+    await showUpdateError(error);
+  }
+}
+
+async function confirmInstallUpdate(targetWindow = updateDialogWindow()) {
+  updatePromptWindow = targetWindow && !targetWindow.isDestroyed() ? targetWindow : updateDialogWindow();
+  const { response } = await showUpdateMessage({
+    type: 'info',
+    title: 'Taskfolk Update Ready',
+    message: `Taskfolk ${availableUpdateVersion} is ready to install.`,
+    detail: 'Taskfolk will close, install the update, and reopen.',
+    buttons: ['Restart and Update', 'Later'],
+    defaultId: 0,
+    cancelId: 1
+  });
+  if (response !== 0) return;
+  quitting = true;
+  autoUpdater.quitAndInstall(false, true);
+}
+
+function initializeAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  const updateUrl = String(process.env.TASKFOLK_UPDATE_URL || '').trim();
+  if (updateUrl) autoUpdater.setFeedURL({ provider: 'generic', url: updateUrl });
+
+  autoUpdater.on('checking-for-update', () => {
+    updateStatus = 'checking';
+    rebuildMenus();
+  });
+  autoUpdater.on('update-available', async (info) => {
+    availableUpdateVersion = String(info?.version || '').trim();
+    updateStatus = 'available';
+    rebuildMenus();
+    if (!updateRequestIsManual) return;
+    const { response } = await showUpdateMessage({
+      type: 'info',
+      title: 'Taskfolk Update Available',
+      message: `Taskfolk ${availableUpdateVersion} is available.`,
+      detail: `You are currently using Taskfolk ${app.getVersion()}.`,
+      buttons: ['Download Update', 'Later'],
+      defaultId: 0,
+      cancelId: 1
+    });
+    updateRequestIsManual = false;
+    if (response === 0) await downloadAvailableUpdate();
+  });
+  autoUpdater.on('update-not-available', async () => {
+    updateStatus = 'idle';
+    rebuildMenus();
+    if (!updateRequestIsManual) return;
+    await showUpdateMessage({
+      type: 'info',
+      title: 'Taskfolk Update',
+      message: 'Taskfolk is up to date.',
+      detail: `You are using the latest version, Taskfolk ${app.getVersion()}.`
+    });
+    updateRequestIsManual = false;
+  });
+  autoUpdater.on('download-progress', (progress) => {
+    updateStatus = 'downloading';
+    updateDownloadPercent = Math.max(0, Math.min(100, Math.round(Number(progress?.percent) || 0)));
+    rebuildMenus();
+  });
+  autoUpdater.on('update-downloaded', async (info) => {
+    availableUpdateVersion = String(info?.version || availableUpdateVersion).trim();
+    updateStatus = 'downloaded';
+    updateDownloadPercent = 100;
+    rebuildMenus();
+    await confirmInstallUpdate();
+  });
+  autoUpdater.on('error', (error) => {
+    void showUpdateError(error);
+  });
+}
+
 function showCompanionContextMenu(targetWindow = officeWindow) {
   if (!targetWindow || targetWindow.isDestroyed()) return;
   const config = readConfig();
@@ -1879,6 +2061,7 @@ function showCompanionContextMenu(targetWindow = officeWindow) {
     { label: 'Open Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
     { label: 'Reload', click: () => targetWindow.reload() },
     { label: 'Always on Top', type: 'checkbox', checked: isAlwaysOnTopEnabled(config), click: (item) => setAlwaysOnTop(item.checked) },
+    updaterMenuItem(targetWindow),
     { type: 'separator' },
     ...(additionalWindow
       ? [{ label: 'Remove This Folk', click: () => removeAdditionalFolk(targetWindow) }]
@@ -2107,6 +2290,7 @@ function menuTemplate() {
         ...(process.platform === 'darwin'
           ? [{ label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, click: (item) => setHideDockIcon(!item.checked) }]
           : []),
+        updaterMenuItem(officeWindow),
         { type: 'separator' },
         { role: process.platform === 'darwin' ? 'close' : 'quit' }
       ]
@@ -2137,6 +2321,7 @@ function rebuildMenus() {
       : []),
     { label: 'Setup…', click: () => openSettingsWindow() },
     { label: 'Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
+    updaterMenuItem(officeWindow),
     { type: 'separator' },
     { role: 'quit' }
   ]));
@@ -2198,6 +2383,7 @@ ipcMain.handle('settings:load', () => {
   const credentials = savedCredentials(config);
   const mode = connectionMode(config);
   return {
+    appVersion: app.getVersion(),
     connectionMode: mode,
     url: mode === 'remote' ? (activeBaseUrl || config.url || '') : (config.url || ''),
     credentialsStored: Boolean(
@@ -2531,6 +2717,7 @@ app.whenReady().then(async () => {
   powerMonitor.on('resume', restartRuntimeAdaptersAfterWake);
   powerMonitor.on('unlock-screen', restartRuntimeAdaptersAfterWake);
   setInterval(checkForSystemSleepGap, 5_000).unref();
+  initializeAutoUpdater();
   let config = readConfig();
   if (config.displayMode === 'random') {
     config = { ...config, displayMode: 'office' };
