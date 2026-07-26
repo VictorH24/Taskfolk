@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rank Board · Taskfolk</title>
+  <link rel="icon" type="image/png" href="./favicon.png" />
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./rank-board.css" />
+</head>
+<body class="rankBoardPage">
+  <header>
+    <div>
+      <span class="eyebrow">Achievements</span>
+      <h1>Agent Rank Board</h1>
+      <p>Compare cumulative worked time, approval requests, and blocked events.</p>
+    </div>
+    <div class="headerActions" data-web-navigation>
+      <a class="secondary button" href="./avatar-legend.html">Config</a>
+      <a class="secondary button" href="./index.html">Agent View</a>
+    </div>
+  </header>
+  <main class="rankBoardMain">
+    <section class="rankBoardHero">
+      <div>
+        <span class="eyebrow">All-time activity</span>
+        <h2>Time on task</h2>
+        <p id="rankBoardStatus" aria-live="polite">Loading achievement counters…</p>
+      </div>
+      <button id="refreshRankBoardBtn" type="button">Refresh</button>
+    </section>
+    <section class="rankBoardSummary" id="rankBoardSummary" aria-label="Achievement totals"></section>
+    <section class="rankBoardCard" aria-label="Agent achievement rankings">
+      <div class="rankBoardTableWrap">
+        <table class="rankBoardTable">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Agent</th>
+              <th>Worked</th>
+              <th>Successes</th>
+              <th>Approvals</th>
+              <th>Blocked</th>
+              <th>Fun stats</th>
+              <th><span class="srOnly">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="rankBoardRows"></tbody>
+        </table>
+      </div>
+      <div class="rankBoardEmpty hidden" id="rankBoardEmpty">Achievement counters will appear after an agent is discovered.</div>
+    </section>
+  </main>
+  <div id="toast" role="status"></div>
+  <script src="./session-auth.js"></script>
+  <script src="./rank-board.js"></script>
+</body>
+</html>

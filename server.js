@@ -41,6 +41,8 @@ const OPENCLAW_GATEWAY_TIMEOUT_MS = Number(process.env.OPENCLAW_GATEWAY_TIMEOUT_
 const OPENCLAW_GATEWAY_CACHE_MS = Number(process.env.OPENCLAW_GATEWAY_CACHE_MS || 4_000);
 const AVATAR_ASSIGNMENTS_PATH = path.resolve(process.env.AVATAR_ASSIGNMENTS_PATH || path.join(CONFIG_DIR, 'avatar-assignments.json'));
 const AGENT_STATE_PATH = path.resolve(process.env.AGENT_STATE_PATH || path.join(CONFIG_DIR, 'state.json'));
+const AGENT_ACHIEVEMENTS_PATH = path.resolve(process.env.AGENT_ACHIEVEMENTS_PATH || path.join(CONFIG_DIR, 'agent-achievements.json'));
+const ACHIEVEMENT_OBSERVATION_MAX_MS = Math.max(1_000, Number(process.env.ACHIEVEMENT_OBSERVATION_MAX_MS || 60_000));
 const OFFICE_FIXTURE_PATH = path.resolve(process.env.OFFICE_FIXTURE_PATH || path.join(SERVER_DIR, 'public', 'test-agents.json'));
 const LOCAL_DESKTOP_MODE = String(process.env.LOCAL_DESKTOP_MODE || '').trim().toLowerCase() === 'true';
 const FOLDER_VIEW_ENABLED = !LOCAL_DESKTOP_MODE
@@ -206,6 +208,7 @@ let sessionAgentsSnapshotCache = null;
 let openClawGatewayCache = null;
 let openClawGatewayRequest = null;
 let openClawGatewayLastWarning = '';
+let achievementUpdateQueue = Promise.resolve();
 
 function cleanRuntimeText(value, maxLength = 240) {
   return String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
@@ -1733,6 +1736,149 @@ async function writeAgentState(stateFile) {
   return normalized;
 }
 
+function normalizeAchievementEntry(value = {}) {
+  const seenPoseEpisodes = Array.isArray(value.seenPoseEpisodes)
+    ? [...new Set(value.seenPoseEpisodes.map((episode) => cleanRuntimeText(episode, 320)).filter(Boolean))].slice(-256)
+    : [];
+  return {
+    name: cleanRuntimeText(value.name, 120) || 'Agent',
+    source: cleanRuntimeText(value.source, 80) || 'unknown',
+    avatarVariant: normalizeAvatarVariant(value.avatarVariant),
+    activeMs: Math.max(0, Math.trunc(Number(value.activeMs) || 0)),
+    successCount: Math.max(0, Math.trunc(Number(value.successCount) || 0)),
+    approvalCount: Math.max(0, Math.trunc(Number(value.approvalCount) || 0)),
+    blockedCount: Math.max(0, Math.trunc(Number(value.blockedCount) || 0)),
+    coffeeCount: Math.max(0, Math.trunc(Number(value.coffeeCount) || 0)),
+    readingCount: Math.max(0, Math.trunc(Number(value.readingCount) || 0)),
+    gamingCount: Math.max(0, Math.trunc(Number(value.gamingCount) || 0)),
+    musicCount: Math.max(0, Math.trunc(Number(value.musicCount) || 0)),
+    stepCount: Math.max(0, Math.trunc(Number(value.stepCount) || 0)),
+    seenPoseEpisodes,
+    lastMode: ['active', 'success', 'approval', 'blocked', 'other'].includes(value.lastMode) ? value.lastMode : 'other',
+    lastObservedAt: Math.max(0, Math.trunc(Number(value.lastObservedAt) || 0)),
+    resetAt: value.resetAt ? String(value.resetAt) : null
+  };
+}
+
+async function readAgentAchievements() {
+  const data = await readJsonIfPresent(AGENT_ACHIEVEMENTS_PATH);
+  const source = data?.agents && typeof data.agents === 'object' && !Array.isArray(data.agents)
+    ? data.agents
+    : {};
+  return {
+    updatedAt: data?.updatedAt || null,
+    agents: Object.fromEntries(Object.entries(source)
+      .filter(([key, value]) => String(key).trim() && value && typeof value === 'object' && !Array.isArray(value))
+      .map(([key, value]) => [String(key), normalizeAchievementEntry(value)]))
+  };
+}
+
+async function writeAgentAchievements(value) {
+  const normalized = {
+    updatedAt: new Date().toISOString(),
+    agents: Object.fromEntries(Object.entries(value?.agents || {})
+      .filter(([key, entry]) => String(key).trim() && entry && typeof entry === 'object' && !Array.isArray(entry))
+      .map(([key, entry]) => [String(key), normalizeAchievementEntry(entry)]))
+  };
+  await fs.mkdir(path.dirname(AGENT_ACHIEVEMENTS_PATH), { recursive: true });
+  await fs.writeFile(AGENT_ACHIEVEMENTS_PATH, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+  jsonFileCache.delete(AGENT_ACHIEVEMENTS_PATH);
+  return normalized;
+}
+
+function achievementMode(agent = {}) {
+  const activityStatus = String(agent.activity?.status || '').trim().toLowerCase();
+  if (agent.pose === 'approval' || activityStatus === 'approval') return 'approval';
+  if (agent.status === 'blocked') return 'blocked';
+  if (agent.status === 'active') return 'active';
+  if (agent.status === 'success') return 'success';
+  return 'other';
+}
+
+function publicAchievement(key, entry, rank = null) {
+  return {
+    key,
+    ...(rank === null ? {} : { rank }),
+    name: entry.name,
+    source: entry.source,
+    avatarVariant: entry.avatarVariant,
+    activeMs: entry.activeMs,
+    successCount: entry.successCount,
+    approvalCount: entry.approvalCount,
+    blockedCount: entry.blockedCount,
+    coffeeCount: entry.coffeeCount,
+    booksRead: entry.readingCount / 10,
+    gamesCompleted: entry.gamingCount / 10,
+    musicCount: entry.musicCount,
+    stepCount: entry.stepCount,
+    resetAt: entry.resetAt
+  };
+}
+
+function rankedAchievements(entries) {
+  return Object.entries(entries)
+    .sort(([leftKey, left], [rightKey, right]) => (
+      right.activeMs - left.activeMs
+      || right.approvalCount - left.approvalCount
+      || right.blockedCount - left.blockedCount
+      || left.name.localeCompare(right.name)
+      || leftKey.localeCompare(rightKey)
+    ))
+    .map(([key, entry], index) => publicAchievement(key, entry, index + 1));
+}
+
+async function updateAgentAchievementsNow(agents, nowMs = Date.now()) {
+  const achievements = await readAgentAchievements();
+  const presentKeys = new Set();
+  let changed = false;
+
+  for (const agent of agents) {
+    const key = String(agent.avatarAssignmentKey || agent.id || '').trim();
+    if (!key) continue;
+    presentKeys.add(key);
+    const mode = achievementMode(agent);
+    const existing = achievements.agents[key];
+    const entry = normalizeAchievementEntry(existing || {});
+    const previousMode = existing ? entry.lastMode : 'other';
+    const elapsedMs = existing && entry.lastObservedAt
+      ? Math.max(0, Math.min(nowMs - entry.lastObservedAt, ACHIEVEMENT_OBSERVATION_MAX_MS))
+      : 0;
+    if (previousMode === 'active' && elapsedMs) entry.activeMs += elapsedMs;
+    if (mode !== previousMode && mode === 'success') entry.successCount += 1;
+    if (mode !== previousMode && mode === 'approval') entry.approvalCount += 1;
+    if (mode !== previousMode && mode === 'blocked') entry.blockedCount += 1;
+    entry.name = cleanRuntimeText(agent.name, 120) || entry.name;
+    entry.source = cleanRuntimeText(agent.source, 80) || entry.source;
+    entry.avatarVariant = normalizeAvatarVariant(agent.avatarVariant);
+    entry.lastMode = mode;
+    entry.lastObservedAt = nowMs;
+    achievements.agents[key] = entry;
+    changed = true;
+  }
+
+  for (const [key, entry] of Object.entries(achievements.agents)) {
+    if (presentKeys.has(key) || entry.lastMode === 'other') continue;
+    const elapsedMs = entry.lastObservedAt
+      ? Math.max(0, Math.min(nowMs - entry.lastObservedAt, ACHIEVEMENT_OBSERVATION_MAX_MS))
+      : 0;
+    if (entry.lastMode === 'active' && elapsedMs) entry.activeMs += elapsedMs;
+    entry.lastMode = 'other';
+    entry.lastObservedAt = nowMs;
+    changed = true;
+  }
+
+  const written = changed ? await writeAgentAchievements(achievements) : achievements;
+  return rankedAchievements(written.agents);
+}
+
+function updateAgentAchievements(agents, nowMs = Date.now()) {
+  const update = achievementUpdateQueue.then(() => updateAgentAchievementsNow(agents, nowMs));
+  achievementUpdateQueue = update.catch((error) => {
+    console.warn(`Unable to update agent achievements: ${error.message}`);
+  });
+  return update;
+}
+
 function manualAgentsFromConfig(avatarConfig, stateFile) {
   const stateById = stateFile?.agents || {};
   return avatarConfig.manualAgents.filter((manualAgent) => manualAgent.enabled !== false).map((manualAgent, index) => {
@@ -2384,6 +2530,7 @@ app.get('/api/agents', async (req, res, next) => {
     const responseAgents = req.query.includeHidden === '1'
       ? agentsWithAvatars
       : agentsWithAvatars.filter((agent) => !agent.hidden);
+    const achievements = await updateAgentAchievements(agentsWithAvatars);
     res.json({
       generatedAt: new Date().toISOString(),
       source: runtimeAgents.length ? (source === 'sample' ? 'runtime' : `${source}+runtime`) : source,
@@ -2411,6 +2558,8 @@ app.get('/api/agents', async (req, res, next) => {
       statusRules: { activeMs: AGENT_ACTIVE_MS, successMs: AGENT_SUCCESS_MS, idleMs: AGENT_IDLE_MS, blockedPattern: 'error|failed|failure|exception|blocked|fatal' },
       acceptedManualStates: MANUAL_AGENT_STATES,
       agentStatePath: AGENT_STATE_PATH,
+      achievementsPath: AGENT_ACHIEVEMENTS_PATH,
+      achievements,
       summary: {
         total: responseAgents.length,
         active: responseAgents.filter((agent) => agent.status === 'active').length,
@@ -2423,6 +2572,81 @@ app.get('/api/agents', async (req, res, next) => {
       hiddenAgents: avatarConfig.hiddenAgents,
       agents: responseAgents
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/achievements/:key/reset', async (req, res, next) => {
+  try {
+    if (req.body?.confirm !== true) {
+      return res.status(400).json({ error: 'Reset confirmation is required' });
+    }
+    const key = String(req.params.key || '').trim();
+    if (!key) return res.status(400).json({ error: 'Agent key is required' });
+    const reset = achievementUpdateQueue.then(async () => {
+      const achievements = await readAgentAchievements();
+      const existing = achievements.agents[key];
+      if (!existing) return null;
+      achievements.agents[key] = {
+        ...existing,
+        activeMs: 0,
+        successCount: 0,
+        approvalCount: 0,
+        blockedCount: 0,
+        coffeeCount: 0,
+        readingCount: 0,
+        gamingCount: 0,
+        musicCount: 0,
+        stepCount: 0,
+        lastObservedAt: Date.now(),
+        resetAt: new Date().toISOString()
+      };
+      const written = await writeAgentAchievements(achievements);
+      return publicAchievement(key, written.agents[key]);
+    });
+    achievementUpdateQueue = reset.catch((error) => {
+      console.warn(`Unable to reset agent achievements: ${error.message}`);
+    });
+    const achievement = await reset;
+    if (!achievement) return res.status(404).json({ error: 'Agent achievement record not found' });
+    res.json({ path: AGENT_ACHIEVEMENTS_PATH, achievement });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/achievements/:key/pose-event', async (req, res, next) => {
+  try {
+    const key = String(req.params.key || '').trim();
+    const pose = String(req.body?.pose || '').trim().toLowerCase();
+    const episode = cleanRuntimeText(req.body?.episode, 240);
+    const supportedPoses = new Set(['coffee', 'reading', 'gaming', 'headphones', 'music', 'walking']);
+    if (!key) return res.status(400).json({ error: 'Agent key is required' });
+    if (!supportedPoses.has(pose)) return res.status(400).json({ error: 'Unsupported achievement pose' });
+    if (!episode) return res.status(400).json({ error: 'Pose episode is required' });
+
+    const update = achievementUpdateQueue.then(async () => {
+      const achievements = await readAgentAchievements();
+      const entry = normalizeAchievementEntry(achievements.agents[key] || { name: key });
+      const eventId = `${pose}:${episode}`;
+      if (entry.seenPoseEpisodes.includes(eventId)) {
+        return { counted: false, achievement: publicAchievement(key, entry) };
+      }
+      entry.seenPoseEpisodes = [...entry.seenPoseEpisodes, eventId].slice(-256);
+      if (pose === 'coffee') entry.coffeeCount += 1;
+      if (pose === 'reading') entry.readingCount += 1;
+      if (pose === 'gaming') entry.gamingCount += 1;
+      if (pose === 'headphones' || pose === 'music') entry.musicCount += 1;
+      if (pose === 'walking') entry.stepCount += 100;
+      achievements.agents[key] = entry;
+      const written = await writeAgentAchievements(achievements);
+      return { counted: true, achievement: publicAchievement(key, written.agents[key]) };
+    });
+    achievementUpdateQueue = update.catch((error) => {
+      console.warn(`Unable to record agent pose achievement: ${error.message}`);
+    });
+    res.json(await update);
   } catch (err) {
     next(err);
   }

@@ -530,6 +530,7 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
 .cronRun.active { border-left-color: #20a66a; }
 .cronRun.idle { border-left-color: #d99a22; }
 .cronRun.blocked { border-left-color: var(--danger); }
+
 .officeMap { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); align-items: start; justify-content: start; gap: 1rem; /*min-height: 62vh;*/ margin: 1rem; padding: 1rem; border-radius: 24px; overflow: auto; background: linear-gradient(90deg, color-mix(in srgb, var(--line), transparent 70%) 1px, transparent 1px), linear-gradient(color-mix(in srgb, var(--line), transparent 70%) 1px, transparent 1px), radial-gradient(circle at 20% 20%, color-mix(in srgb, var(--accent), transparent 82%), transparent 30%), var(--preview-bg); background-size: 64px 64px, 64px 64px, auto, auto; border: 1px solid var(--line); }
 .agentDesk { width: 100%; max-width: 100%; min-width: 0; display: flex; gap: .75rem; align-items: flex-start; background: color-mix(in srgb, var(--panel), transparent 4%); border: 1px solid var(--line); border-left: 8px solid var(--muted); border-radius: 18px; padding: .9rem; box-shadow: 0 12px 30px var(--shadow); overflow: hidden; }
 .agentDesk.active { border-left-color: #20a66a; }

@@ -211,9 +211,12 @@ The same live office is available as a browser dashboard with configuration, sha
 ### Dashboard features
 
 - At-a-glance active, success, idle, and blocked agent states.
+- Persistent achievement rank board with cumulative worked time, approval requests, and blocked-event counts for each agent.
 - Live agent refreshes from OpenClaw, desktop connectors, or manual agents.
 - Light, dark, and system themes.
 - Upload, download, preview, edit, and archive tools in the folder view.
+
+Open the dedicated **Rank board** page from Agent View—or from the desktop application's Office, tray, or companion menu—to compare agents by cumulative worked time and successful runs. Taskfolk records approval requests and genuine blocked events separately. It also turns displayed idle animations into playful statistics: each coffee pose adds one coffee, each reading pose adds 0.1 book, each gaming pose adds 0.1 completed game, each music pose adds one listen, and each walking pose adds 100 steps. The counters are stored in `agent-achievements.json` under `CONFIG_DIR`.
 
 ### Run the dashboard locally
 

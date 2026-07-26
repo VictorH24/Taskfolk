@@ -93,6 +93,7 @@ app.setName('Taskfolk');
 let officeWindow = null;
 let settingsWindow = null;
 let configWindow = null;
+let rankBoardWindow = null;
 let tray = null;
 let updateStatus = 'idle';
 let availableUpdateVersion = '';
@@ -747,6 +748,53 @@ async function openConfigWindow() {
 
 function showConfigWindow() {
   void openConfigWindow().catch((error) => openSettingsWindow(`Could not open Config: ${error.message}`));
+}
+
+async function openRankBoardWindow() {
+  if (!activeBaseUrl) return openSettingsWindow('Open an office before accessing its Rank Board.');
+  const rankBoardUrl = endpoint(activeBaseUrl, '/rank-board.html?app=desktop');
+  if (rankBoardWindow && !rankBoardWindow.isDestroyed()) {
+    if (rankBoardWindow.webContents.getURL() !== rankBoardUrl) await rankBoardWindow.loadURL(rankBoardUrl);
+    rankBoardWindow.show();
+    rankBoardWindow.focus();
+    return;
+  }
+
+  rankBoardWindow = new BrowserWindow({
+    width: 1040,
+    height: 720,
+    minWidth: 680,
+    minHeight: 480,
+    title: 'Taskfolk Rank Board',
+    icon: APP_ICON_PATH,
+    backgroundColor: '#101722',
+    autoHideMenuBar: true,
+    skipTaskbar: shouldSkipTaskbar(),
+    webPreferences: {
+      partition: PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      devTools: !app.isPackaged
+    }
+  });
+  if (process.platform === 'darwin') rankBoardWindow.setSkipTaskbar(shouldSkipTaskbar());
+  applyDockVisibility();
+  const allowedOrigin = new URL(activeBaseUrl).origin;
+  rankBoardWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  rankBoardWindow.webContents.on('will-navigate', (event, target) => {
+    try {
+      if (new URL(target).origin !== allowedOrigin) event.preventDefault();
+    } catch {
+      event.preventDefault();
+    }
+  });
+  rankBoardWindow.on('closed', () => { rankBoardWindow = null; });
+  await rankBoardWindow.loadURL(rankBoardUrl);
+}
+
+function showRankBoardWindow() {
+  void openRankBoardWindow().catch((error) => openSettingsWindow(`Could not open Rank Board: ${error.message}`));
 }
 
 async function authenticate(baseUrl, credentials, ses) {
@@ -2059,6 +2107,7 @@ function showCompanionContextMenu(targetWindow = officeWindow) {
     },
     { label: 'Open Setup…', click: () => openSettingsWindow() },
     { label: 'Open Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
+    { label: 'Open Rank Board…', enabled: Boolean(activeBaseUrl), click: showRankBoardWindow },
     { label: 'Reload', click: () => targetWindow.reload() },
     { label: 'Always on Top', type: 'checkbox', checked: isAlwaysOnTopEnabled(config), click: (item) => setAlwaysOnTop(item.checked) },
     updaterMenuItem(targetWindow),
@@ -2209,6 +2258,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   if (activeBaseUrl !== normalizedUrl) {
     resetAgentSnapshotCoordinator();
     configWindow?.destroy();
+    rankBoardWindow?.destroy();
     runtimeAgentMenuSignatures.clear();
     openCodePublished = false;
     vsCodeCopilotPublished = false;
@@ -2282,6 +2332,7 @@ function menuTemplate() {
       submenu: [
         { label: 'Setup…', accelerator: 'CmdOrCtrl+,', click: () => openSettingsWindow() },
         { label: 'Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
+        { label: 'Rank Board…', enabled: Boolean(activeBaseUrl), click: showRankBoardWindow },
         { label: 'Reload Office', accelerator: 'CmdOrCtrl+R', enabled: Boolean(officeWindow), click: () => officeWindow?.reload() },
         { type: 'separator' },
         ...viewMenuItems(config),
@@ -2321,6 +2372,7 @@ function rebuildMenus() {
       : []),
     { label: 'Setup…', click: () => openSettingsWindow() },
     { label: 'Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
+    { label: 'Rank Board…', enabled: Boolean(activeBaseUrl), click: showRankBoardWindow },
     updaterMenuItem(officeWindow),
     { type: 'separator' },
     { role: 'quit' }
@@ -2528,6 +2580,7 @@ ipcMain.handle('settings:reset-config', async (event) => {
   resetAgentSnapshotCoordinator();
   stopLocalServer();
   configWindow?.destroy();
+  rankBoardWindow?.destroy();
   for (const window of [...companionWindows.keys()]) {
     if (!window.isDestroyed()) window.destroy();
   }

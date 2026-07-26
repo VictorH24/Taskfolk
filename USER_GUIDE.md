@@ -170,6 +170,22 @@ In **Live agents → Assign Agent Avatars**:
 
 Click **Refresh** if a newly started agent does not appear immediately.
 
+### View and reset achievement counters
+
+Choose **Rank board** in Agent View to open its dedicated page and see agents ranked by cumulative time worked. In the desktop app, you can also choose **Office → Rank Board…**, use the Taskfolk menu-bar menu, or right-click the companion and choose **Open Rank Board…**. Worked time is displayed in minutes, hours, days, months, or years as it grows. The board also shows each agent's number of successful runs, approval requests, and separate blocked events; approval requests are not added to the blocked-event counter.
+
+The Rank Board also records playful statistics from the animations actually displayed in the office or companion:
+
+- Each coffee animation adds 1 coffee.
+- Each reading animation adds 0.1 book.
+- Each gaming animation adds 0.1 completed game.
+- Each music animation adds 1 listen.
+- Each walking animation adds 100 steps.
+
+The same animation episode is counted only once, even when the office refreshes or the agent appears in multiple companion windows.
+
+To clear one agent's worked time, success count, approval count, blocked count, coffee count, books, games, music, and steps, choose **Reset counters** on the Rank Board. Taskfolk displays a warning before the permanent reset and does not reset anything unless you confirm.
+
 ### Add a manual agent
 
 1. Click **Add agent**.

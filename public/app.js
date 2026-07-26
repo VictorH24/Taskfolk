@@ -80,6 +80,7 @@ let desktopSnapshotUnsubscribe = null;
 let latestDesktopSnapshotVersion = -1;
 const randomizedStatusByAgent = new Map();
 const randomizedVariantByAgent = new Map();
+const reportedPoseAchievements = new Set();
 let randomStatusTimer = null;
 
 function usesDesktopAgentSnapshots() {
@@ -452,6 +453,39 @@ function idlePose(agent) {
   const pose = poses[poseIndex];
   rememberIdlePose(identity, episode, pose, history);
   return pose;
+}
+
+function displayedPoseEpisode(agent, pose) {
+  const activity = agent.activity || {};
+  const marker = activity.successAt
+    || activity.updatedAt
+    || activity.lastInteractionAt
+    || activity.lastMessageAt
+    || activity.timestamp
+    || agent.lastSeen
+    || agent.updatedAt
+    || 'unknown';
+  if (agent.status === 'idle' && agent.source !== 'manual') {
+    return idleEpisodeKey(agent, agentAgeClass(agent));
+  }
+  return `${marker}:${pose}`;
+}
+
+function reportPoseAchievement(agent, pose) {
+  if (randomStatusMode || !['coffee', 'reading', 'gaming', 'headphones', 'music', 'walking'].includes(pose)) return;
+  const key = String(agent.avatarAssignmentKey || agent.id || '').trim();
+  if (!key) return;
+  const episode = displayedPoseEpisode(agent, pose);
+  const reportKey = `${key}:${pose}:${episode}`;
+  if (reportedPoseAchievements.has(reportKey)) return;
+  reportedPoseAchievements.add(reportKey);
+  void api(`/api/achievements/${encodeURIComponent(key)}/pose-event`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pose, episode })
+  }).catch(() => {
+    reportedPoseAchievements.delete(reportKey);
+  });
 }
 
 function sanitizeCount(value) {
@@ -1537,8 +1571,10 @@ function pixelAgentScene(agent, meetingMode = false) {
   const name = esc(agent.name);
   const role = pixelRole(agent);
   const variant = avatarVariant(agent);
+  const pose = pixelAgentPose(agent, meetingMode);
+  reportPoseAchievement(agent, pose);
   return window.SceneArt.sceneMarkup({
-    pose: pixelAgentPose(agent, meetingMode),
+    pose,
     role,
     label: name,
     variant,
