@@ -87,6 +87,12 @@ const AGENT_SNAPSHOT_REQUEST_TIMEOUT_MS = 12_000;
 const LOCAL_SERVER_START_TIMEOUT_MS = 12_000;
 const CONNECTOR_STARTUP_GRACE_MS = 1_500;
 const SYSTEM_SLEEP_GAP_MS = 20_000;
+const AUTO_UPDATE_INITIAL_DELAY_MS = 30_000;
+const AUTO_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
+const CONFIG_BACKUP_FORMAT = 'taskfolk-config-backup';
+const CONFIG_BACKUP_VERSION = 1;
+const AVATAR_ASSIGNMENTS_FILE = 'avatar-assignments.json';
+const AGENT_ACHIEVEMENTS_FILE = 'agent-achievements.json';
 
 app.setName('Taskfolk');
 
@@ -101,6 +107,7 @@ let updateDownloadPercent = 0;
 let updateRequestIsManual = false;
 let updatePromptWindow = null;
 let updateErrorWasShown = false;
+let automaticUpdateCheckTimer = null;
 // Packaged macOS builds declare LSUIElement, so they begin in accessory mode
 // before Electron creates any windows. Development builds still need the
 // runtime transition because they use Electron's own bundle metadata.
@@ -286,6 +293,20 @@ function readConfig() {
 function writeConfig(next) {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
   fs.writeFileSync(configPath(), `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+}
+
+function readJsonObjectFile(filePath, fallback = {}) {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writePrivateJsonFile(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 }
 
 function hasSavedConfig() {
@@ -1961,10 +1982,10 @@ async function showUpdateError(error) {
   updateRequestIsManual = false;
 }
 
-async function checkForTaskfolkUpdates(targetWindow = officeWindow) {
+async function checkForTaskfolkUpdates(targetWindow = officeWindow, { manual = true } = {}) {
   if (updateStatus === 'checking' || updateStatus === 'downloading') return;
   updatePromptWindow = targetWindow && !targetWindow.isDestroyed() ? targetWindow : null;
-  updateRequestIsManual = true;
+  updateRequestIsManual = manual;
   updateErrorWasShown = false;
   updateStatus = 'checking';
   rebuildMenus();
@@ -1974,16 +1995,18 @@ async function checkForTaskfolkUpdates(targetWindow = officeWindow) {
   if (!runtimeUpdateUrl && (!app.isPackaged || !fs.existsSync(packagedUpdateConfig))) {
     updateStatus = 'idle';
     rebuildMenus();
-    await showUpdateMessage({
-      type: 'info',
-      title: 'Taskfolk Update',
-      message: app.isPackaged
-        ? 'Updates are not configured for this build.'
-        : 'Update checks are available in packaged builds.',
-      detail: app.isPackaged
-        ? 'Build Taskfolk with its production update-feed URL to enable update checks.'
-        : `This development build is running Taskfolk ${app.getVersion()}.`
-    });
+    if (manual) {
+      await showUpdateMessage({
+        type: 'info',
+        title: 'Taskfolk Update',
+        message: app.isPackaged
+          ? 'Updates are not configured for this build.'
+          : 'Update checks are available in packaged builds.',
+        detail: app.isPackaged
+          ? 'Build Taskfolk with its production update-feed URL to enable update checks.'
+          : `This development build is running Taskfolk ${app.getVersion()}.`
+      });
+    }
     updateRequestIsManual = false;
     return;
   }
@@ -1993,6 +2016,24 @@ async function checkForTaskfolkUpdates(targetWindow = officeWindow) {
   } catch (error) {
     await showUpdateError(error);
   }
+}
+
+function runAutomaticUpdateCheck() {
+  if (updateStatus !== 'idle') return;
+  void checkForTaskfolkUpdates(officeWindow, { manual: false });
+}
+
+function scheduleAutomaticUpdateChecks() {
+  if (automaticUpdateCheckTimer) return;
+  automaticUpdateCheckTimer = setTimeout(() => {
+    runAutomaticUpdateCheck();
+    automaticUpdateCheckTimer = setInterval(
+      runAutomaticUpdateCheck,
+      AUTO_UPDATE_CHECK_INTERVAL_MS
+    );
+    automaticUpdateCheckTimer.unref();
+  }, AUTO_UPDATE_INITIAL_DELAY_MS);
+  automaticUpdateCheckTimer.unref();
 }
 
 async function downloadAvailableUpdate(targetWindow = updateDialogWindow()) {
@@ -2039,7 +2080,6 @@ function initializeAutoUpdater() {
     availableUpdateVersion = String(info?.version || '').trim();
     updateStatus = 'available';
     rebuildMenus();
-    if (!updateRequestIsManual) return;
     const { response } = await showUpdateMessage({
       type: 'info',
       title: 'Taskfolk Update Available',
@@ -2508,7 +2548,7 @@ ipcMain.handle('settings:import-config', async (event) => {
 
   const filePath = result.filePaths[0];
   const stat = fs.statSync(filePath);
-  if (stat.size > 1024 * 1024) throw new Error('That configuration file is larger than 1 MB.');
+  if (stat.size > 10 * 1024 * 1024) throw new Error('That configuration backup is larger than 10 MB.');
   let imported;
   try {
     imported = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -2518,31 +2558,63 @@ ipcMain.handle('settings:import-config', async (event) => {
   if (!imported || typeof imported !== 'object' || Array.isArray(imported)) {
     throw new Error('The selected file is not a Taskfolk configuration object.');
   }
+  const hasBackupFormat = imported.format === CONFIG_BACKUP_FORMAT;
+  if (hasBackupFormat && imported.version !== CONFIG_BACKUP_VERSION) {
+    throw new Error(`This Taskfolk backup uses unsupported format version ${imported.version}.`);
+  }
+  const isBackup = hasBackupFormat
+    && imported.files
+    && typeof imported.files === 'object'
+    && !Array.isArray(imported.files);
+  if (hasBackupFormat && !isBackup) {
+    throw new Error('The selected Taskfolk backup does not contain a valid files object.');
+  }
+  const importedConfig = isBackup ? imported.files['office-viewer.json'] : imported;
+  if (!importedConfig || typeof importedConfig !== 'object' || Array.isArray(importedConfig)) {
+    throw new Error('The selected backup does not contain a valid Taskfolk configuration.');
+  }
 
   let importedOpenClawUrl;
   let importedLmStudioUrl;
   try {
-    importedOpenClawUrl = normalizeOpenClawUrl(imported.openClawUrl || DEFAULT_OPENCLAW_URL);
+    importedOpenClawUrl = normalizeOpenClawUrl(importedConfig.openClawUrl || DEFAULT_OPENCLAW_URL);
   } catch (error) {
     throw new Error(`The configuration has an invalid OpenClaw URL: ${error.message}`);
   }
   try {
-    importedLmStudioUrl = normalizeLmStudioUrl(imported.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
+    importedLmStudioUrl = normalizeLmStudioUrl(importedConfig.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
   } catch (error) {
     throw new Error(`The configuration has an invalid LM Studio URL: ${error.message}`);
   }
 
-  writeConfig(imported);
-  applyDockVisibility(imported);
-  runtimeCredentials = savedCredentials(imported);
-  runtimeOpenCodeCredentials = savedOpenCodeCredentials(imported);
+  const importedLocalData = {};
+  if (isBackup) {
+    for (const fileName of [AVATAR_ASSIGNMENTS_FILE, AGENT_ACHIEVEMENTS_FILE]) {
+      if (!Object.prototype.hasOwnProperty.call(imported.files, fileName)) continue;
+      importedLocalData[fileName] = imported.files[fileName];
+      if (!importedLocalData[fileName]
+        || typeof importedLocalData[fileName] !== 'object'
+        || Array.isArray(importedLocalData[fileName])) {
+        throw new Error(`The selected backup contains an invalid ${fileName} file.`);
+      }
+    }
+  }
+
+  const localConfigDir = localServerPaths().config;
+  for (const [fileName, value] of Object.entries(importedLocalData)) {
+    writePrivateJsonFile(path.join(localConfigDir, fileName), value);
+  }
+  writeConfig(importedConfig);
+  applyDockVisibility(importedConfig);
+  runtimeCredentials = savedCredentials(importedConfig);
+  runtimeOpenCodeCredentials = savedOpenCodeCredentials(importedConfig);
   runtimeLmStudioCredentialsUrl = importedLmStudioUrl;
-  runtimeLmStudioToken = savedLmStudioToken(imported, runtimeLmStudioCredentialsUrl);
+  runtimeLmStudioToken = savedLmStudioToken(importedConfig, runtimeLmStudioCredentialsUrl);
   runtimeOpenClawUrl = '';
   runtimeOpenClawCredentialsUrl = importedOpenClawUrl;
-  runtimeOpenClawCredentials = savedOpenClawCredentials(imported, runtimeOpenClawCredentialsUrl);
+  runtimeOpenClawCredentials = savedOpenClawCredentials(importedConfig, runtimeOpenClawCredentialsUrl);
   runtimeOpenClawDeviceIdentity = null;
-  return { canceled: false };
+  return { canceled: false, restoredLocalData: isBackup };
 });
 
 ipcMain.handle('settings:export-config', async (event) => {
@@ -2554,7 +2626,21 @@ ipcMain.handle('settings:export-config', async (event) => {
     filters: [{ name: 'Taskfolk configuration', extensions: ['json'] }]
   });
   if (result.canceled || !result.filePath) return { canceled: true };
-  fs.copyFileSync(configPath(), result.filePath);
+  const localConfigDir = localServerPaths().config;
+  const backup = {
+    format: CONFIG_BACKUP_FORMAT,
+    version: CONFIG_BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    files: {
+      'office-viewer.json': readConfig(),
+      [AVATAR_ASSIGNMENTS_FILE]: readJsonObjectFile(path.join(localConfigDir, AVATAR_ASSIGNMENTS_FILE)),
+      [AGENT_ACHIEVEMENTS_FILE]: readJsonObjectFile(
+        path.join(localConfigDir, AGENT_ACHIEVEMENTS_FILE),
+        { agents: {} }
+      )
+    }
+  };
+  writePrivateJsonFile(result.filePath, backup);
   return { canceled: false };
 });
 
@@ -2771,6 +2857,7 @@ app.whenReady().then(async () => {
   powerMonitor.on('unlock-screen', restartRuntimeAdaptersAfterWake);
   setInterval(checkForSystemSleepGap, 5_000).unref();
   initializeAutoUpdater();
+  scheduleAutomaticUpdateChecks();
   let config = readConfig();
   if (config.displayMode === 'random') {
     config = { ...config, displayMode: 'office' };
@@ -2839,6 +2926,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   quitting = true;
+  if (automaticUpdateCheckTimer) clearTimeout(automaticUpdateCheckTimer);
+  automaticUpdateCheckTimer = null;
   saveWindowBounds();
   for (const [window, metadata] of companionWindows) {
     if (!metadata.primary) saveAdditionalFolkBounds(window);

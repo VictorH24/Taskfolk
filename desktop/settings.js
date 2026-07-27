@@ -265,7 +265,12 @@ importConfigButton.addEventListener('click', async () => {
     if (result.canceled) return;
     await initialize();
     showError('');
-    showConfigStatus('success', 'Configuration imported. Review the settings, then open the office to apply them.');
+    showConfigStatus(
+      'success',
+      result.restoredLocalData
+        ? 'Configuration, avatar assignments, and Rank Board data imported. Review the settings, then open the office to apply them.'
+        : 'Configuration imported. Review the settings, then open the office to apply it.'
+    );
   } catch (error) {
     showConfigStatus('error', error.message || 'Could not import the configuration.');
   } finally {
@@ -279,7 +284,7 @@ exportConfigButton.addEventListener('click', async () => {
   try {
     const result = await window.clawOffice.exportConfig();
     if (!result.canceled) {
-      showConfigStatus('success', 'Configuration exported. Saved credentials remain encrypted and may need to be entered again on another computer.');
+      showConfigStatus('success', 'Configuration, avatar assignments, and Rank Board data exported. Saved credentials remain encrypted and may need to be entered again on another computer.');
     }
   } catch (error) {
     showConfigStatus('error', error.message || 'Could not export the configuration.');

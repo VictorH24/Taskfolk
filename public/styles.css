@@ -401,6 +401,21 @@ button, .button {
 }
 button:hover, .button:hover { background: var(--accent-dark); }
 button.secondary, .button.secondary { background: var(--secondary); color: var(--ink); }
+.headerActions > button,
+.headerActions > .button {
+  font-family: inherit;
+  font-size: .875rem;
+  line-height: 1.2;
+}
+button.navCurrent,
+button.navCurrent:hover,
+button.navCurrent:disabled {
+  background: color-mix(in srgb, var(--accent), var(--panel) 76%);
+  color: var(--accent-dark);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent), transparent 52%);
+  cursor: default;
+  opacity: 1;
+}
 .themeToggle {
   display: inline-flex;
   align-items: center;

@@ -218,6 +218,8 @@ The same live office is available as a browser dashboard with configuration, sha
 
 Open the dedicated **Rank board** page from Agent View—or from the desktop application's Office, tray, or companion menu—to compare agents by cumulative worked time and successful runs. Taskfolk records approval requests and genuine blocked events separately. It also turns displayed idle animations into playful statistics: each coffee pose adds one coffee, each reading pose adds 0.1 book, each gaming pose adds 0.1 completed game, each music pose adds one listen, and each walking pose adds 100 steps. The counters are stored in `agent-achievements.json` under `CONFIG_DIR`.
 
+The server samples agent state every eight seconds while it is running, so worked time and Success, Approval, and Blocked transitions continue to accumulate without Agent View, Rank Board, or a desktop companion being open. Set `ACHIEVEMENT_SAMPLE_MS` to change the sampling interval. Fun pose statistics remain display-driven and increase only when an office or companion actually shows the corresponding animation.
+
 ### Run the dashboard locally
 
 ```bash

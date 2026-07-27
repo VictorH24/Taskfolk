@@ -3,11 +3,21 @@ const rankBoardEmpty = document.querySelector('#rankBoardEmpty');
 const rankBoardSummary = document.querySelector('#rankBoardSummary');
 const rankBoardStatus = document.querySelector('#rankBoardStatus');
 const refreshRankBoardBtn = document.querySelector('#refreshRankBoardBtn');
+const folderViewNavBtn = document.querySelector('#folderViewNavBtn');
 const isDesktopRankBoard = new URLSearchParams(window.location.search).get('app') === 'desktop';
 let refreshTimer = null;
 let refreshInFlight = false;
 
 document.body.classList.toggle('desktopRankBoard', isDesktopRankBoard);
+
+async function loadNavigationConfig() {
+  try {
+    const config = await api('/api/config', { cache: 'no-store' });
+    folderViewNavBtn?.classList.toggle('hidden', config.modules?.folderView?.enabled !== true);
+  } catch {
+    folderViewNavBtn?.classList.add('hidden');
+  }
+}
 
 function esc(value) {
   return String(value).replace(/[&<>'"]/g, (char) => ({
@@ -162,4 +172,5 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+loadNavigationConfig();
 loadRankBoard();

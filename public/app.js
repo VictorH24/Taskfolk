@@ -30,6 +30,7 @@ const missionControl = document.querySelector('#missionControl');
 const folderView = document.querySelector('#folderView');
 const officeMap = document.querySelector('#officeMap');
 const agentSummary = document.querySelector('#agentSummary');
+const agentViewNavBtn = document.querySelector('#agentViewNavBtn');
 const viewToggleBtn = document.querySelector('#viewToggleBtn');
 const avatarLegendBtn = document.querySelector('#avatarLegendBtn');
 const agentDisplayToggleBtn = document.querySelector('#agentDisplayToggleBtn');
@@ -309,8 +310,14 @@ function setView(view) {
   if (showingFiles) setPixelFullscreen(false);
   missionControl.classList.toggle('hidden', showingFiles);
   folderView.classList.toggle('hidden', !showingFiles);
-  avatarLegendBtn?.classList.toggle('hidden', showingFiles);
-  viewToggleBtn.textContent = showingFiles ? 'Agent view' : 'Folder view';
+  agentViewNavBtn?.classList.toggle('navCurrent', !showingFiles);
+  agentViewNavBtn?.toggleAttribute('disabled', !showingFiles);
+  if (showingFiles) agentViewNavBtn?.removeAttribute('aria-current');
+  else agentViewNavBtn?.setAttribute('aria-current', 'page');
+  viewToggleBtn.classList.toggle('navCurrent', showingFiles);
+  viewToggleBtn.toggleAttribute('disabled', showingFiles);
+  if (showingFiles) viewToggleBtn.setAttribute('aria-current', 'page');
+  else viewToggleBtn.removeAttribute('aria-current');
   pageSubtitle.textContent = showingFiles
     ? 'Browse, upload, download, and preview files in the shared folder.'
     : 'Watch your AI team at work.';
@@ -1869,7 +1876,8 @@ function parentOfPath(value = '') {
 }
 
 themeToggleBtn.onclick = toggleTheme;
-viewToggleBtn.onclick = () => setView(currentView === 'files' ? 'agents' : 'files');
+agentViewNavBtn.onclick = () => setView('agents');
+viewToggleBtn.onclick = () => setView('files');
 agentDisplayToggleBtn.onclick = () => {
   setAgentDisplayMode(agentDisplayMode === 'pixel' ? 'cards' : 'pixel');
   if (currentView === 'agents') loadAgents();

@@ -4,6 +4,11 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.18 (July 26, 2026)
+- Check for signed app updates shortly after launch and every six hours, prompting only when a new release is available
+- Include avatar assignments and Rank Board achievements in Setup configuration exports and restore them during import
+- Update config page and top menu
+
 ## Version 1.0.17 (July 25, 2026)
 - Add a dedicated persistent agent achievement Rank Board with cumulative worked time, successful-run counts, approval-request counts, blocked-event counts, fun pose statistics, confirmed per-agent resets, and desktop menu access
 

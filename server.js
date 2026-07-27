@@ -71,6 +71,7 @@ const AGENT_SUCCESS_MS = Number(process.env.AGENT_SUCCESS_MS || 2 * 60 * 1000);
 const AGENT_IDLE_MS = Number(process.env.AGENT_IDLE_MS || 30 * 60 * 1000);
 const AGENT_FILE_SNAPSHOT_CACHE_MAX_MS = Number(process.env.AGENT_FILE_SNAPSHOT_CACHE_MAX_MS || 60 * 1000);
 const RUNTIME_AGENT_TTL_MS = Number(process.env.RUNTIME_AGENT_TTL_MS || 90 * 1000);
+const ACHIEVEMENT_SAMPLE_MS = Math.max(10, Number(process.env.ACHIEVEMENT_SAMPLE_MS || 8_000));
 const GATEWAY_AUTH_TOKEN_ENV = String(process.env.GATEWAY_AUTH_TOKEN || '').trim();
 const GATEWAY_AUTH_PASSWORD_ENV = String(process.env.GATEWAY_AUTH_PASSWORD || '').trim();
 const GATEWAY_AUTH_SECURE_COOKIE = String(process.env.GATEWAY_AUTH_SECURE_COOKIE || '').trim().toLowerCase() === 'true';
@@ -1879,6 +1880,47 @@ function updateAgentAchievements(agents, nowMs = Date.now()) {
   return update;
 }
 
+async function achievementTrackingAgents() {
+  const { agents, source } = await configuredAgents();
+  const avatarConfig = await readAvatarConfig();
+  const stateFile = await readAgentState();
+  const runtimeAgents = runtimeAgentsSnapshot();
+  const runtimeAgentIds = new Set(runtimeAgents.map((agent) => agent.id));
+  const baseAgents = runtimeAgents.length && source === 'sample' ? [] : agents;
+  const agentById = new Map(baseAgents.map((agent) => [agent.id, agent]));
+  for (const runtimeAgent of runtimeAgents) agentById.set(runtimeAgent.id, runtimeAgent);
+  for (const manualAgent of manualAgentsFromConfig(avatarConfig, stateFile)) agentById.set(manualAgent.id, manualAgent);
+  return [...agentById.values()].map((agent) => {
+    const assignmentKey = agent.avatarAssignmentKey || agent.id;
+    const avatarVariant = Object.prototype.hasOwnProperty.call(avatarConfig.assignments, assignmentKey)
+      ? avatarConfig.assignments[assignmentKey]
+      : Object.prototype.hasOwnProperty.call(avatarConfig.assignments, agent.id)
+        ? avatarConfig.assignments[agent.id]
+        : null;
+    const customName = avatarConfig.customNames[assignmentKey] || avatarConfig.customNames[agent.id] || '';
+    return {
+      ...agent,
+      ...(customName ? { name: customName, automaticName: agent.name } : {}),
+      runtime: runtimeAgentIds.has(agent.id),
+      avatarAssignmentKey: assignmentKey,
+      avatarVariant
+    };
+  });
+}
+
+let achievementSamplerInFlight = false;
+async function sampleAchievementsInBackground() {
+  if (achievementSamplerInFlight) return;
+  achievementSamplerInFlight = true;
+  try {
+    await updateAgentAchievements(await achievementTrackingAgents());
+  } catch (error) {
+    console.warn(`Unable to sample agent achievements: ${error.message}`);
+  } finally {
+    achievementSamplerInFlight = false;
+  }
+}
+
 function manualAgentsFromConfig(avatarConfig, stateFile) {
   const stateById = stateFile?.agents || {};
   return avatarConfig.manualAgents.filter((manualAgent) => manualAgent.enabled !== false).map((manualAgent, index) => {
@@ -2882,3 +2924,7 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`Taskfolk listening on http://${HOST}:${listeningPort}`);
   console.log(`Sharing folder: ${SHARED_DIR}`);
 });
+const achievementSampler = setInterval(sampleAchievementsInBackground, ACHIEVEMENT_SAMPLE_MS);
+achievementSampler.unref();
+server.on('close', () => clearInterval(achievementSampler));
+void sampleAchievementsInBackground();

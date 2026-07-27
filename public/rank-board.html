@@ -16,8 +16,12 @@
       <p>Compare cumulative worked time, approval requests, and blocked events.</p>
     </div>
     <div class="headerActions" data-web-navigation>
-      <a class="secondary button" href="./avatar-legend.html">Config</a>
+      <button id="themeToggleBtn" class="secondary themeToggle" type="button" aria-label="Color theme: System. Click to switch theme."><svg class="themeIcon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg><span>System</span></button>
       <a class="secondary button" href="./index.html">Agent View</a>
+      <a class="secondary button" href="./avatar-legend.html">Config</a>
+      <button class="secondary navCurrent" type="button" aria-current="page" disabled>Rank board</button>
+      <a id="folderViewNavBtn" class="secondary button hidden" href="./index.html?view=files">Folder view</a>
+      <button id="logoutBtn" class="secondary hidden" type="button">Log out</button>
     </div>
   </header>
   <main class="rankBoardMain">
@@ -52,6 +56,7 @@
     </section>
   </main>
   <div id="toast" role="status"></div>
+  <script src="./theme-toggle.js"></script>
   <script src="./session-auth.js"></script>
   <script src="./rank-board.js"></script>
 </body>

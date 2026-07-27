@@ -144,10 +144,13 @@ To change connections, integrations, display mode, opacity, or window behavior l
 
 After making changes, click **Run and open office** or **Connect and open office** to save and apply them.
 
-Choose **Check for Updates…** from the companion right-click menu, the Taskfolk
-menu-bar menu, or the **Office** application menu. Taskfolk reports when the
-installed version is current. When a newer signed release is available, choose
-**Download Update**, then **Restart and Update** after the download completes.
+Taskfolk checks for signed updates shortly after launch and every six hours while
+it is running. It stays quiet when the installed version is current or the update
+service is temporarily unavailable, and prompts you when a newer release is
+available. You can also choose **Check for Updates…** from the companion
+right-click menu, the Taskfolk menu-bar menu, or the **Office** application menu
+at any time. Choose **Download Update**, then **Restart and Update** after the
+download completes.
 
 ## 5. Use the Config page
 
@@ -184,6 +187,8 @@ The Rank Board also records playful statistics from the animations actually disp
 
 The same animation episode is counted only once, even when the office refreshes or the agent appears in multiple companion windows.
 
+Worked time, successful runs, approvals, and blocked events are sampled by the Taskfolk server in the background every eight seconds. They continue accumulating while the server is running even when Agent View, Rank Board, and the desktop companion are closed. Fun animation statistics remain display-driven and increase only when an avatar is actually shown.
+
 To clear one agent's worked time, success count, approval count, blocked count, coffee count, books, games, music, and steps, choose **Reset counters** on the Rank Board. Taskfolk displays a warning before the permanent reset and does not reset anything unless you confirm.
 
 ### Add a manual agent
@@ -212,11 +217,11 @@ Changes save automatically and are applied to the office.
 
 Use these buttons at the bottom of Setup:
 
-- **Export Conf** saves the current Setup configuration as `taskfolk-config.json`.
-- **Import Conf** loads a previously exported JSON configuration. Review the imported settings, then open the office to apply them.
+- **Export Conf** saves the current Setup configuration, avatar assignments, and Rank Board achievements together as `taskfolk-config.json`.
+- **Import Conf** restores a previously exported JSON backup. Older configuration-only exports remain supported. Review the imported settings, then open the office to apply them.
 - **Reset Conf…** warns for confirmation, then removes the saved Setup configuration, encrypted credentials, integration choices, and window preferences. The current office closes and Setup returns to its fresh-install defaults.
 
-Saved credentials remain encrypted. They may need to be entered again after moving an exported configuration to another Mac. Treat exported configuration files as private because they can contain encrypted credentials, device identity data, server addresses, and window preferences.
+Saved credentials remain encrypted. They may need to be entered again after moving an exported configuration to another Mac. Treat exported configuration files as private because they can contain encrypted credentials, device identity data, server addresses, window preferences, avatar assignments, and Rank Board history.
 
 ### Install custom avatar variants
 

@@ -229,7 +229,26 @@ function renderTransparentSheetBackgrounds() {
   });
 }
 
+function revealSelectedPoster(previousScrollLeft) {
+  const filmstrip = posterButtons.querySelector('.posterFilmstrip');
+  const selectedButton = filmstrip?.querySelector('.posterButton.active');
+  if (!filmstrip || !selectedButton) return;
+
+  if (Number.isFinite(previousScrollLeft)) filmstrip.scrollLeft = previousScrollLeft;
+
+  requestAnimationFrame(() => {
+    const filmstripRect = filmstrip.getBoundingClientRect();
+    const selectedRect = selectedButton.getBoundingClientRect();
+    if (selectedRect.left < filmstripRect.left) {
+      filmstrip.scrollLeft -= filmstripRect.left - selectedRect.left;
+    } else if (selectedRect.right > filmstripRect.right) {
+      filmstrip.scrollLeft += selectedRect.right - filmstripRect.right;
+    }
+  });
+}
+
 function renderOfficeSceneButtons() {
+  const previousPosterScrollLeft = posterButtons.querySelector('.posterFilmstrip')?.scrollLeft;
   floorButtons.innerHTML = OFFICE_FLOORS.map((floor) => `
     <button
       class="variantButton sceneThumbButton floorThumb ${floor.value === officeScene.floor ? 'active' : ''}"
@@ -286,6 +305,7 @@ function renderOfficeSceneButtons() {
       </div>
     </div>
   `;
+  revealSelectedPoster(previousPosterScrollLeft);
   emptyDesksInput.value = String(officeScene.emptyDesks);
 }
 
