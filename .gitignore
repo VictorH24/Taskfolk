@@ -27,4 +27,6 @@ Thumbs.db
 # coverage/build artifacts
 coverage/
 dist/
+dist-signed/
 build/
+Backup/

@@ -43,6 +43,18 @@ const AVATAR_ASSIGNMENTS_PATH = path.resolve(process.env.AVATAR_ASSIGNMENTS_PATH
 const AGENT_STATE_PATH = path.resolve(process.env.AGENT_STATE_PATH || path.join(CONFIG_DIR, 'state.json'));
 const AGENT_ACHIEVEMENTS_PATH = path.resolve(process.env.AGENT_ACHIEVEMENTS_PATH || path.join(CONFIG_DIR, 'agent-achievements.json'));
 const ACHIEVEMENT_OBSERVATION_MAX_MS = Math.max(1_000, Number(process.env.ACHIEVEMENT_OBSERVATION_MAX_MS || 60_000));
+const ACHIEVEMENT_DAILY_RETENTION_DAYS = 7;
+const ACHIEVEMENT_STAT_FIELDS = [
+  'activeMs',
+  'successCount',
+  'approvalCount',
+  'blockedCount',
+  'coffeeCount',
+  'readingCount',
+  'gamingCount',
+  'musicCount',
+  'stepCount'
+];
 const OFFICE_FIXTURE_PATH = path.resolve(process.env.OFFICE_FIXTURE_PATH || path.join(SERVER_DIR, 'public', 'test-agents.json'));
 const LOCAL_DESKTOP_MODE = String(process.env.LOCAL_DESKTOP_MODE || '').trim().toLowerCase() === 'true';
 const FOLDER_VIEW_ENABLED = !LOCAL_DESKTOP_MODE
@@ -71,7 +83,7 @@ const AGENT_SUCCESS_MS = Number(process.env.AGENT_SUCCESS_MS || 2 * 60 * 1000);
 const AGENT_IDLE_MS = Number(process.env.AGENT_IDLE_MS || 30 * 60 * 1000);
 const AGENT_FILE_SNAPSHOT_CACHE_MAX_MS = Number(process.env.AGENT_FILE_SNAPSHOT_CACHE_MAX_MS || 60 * 1000);
 const RUNTIME_AGENT_TTL_MS = Number(process.env.RUNTIME_AGENT_TTL_MS || 90 * 1000);
-const ACHIEVEMENT_SAMPLE_MS = Math.max(10, Number(process.env.ACHIEVEMENT_SAMPLE_MS || 8_000));
+const ACHIEVEMENT_SAMPLE_MS = Math.max(10, Number(process.env.ACHIEVEMENT_SAMPLE_MS || 5_000));
 const GATEWAY_AUTH_TOKEN_ENV = String(process.env.GATEWAY_AUTH_TOKEN || '').trim();
 const GATEWAY_AUTH_PASSWORD_ENV = String(process.env.GATEWAY_AUTH_PASSWORD || '').trim();
 const GATEWAY_AUTH_SECURE_COOKIE = String(process.env.GATEWAY_AUTH_SECURE_COOKIE || '').trim().toLowerCase() === 'true';
@@ -1737,23 +1749,87 @@ async function writeAgentState(stateFile) {
   return normalized;
 }
 
-function normalizeAchievementEntry(value = {}) {
+function emptyAchievementStats() {
+  return Object.fromEntries(ACHIEVEMENT_STAT_FIELDS.map((field) => [field, 0]));
+}
+
+function normalizeAchievementStats(value = {}) {
+  return Object.fromEntries(ACHIEVEMENT_STAT_FIELDS.map((field) => [
+    field,
+    Math.max(0, Math.trunc(Number(value?.[field]) || 0))
+  ]));
+}
+
+function achievementDayKey(timestampMs = Date.now()) {
+  return new Date(timestampMs).toISOString().slice(0, 10);
+}
+
+function retainedAchievementDayKeys(nowMs = Date.now()) {
+  const currentDayMs = Date.parse(`${achievementDayKey(nowMs)}T00:00:00.000Z`);
+  return new Set(Array.from(
+    { length: ACHIEVEMENT_DAILY_RETENTION_DAYS },
+    (_, index) => achievementDayKey(currentDayMs - index * 24 * 60 * 60 * 1000)
+  ));
+}
+
+function normalizeAchievementDailyStats(value = {}, nowMs = Date.now()) {
+  const retainedKeys = retainedAchievementDayKeys(nowMs);
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(Object.entries(source)
+    .filter(([day, stats]) => retainedKeys.has(day) && stats && typeof stats === 'object' && !Array.isArray(stats))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([day, stats]) => [day, normalizeAchievementStats(stats)]));
+}
+
+function achievementDailyBucket(entry, timestampMs = Date.now()) {
+  const day = achievementDayKey(timestampMs);
+  entry.dailyStats = normalizeAchievementDailyStats(entry.dailyStats, timestampMs);
+  entry.dailyStats[day] ||= emptyAchievementStats();
+  return entry.dailyStats[day];
+}
+
+function incrementAchievementStat(entry, field, amount, timestampMs = Date.now()) {
+  if (!ACHIEVEMENT_STAT_FIELDS.includes(field)) return;
+  const increment = Math.max(0, Math.trunc(Number(amount) || 0));
+  if (!increment) return;
+  entry[field] += increment;
+  achievementDailyBucket(entry, timestampMs)[field] += increment;
+}
+
+function incrementAchievementActiveMs(entry, startMs, endMs) {
+  const safeStartMs = Math.max(0, Math.trunc(Number(startMs) || 0));
+  const safeEndMs = Math.max(safeStartMs, Math.trunc(Number(endMs) || 0));
+  const elapsedMs = safeEndMs - safeStartMs;
+  if (!elapsedMs) return;
+  entry.activeMs += elapsedMs;
+  let cursorMs = safeStartMs;
+  while (cursorMs < safeEndMs) {
+    const dayStartMs = Date.parse(`${achievementDayKey(cursorMs)}T00:00:00.000Z`);
+    const segmentEndMs = Math.min(safeEndMs, dayStartMs + 24 * 60 * 60 * 1000);
+    achievementDailyBucket(entry, cursorMs).activeMs += segmentEndMs - cursorMs;
+    cursorMs = segmentEndMs;
+  }
+}
+
+function achievementWeeklyStats(entry, nowMs = Date.now()) {
+  return Object.values(normalizeAchievementDailyStats(entry.dailyStats, nowMs))
+    .reduce((totals, bucket) => {
+      for (const field of ACHIEVEMENT_STAT_FIELDS) totals[field] += bucket[field];
+      return totals;
+    }, emptyAchievementStats());
+}
+
+function normalizeAchievementEntry(value = {}, nowMs = Date.now()) {
   const seenPoseEpisodes = Array.isArray(value.seenPoseEpisodes)
     ? [...new Set(value.seenPoseEpisodes.map((episode) => cleanRuntimeText(episode, 320)).filter(Boolean))].slice(-256)
     : [];
+  const stats = normalizeAchievementStats(value);
   return {
     name: cleanRuntimeText(value.name, 120) || 'Agent',
     source: cleanRuntimeText(value.source, 80) || 'unknown',
     avatarVariant: normalizeAvatarVariant(value.avatarVariant),
-    activeMs: Math.max(0, Math.trunc(Number(value.activeMs) || 0)),
-    successCount: Math.max(0, Math.trunc(Number(value.successCount) || 0)),
-    approvalCount: Math.max(0, Math.trunc(Number(value.approvalCount) || 0)),
-    blockedCount: Math.max(0, Math.trunc(Number(value.blockedCount) || 0)),
-    coffeeCount: Math.max(0, Math.trunc(Number(value.coffeeCount) || 0)),
-    readingCount: Math.max(0, Math.trunc(Number(value.readingCount) || 0)),
-    gamingCount: Math.max(0, Math.trunc(Number(value.gamingCount) || 0)),
-    musicCount: Math.max(0, Math.trunc(Number(value.musicCount) || 0)),
-    stepCount: Math.max(0, Math.trunc(Number(value.stepCount) || 0)),
+    ...stats,
+    dailyStats: normalizeAchievementDailyStats(value.dailyStats, nowMs),
     seenPoseEpisodes,
     lastMode: ['active', 'success', 'approval', 'blocked', 'other'].includes(value.lastMode) ? value.lastMode : 'other',
     lastObservedAt: Math.max(0, Math.trunc(Number(value.lastObservedAt) || 0)),
@@ -1766,11 +1842,19 @@ async function readAgentAchievements() {
   const source = data?.agents && typeof data.agents === 'object' && !Array.isArray(data.agents)
     ? data.agents
     : {};
+  const nowMs = Date.now();
+  const retainedKeys = retainedAchievementDayKeys(nowMs);
   return {
     updatedAt: data?.updatedAt || null,
+    dailyStatsPruned: Object.values(source).some((entry) => {
+      const dailyStats = entry?.dailyStats && typeof entry.dailyStats === 'object' && !Array.isArray(entry.dailyStats)
+        ? entry.dailyStats
+        : {};
+      return Object.keys(dailyStats).some((day) => !retainedKeys.has(day));
+    }),
     agents: Object.fromEntries(Object.entries(source)
       .filter(([key, value]) => String(key).trim() && value && typeof value === 'object' && !Array.isArray(value))
-      .map(([key, value]) => [String(key), normalizeAchievementEntry(value)]))
+      .map(([key, value]) => [String(key), normalizeAchievementEntry(value, nowMs)]))
   };
 }
 
@@ -1796,36 +1880,37 @@ function achievementMode(agent = {}) {
   return 'other';
 }
 
-function publicAchievement(key, entry, rank = null) {
+function publicAchievement(key, entry, rank = null, stats = entry) {
   return {
     key,
     ...(rank === null ? {} : { rank }),
     name: entry.name,
     source: entry.source,
     avatarVariant: entry.avatarVariant,
-    activeMs: entry.activeMs,
-    successCount: entry.successCount,
-    approvalCount: entry.approvalCount,
-    blockedCount: entry.blockedCount,
-    coffeeCount: entry.coffeeCount,
-    booksRead: entry.readingCount / 10,
-    gamesCompleted: entry.gamingCount / 10,
-    musicCount: entry.musicCount,
-    stepCount: entry.stepCount,
+    activeMs: stats.activeMs,
+    successCount: stats.successCount,
+    approvalCount: stats.approvalCount,
+    blockedCount: stats.blockedCount,
+    coffeeCount: stats.coffeeCount,
+    booksRead: stats.readingCount / 10,
+    gamesCompleted: stats.gamingCount / 10,
+    musicCount: stats.musicCount,
+    stepCount: stats.stepCount,
     resetAt: entry.resetAt
   };
 }
 
-function rankedAchievements(entries) {
+function rankedAchievements(entries, { weekly = false, nowMs = Date.now() } = {}) {
   return Object.entries(entries)
-    .sort(([leftKey, left], [rightKey, right]) => (
-      right.activeMs - left.activeMs
-      || right.approvalCount - left.approvalCount
-      || right.blockedCount - left.blockedCount
+    .map(([key, entry]) => [key, entry, weekly ? achievementWeeklyStats(entry, nowMs) : entry])
+    .sort(([leftKey, left, leftStats], [rightKey, right, rightStats]) => (
+      rightStats.activeMs - leftStats.activeMs
+      || rightStats.approvalCount - leftStats.approvalCount
+      || rightStats.blockedCount - leftStats.blockedCount
       || left.name.localeCompare(right.name)
       || leftKey.localeCompare(rightKey)
     ))
-    .map(([key, entry], index) => publicAchievement(key, entry, index + 1));
+    .map(([key, entry, stats], index) => publicAchievement(key, entry, index + 1, stats));
 }
 
 async function updateAgentAchievementsNow(agents, nowMs = Date.now()) {
@@ -1844,10 +1929,10 @@ async function updateAgentAchievementsNow(agents, nowMs = Date.now()) {
     const elapsedMs = existing && entry.lastObservedAt
       ? Math.max(0, Math.min(nowMs - entry.lastObservedAt, ACHIEVEMENT_OBSERVATION_MAX_MS))
       : 0;
-    if (previousMode === 'active' && elapsedMs) entry.activeMs += elapsedMs;
-    if (mode !== previousMode && mode === 'success') entry.successCount += 1;
-    if (mode !== previousMode && mode === 'approval') entry.approvalCount += 1;
-    if (mode !== previousMode && mode === 'blocked') entry.blockedCount += 1;
+    if (previousMode === 'active' && elapsedMs) incrementAchievementActiveMs(entry, nowMs - elapsedMs, nowMs);
+    if (mode !== previousMode && mode === 'success') incrementAchievementStat(entry, 'successCount', 1, nowMs);
+    if (mode !== previousMode && mode === 'approval') incrementAchievementStat(entry, 'approvalCount', 1, nowMs);
+    if (mode !== previousMode && mode === 'blocked') incrementAchievementStat(entry, 'blockedCount', 1, nowMs);
     entry.name = cleanRuntimeText(agent.name, 120) || entry.name;
     entry.source = cleanRuntimeText(agent.source, 80) || entry.source;
     entry.avatarVariant = normalizeAvatarVariant(agent.avatarVariant);
@@ -1862,14 +1947,19 @@ async function updateAgentAchievementsNow(agents, nowMs = Date.now()) {
     const elapsedMs = entry.lastObservedAt
       ? Math.max(0, Math.min(nowMs - entry.lastObservedAt, ACHIEVEMENT_OBSERVATION_MAX_MS))
       : 0;
-    if (entry.lastMode === 'active' && elapsedMs) entry.activeMs += elapsedMs;
+    if (entry.lastMode === 'active' && elapsedMs) incrementAchievementActiveMs(entry, nowMs - elapsedMs, nowMs);
     entry.lastMode = 'other';
     entry.lastObservedAt = nowMs;
     changed = true;
   }
 
-  const written = changed ? await writeAgentAchievements(achievements) : achievements;
-  return rankedAchievements(written.agents);
+  const written = changed || achievements.dailyStatsPruned
+    ? await writeAgentAchievements(achievements)
+    : achievements;
+  return {
+    global: rankedAchievements(written.agents, { nowMs }),
+    last7Days: rankedAchievements(written.agents, { weekly: true, nowMs })
+  };
 }
 
 function updateAgentAchievements(agents, nowMs = Date.now()) {
@@ -2572,7 +2662,7 @@ app.get('/api/agents', async (req, res, next) => {
     const responseAgents = req.query.includeHidden === '1'
       ? agentsWithAvatars
       : agentsWithAvatars.filter((agent) => !agent.hidden);
-    const achievements = await updateAgentAchievements(agentsWithAvatars);
+    const achievementRankings = await updateAgentAchievements(agentsWithAvatars);
     res.json({
       generatedAt: new Date().toISOString(),
       source: runtimeAgents.length ? (source === 'sample' ? 'runtime' : `${source}+runtime`) : source,
@@ -2601,7 +2691,16 @@ app.get('/api/agents', async (req, res, next) => {
       acceptedManualStates: MANUAL_AGENT_STATES,
       agentStatePath: AGENT_STATE_PATH,
       achievementsPath: AGENT_ACHIEVEMENTS_PATH,
-      achievements,
+      achievements: achievementRankings.global,
+      weeklyAchievements: achievementRankings.last7Days,
+      achievementWindows: {
+        last7Days: {
+          dayCount: ACHIEVEMENT_DAILY_RETENTION_DAYS,
+          timezone: 'UTC',
+          startDate: [...retainedAchievementDayKeys()].at(-1),
+          endDate: achievementDayKey()
+        }
+      },
       summary: {
         total: responseAgents.length,
         active: responseAgents.filter((agent) => agent.status === 'active').length,
@@ -2641,6 +2740,7 @@ app.post('/api/achievements/:key/reset', async (req, res, next) => {
         gamingCount: 0,
         musicCount: 0,
         stepCount: 0,
+        dailyStats: {},
         lastObservedAt: Date.now(),
         resetAt: new Date().toISOString()
       };
@@ -2676,11 +2776,12 @@ app.post('/api/achievements/:key/pose-event', async (req, res, next) => {
         return { counted: false, achievement: publicAchievement(key, entry) };
       }
       entry.seenPoseEpisodes = [...entry.seenPoseEpisodes, eventId].slice(-256);
-      if (pose === 'coffee') entry.coffeeCount += 1;
-      if (pose === 'reading') entry.readingCount += 1;
-      if (pose === 'gaming') entry.gamingCount += 1;
-      if (pose === 'headphones' || pose === 'music') entry.musicCount += 1;
-      if (pose === 'walking') entry.stepCount += 100;
+      const nowMs = Date.now();
+      if (pose === 'coffee') incrementAchievementStat(entry, 'coffeeCount', 1, nowMs);
+      if (pose === 'reading') incrementAchievementStat(entry, 'readingCount', 1, nowMs);
+      if (pose === 'gaming') incrementAchievementStat(entry, 'gamingCount', 1, nowMs);
+      if (pose === 'headphones' || pose === 'music') incrementAchievementStat(entry, 'musicCount', 1, nowMs);
+      if (pose === 'walking') incrementAchievementStat(entry, 'stepCount', 97, nowMs);
       achievements.agents[key] = entry;
       const written = await writeAgentAchievements(achievements);
       return { counted: true, achievement: publicAchievement(key, written.agents[key]) };

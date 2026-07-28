@@ -4,6 +4,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.19 (July 27, 2026)
+- Refresh cadence updated form 8 to 5 seconds
+- Achievement rank board with separate global and last-7-days rankings
+
 ## Version 1.0.18 (July 26, 2026)
 - Check for signed app updates shortly after launch and every six hours, prompting only when a new release is available
 - Include avatar assignments and Rank Board achievements in Setup configuration exports and restore them during import

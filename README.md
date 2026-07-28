@@ -211,14 +211,14 @@ The same live office is available as a browser dashboard with configuration, sha
 ### Dashboard features
 
 - At-a-glance active, success, idle, and blocked agent states.
-- Persistent achievement rank board with cumulative worked time, approval requests, and blocked-event counts for each agent.
+- Persistent achievement rank board with separate global and last-7-days rankings for worked time, successful runs, approval requests, blocked events, and playful avatar statistics.
 - Live agent refreshes from OpenClaw, desktop connectors, or manual agents.
 - Light, dark, and system themes.
 - Upload, download, preview, edit, and archive tools in the folder view.
 
-Open the dedicated **Rank board** page from Agent View—or from the desktop application's Office, tray, or companion menu—to compare agents by cumulative worked time and successful runs. Taskfolk records approval requests and genuine blocked events separately. It also turns displayed idle animations into playful statistics: each coffee pose adds one coffee, each reading pose adds 0.1 book, each gaming pose adds 0.1 completed game, each music pose adds one listen, and each walking pose adds 100 steps. The counters are stored in `agent-achievements.json` under `CONFIG_DIR`.
+Open the dedicated **Rank board** page from Agent View—or from the desktop application's Office, tray, or companion menu—to compare agents using permanent Global rankings or a recent Last 7 Days ranking. Taskfolk records approval requests and genuine blocked events separately. It also turns displayed idle animations into playful statistics: each coffee pose adds one coffee, each reading pose adds 0.1 book, each gaming pose adds 0.1 completed game, each music pose adds one listen, and each walking pose adds 97 steps. The counters are stored in `agent-achievements.json` under `CONFIG_DIR`. Last-7-days counters use UTC daily buckets for today and the previous six dates; expired buckets are discarded while their activity remains included in the permanent global totals.
 
-The server samples agent state every eight seconds while it is running, so worked time and Success, Approval, and Blocked transitions continue to accumulate without Agent View, Rank Board, or a desktop companion being open. Set `ACHIEVEMENT_SAMPLE_MS` to change the sampling interval. Fun pose statistics remain display-driven and increase only when an office or companion actually shows the corresponding animation.
+The server samples agent state every five seconds while it is running, so worked time and Success, Approval, and Blocked transitions continue to accumulate without Agent View, Rank Board, or a desktop companion being open. Set `ACHIEVEMENT_SAMPLE_MS` to change the sampling interval. Fun pose statistics remain display-driven and increase only when an office or companion actually shows the corresponding animation.
 
 ### Run the dashboard locally
 

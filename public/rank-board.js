@@ -2,11 +2,16 @@ const rankBoardRows = document.querySelector('#rankBoardRows');
 const rankBoardEmpty = document.querySelector('#rankBoardEmpty');
 const rankBoardSummary = document.querySelector('#rankBoardSummary');
 const rankBoardStatus = document.querySelector('#rankBoardStatus');
+const rankBoardEyebrow = document.querySelector('#rankBoardEyebrow');
+const rankBoardTitle = document.querySelector('#rankBoardTitle');
 const refreshRankBoardBtn = document.querySelector('#refreshRankBoardBtn');
 const folderViewNavBtn = document.querySelector('#folderViewNavBtn');
+const rankPeriodButtons = [...document.querySelectorAll('[data-rank-period]')];
 const isDesktopRankBoard = new URLSearchParams(window.location.search).get('app') === 'desktop';
 let refreshTimer = null;
 let refreshInFlight = false;
+let latestRankBoardData = null;
+let selectedRankPeriod = 'global';
 
 document.body.classList.toggle('desktopRankBoard', isDesktopRankBoard);
 
@@ -90,8 +95,30 @@ function renderSummary(achievements) {
     <article><strong>👟 ${formatNumber(totals.steps)}</strong><span>Steps walked</span></article>`;
 }
 
-function renderRankBoard(value) {
-  const achievements = Array.isArray(value) ? value : [];
+function selectedAchievements(data = {}) {
+  return selectedRankPeriod === 'last7Days'
+    ? (Array.isArray(data.weeklyAchievements) ? data.weeklyAchievements : [])
+    : (Array.isArray(data.achievements) ? data.achievements : []);
+}
+
+function renderRankBoard(data = {}) {
+  latestRankBoardData = data;
+  const achievements = selectedAchievements(data);
+  const weeklyWindow = data.achievementWindows?.last7Days || {};
+  const weeklyDates = weeklyWindow.startDate && weeklyWindow.endDate
+    ? `${weeklyWindow.startDate} to ${weeklyWindow.endDate} ${weeklyWindow.timezone || 'UTC'}`
+    : 'today plus the previous 6 UTC dates';
+  const weekly = selectedRankPeriod === 'last7Days';
+  rankBoardEyebrow.textContent = weekly ? 'Recent activity' : 'All-time activity';
+  rankBoardTitle.textContent = weekly ? 'Last 7 days rankings' : 'Global rankings';
+  rankBoardStatus.dataset.periodDescription = weekly
+    ? `Daily counters retained for ${weeklyDates}.`
+    : 'Permanent cumulative achievement counters.';
+  rankPeriodButtons.forEach((button) => {
+    const selected = button.dataset.rankPeriod === selectedRankPeriod;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
   renderSummary(achievements);
   rankBoardEmpty.classList.toggle('hidden', achievements.length > 0);
   rankBoardRows.innerHTML = achievements.map((entry) => `
@@ -118,7 +145,7 @@ function scheduleRefresh() {
   clearTimeout(refreshTimer);
   refreshTimer = null;
   if (document.hidden) return;
-  refreshTimer = setTimeout(loadRankBoard, 8_000);
+  refreshTimer = setTimeout(loadRankBoard, 5_000);
 }
 
 async function loadRankBoard() {
@@ -127,8 +154,8 @@ async function loadRankBoard() {
   refreshRankBoardBtn.disabled = true;
   try {
     const data = await api(`/api/agents?includeHidden=1&t=${Date.now()}`, { cache: 'no-store' });
-    renderRankBoard(data.achievements);
-    rankBoardStatus.textContent = `Updated ${new Date(data.generatedAt || Date.now()).toLocaleTimeString()}`;
+    renderRankBoard(data);
+    rankBoardStatus.textContent = `Updated ${new Date(data.generatedAt || Date.now()).toLocaleTimeString()} · ${rankBoardStatus.dataset.periodDescription}`;
   } catch (error) {
     rankBoardStatus.textContent = `Unable to load counters: ${error.message}`;
   } finally {
@@ -163,6 +190,15 @@ rankBoardRows.addEventListener('click', async (event) => {
 });
 
 refreshRankBoardBtn.addEventListener('click', loadRankBoard);
+rankPeriodButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    selectedRankPeriod = button.dataset.rankPeriod === 'last7Days' ? 'last7Days' : 'global';
+    if (latestRankBoardData) {
+      renderRankBoard(latestRankBoardData);
+      rankBoardStatus.textContent = `Updated ${new Date(latestRankBoardData.generatedAt || Date.now()).toLocaleTimeString()} · ${rankBoardStatus.dataset.periodDescription}`;
+    }
+  });
+});
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     clearTimeout(refreshTimer);

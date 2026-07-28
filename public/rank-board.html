@@ -27,11 +27,17 @@
   <main class="rankBoardMain">
     <section class="rankBoardHero">
       <div>
-        <span class="eyebrow">All-time activity</span>
-        <h2>Time on task</h2>
+        <span class="eyebrow" id="rankBoardEyebrow">All-time activity</span>
+        <h2 id="rankBoardTitle">Global rankings</h2>
         <p id="rankBoardStatus" aria-live="polite">Loading achievement counters…</p>
       </div>
-      <button id="refreshRankBoardBtn" type="button">Refresh</button>
+      <div class="rankBoardHeroActions">
+        <div class="rankBoardPeriod" role="group" aria-label="Ranking period">
+          <button class="secondary selected" type="button" data-rank-period="global" aria-pressed="true">Global</button>
+          <button class="secondary" type="button" data-rank-period="last7Days" aria-pressed="false">Last 7 days</button>
+        </div>
+        <button id="refreshRankBoardBtn" type="button">Refresh</button>
+      </div>
     </section>
     <section class="rankBoardSummary" id="rankBoardSummary" aria-label="Achievement totals"></section>
     <section class="rankBoardCard" aria-label="Agent achievement rankings">

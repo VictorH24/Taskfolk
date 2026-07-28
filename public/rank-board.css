@@ -48,6 +48,30 @@
   color: var(--muted);
 }
 
+.rankBoardHeroActions,
+.rankBoardPeriod {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+}
+
+.rankBoardPeriod {
+  padding: .25rem;
+  background: color-mix(in srgb, var(--panel), var(--line) 30%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.rankBoardPeriod button {
+  border-color: transparent;
+}
+
+.rankBoardPeriod button.selected {
+  color: var(--text);
+  background: var(--bg);
+  border-color: var(--line);
+}
+
 .rankBoardSummary {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -178,6 +202,16 @@
   .rankBoardHero {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .rankBoardHeroActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .rankBoardPeriod {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .rankBoardSummary {

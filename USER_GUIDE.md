@@ -175,7 +175,7 @@ Click **Refresh** if a newly started agent does not appear immediately.
 
 ### View and reset achievement counters
 
-Choose **Rank board** in Agent View to open its dedicated page and see agents ranked by cumulative time worked. In the desktop app, you can also choose **Office → Rank Board…**, use the Taskfolk menu-bar menu, or right-click the companion and choose **Open Rank Board…**. Worked time is displayed in minutes, hours, days, months, or years as it grows. The board also shows each agent's number of successful runs, approval requests, and separate blocked events; approval requests are not added to the blocked-event counter.
+Choose **Rank board** in Agent View to open its dedicated page. Select **Global** to rank agents by permanent cumulative statistics, or **Last 7 days** to rank them using activity from today and the previous six UTC dates. Expired daily statistics are discarded from the recent view but remain included in Global totals. In the desktop app, you can also choose **Office → Rank Board…**, use the Taskfolk menu-bar menu, or right-click the companion and choose **Open Rank Board…**. Worked time is displayed in minutes, hours, days, months, or years as it grows. The board also shows each agent's number of successful runs, approval requests, and separate blocked events; approval requests are not added to the blocked-event counter.
 
 The Rank Board also records playful statistics from the animations actually displayed in the office or companion:
 
@@ -183,7 +183,7 @@ The Rank Board also records playful statistics from the animations actually disp
 - Each reading animation adds 0.1 book.
 - Each gaming animation adds 0.1 completed game.
 - Each music animation adds 1 listen.
-- Each walking animation adds 100 steps.
+- Each walking animation adds 97 steps.
 
 The same animation episode is counted only once, even when the office refreshes or the agent appears in multiple companion windows.
 
