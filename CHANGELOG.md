@@ -4,6 +4,9 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.21 (July 28, 2026)
+- New TV-screens added
+
 ## Version 1.0.20 (July 28, 2026)
 - New gaming/working screens added
 - New watching TV status

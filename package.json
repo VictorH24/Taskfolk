@@ -1,6 +1,6 @@
 {
   "name": "taskfolk",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "private": true,
   "description": "Taskfolk is a visual mission control dashboard for AI agents and shared workspace tools.",
   "main": "desktop/main.cjs",
