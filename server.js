@@ -52,6 +52,7 @@ const ACHIEVEMENT_STAT_FIELDS = [
   'coffeeCount',
   'readingCount',
   'gamingCount',
+  'watchingTVCount',
   'musicCount',
   'stepCount'
 ];
@@ -62,7 +63,7 @@ const FOLDER_VIEW_ENABLED = !LOCAL_DESKTOP_MODE
 const OFFICE_FLOORS = ['wood','wood2','carpet', 'concrete', 'tile', 'darkwood'];
 const OFFICE_WINDOWS = ['sf', 'newyork', 'beach', 'tahoe'];
 const OFFICE_POSTERS = Array.from({ length: 50 }, (_, index) => index);
-const MANUAL_AGENT_STATES = ['Working', 'Success', 'Blocked', 'Approval', 'Sleeping', 'Reading', 'Gaming', 'Coffee break', 'Listening', 'Walking'];
+const MANUAL_AGENT_STATES = ['Working', 'Success', 'Blocked', 'Approval', 'Sleeping', 'Reading', 'Gaming', 'Watching TV', 'Coffee break', 'Listening', 'Walking'];
 const MANUAL_AGENT_STATE_LOOKUP = new Map(MANUAL_AGENT_STATES.map((state) => [agentKey(state), state]));
 const MANUAL_AGENT_POSES = {
   Working: 'working',
@@ -72,6 +73,7 @@ const MANUAL_AGENT_POSES = {
   Sleeping: 'sleeping',
   Reading: 'reading',
   Gaming: 'gaming',
+  'Watching TV': 'watching_tv',
   'Coffee break': 'coffee',
   Listening: 'headphones',
   Walking: 'walking'
@@ -168,11 +170,13 @@ async function discoverAvatarVariants() {
         }
         const workingScreen = normalizeAvatarScreen(metadata.workingScreen, 'workingScreen');
         const gaminScreen = normalizeAvatarScreen(metadata.gaminScreen, 'gaminScreen');
+        const watchingTVScreen = normalizeAvatarScreen(metadata.watchingTVScreen, 'watchingTVScreen');
         variants.set(candidate.id, Object.freeze({
           ...candidate,
           name,
           ...(workingScreen ? { workingScreen } : {}),
-          ...(gaminScreen ? { gaminScreen } : {})
+          ...(gaminScreen ? { gaminScreen } : {}),
+          ...(watchingTVScreen ? { watchingTVScreen } : {})
         }));
         directories.set(candidate.id, directory);
       } catch (error) {
@@ -1894,6 +1898,7 @@ function publicAchievement(key, entry, rank = null, stats = entry) {
     coffeeCount: stats.coffeeCount,
     booksRead: stats.readingCount / 10,
     gamesCompleted: stats.gamingCount / 10,
+    moviesShowsWatched: stats.watchingTVCount / 10,
     musicCount: stats.musicCount,
     stepCount: stats.stepCount,
     resetAt: entry.resetAt
@@ -2422,6 +2427,7 @@ app.get('/api/avatar-working-animations', async (_req, res, next) => {
   try {
     const sharedRoot = path.join(PUBLIC_DIR, 'avatar-scenes', 'working-screens');
     const gamingRoot = path.join(PUBLIC_DIR, 'avatar-scenes', 'gaming-screens');
+    const tvRoot = path.join(PUBLIC_DIR, 'avatar-scenes', 'tv-screens');
     const variants = Object.create(null);
     await Promise.all(AVATAR_VARIANT_REGISTRY.map(async (variant) => {
       const files = await fs.readdir(AVATAR_VARIANT_DIRECTORIES.get(variant.id));
@@ -2457,14 +2463,29 @@ app.get('/api/avatar-working-animations', async (_req, res, next) => {
         .filter((variant) => variant.gaminScreen)
         .map((variant) => [variant.id, variant.gaminScreen])
     );
+    const tvScreens = (await fs.readdir(tvRoot).catch((error) => {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }));
+    const preferredTVScreens = preferredAnimationFiles(
+      tvScreens,
+      /^(tv\d+)\.(?:gif|webp)$/i
+    );
+    const tvLayouts = Object.fromEntries(
+      AVATAR_VARIANT_REGISTRY
+        .filter((variant) => variant.watchingTVScreen)
+        .map((variant) => [variant.id, variant.watchingTVScreen])
+    );
     res.set('Cache-Control', 'no-store, max-age=0');
     res.json({
       variants,
       sharedScreens: preferredSharedScreens,
       gamingScreens: preferredGamingScreens,
+      tvScreens: preferredTVScreens,
       canvas: { width: 384, height: 512 },
       layouts,
-      gamingLayouts
+      gamingLayouts,
+      tvLayouts
     });
   } catch (err) {
     next(err);
@@ -2738,6 +2759,7 @@ app.post('/api/achievements/:key/reset', async (req, res, next) => {
         coffeeCount: 0,
         readingCount: 0,
         gamingCount: 0,
+        watchingTVCount: 0,
         musicCount: 0,
         stepCount: 0,
         dailyStats: {},
@@ -2763,7 +2785,7 @@ app.post('/api/achievements/:key/pose-event', async (req, res, next) => {
     const key = String(req.params.key || '').trim();
     const pose = String(req.body?.pose || '').trim().toLowerCase();
     const episode = cleanRuntimeText(req.body?.episode, 240);
-    const supportedPoses = new Set(['coffee', 'reading', 'gaming', 'headphones', 'music', 'walking']);
+    const supportedPoses = new Set(['coffee', 'reading', 'gaming', 'watching_tv', 'headphones', 'music', 'walking']);
     if (!key) return res.status(400).json({ error: 'Agent key is required' });
     if (!supportedPoses.has(pose)) return res.status(400).json({ error: 'Unsupported achievement pose' });
     if (!episode) return res.status(400).json({ error: 'Pose episode is required' });
@@ -2780,6 +2802,7 @@ app.post('/api/achievements/:key/pose-event', async (req, res, next) => {
       if (pose === 'coffee') incrementAchievementStat(entry, 'coffeeCount', 1, nowMs);
       if (pose === 'reading') incrementAchievementStat(entry, 'readingCount', 1, nowMs);
       if (pose === 'gaming') incrementAchievementStat(entry, 'gamingCount', 1, nowMs);
+      if (pose === 'watching_tv') incrementAchievementStat(entry, 'watchingTVCount', 1, nowMs);
       if (pose === 'headphones' || pose === 'music') incrementAchievementStat(entry, 'musicCount', 1, nowMs);
       if (pose === 'walking') incrementAchievementStat(entry, 'stepCount', 97, nowMs);
       achievements.agents[key] = entry;

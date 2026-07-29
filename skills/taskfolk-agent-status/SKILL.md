@@ -37,6 +37,7 @@ Only send one of these states:
 - `Sleeping`
 - `Reading`
 - `Gaming`
+- `Watching TV`
 - `Coffee break`
 - `Listening`
 - `Walking`

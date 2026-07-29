@@ -19,6 +19,7 @@ ACCEPTED_STATES = {
     "Sleeping",
     "Reading",
     "Gaming",
+    "Watching TV",
     "Coffee break",
     "Listening",
     "Walking",

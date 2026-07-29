@@ -7,6 +7,7 @@
     sleeping: 'sleeping.gif',
     reading: 'reading.gif',
     gaming: 'gaming.png',
+    watching_tv: 'watching_tv_alpha.png',
     coffee: 'coffee.gif',
     headphones: 'music.gif',
     music: 'music.gif',
@@ -19,8 +20,11 @@
   const workingLayoutsByVariant = new Map();
   const gamingAnimationByAgent = new Map();
   const gamingLayoutsByVariant = new Map();
+  const tvAnimationByAgent = new Map();
+  const tvLayoutsByVariant = new Map();
   let sharedWorkingImages = [];
   let sharedGamingImages = [];
+  let sharedTVImages = [];
   let workingCanvas = { width: 384, height: 512 };
 
   function variantKey(variant) {
@@ -66,13 +70,29 @@
     const variantId = animatedVariantId(variant);
     const usesWorkingAnimation = pose === 'working' || pose === 'meeting';
     const usesGamingAnimation = pose === 'gaming';
-    if ((!usesWorkingAnimation && !usesGamingAnimation) || !variantId) {
+    const usesTVAnimation = pose === 'watching_tv';
+    if ((!usesWorkingAnimation && !usesGamingAnimation && !usesTVAnimation) || !variantId) {
       if (key) workingAnimationByAgent.delete(key);
       if (key) gamingAnimationByAgent.delete(key);
+      if (key) tvAnimationByAgent.delete(key);
       return { kind: 'avatar', image: defaultImage };
+    }
+    if (usesTVAnimation) {
+      if (key) workingAnimationByAgent.delete(key);
+      if (key) gamingAnimationByAgent.delete(key);
+      if (!key || !tvLayoutsByVariant.has(variantId) || !sharedTVImages.length) {
+        return { kind: 'avatar', image: defaultImage };
+      }
+      const current = tvAnimationByAgent.get(key);
+      if (!current || current.variantId !== variantId) {
+        const index = Math.floor(Math.random() * sharedTVImages.length);
+        tvAnimationByAgent.set(key, { variantId, kind: 'shared', image: sharedTVImages[index] });
+      }
+      return tvAnimationByAgent.get(key);
     }
     if (usesGamingAnimation) {
       if (key) workingAnimationByAgent.delete(key);
+      if (key) tvAnimationByAgent.delete(key);
       if (!key || !gamingLayoutsByVariant.has(variantId) || !sharedGamingImages.length) {
         return { kind: 'avatar', image: defaultImage };
       }
@@ -84,6 +104,7 @@
       return gamingAnimationByAgent.get(key);
     }
     if (key) gamingAnimationByAgent.delete(key);
+    if (key) tvAnimationByAgent.delete(key);
     if (!key) return { kind: 'avatar', image: defaultImage };
 
     const current = workingAnimationByAgent.get(key);
@@ -98,6 +119,7 @@
   function pathsForAvatarImage(image, variant) {
     if (/^working\.(?:gif|webp)$/i.test(image)) return imagePaths(image, variant);
     if (/^gaming\.(?:gif|png|webp)$/i.test(image)) return imagePaths(image, variant);
+    if (image === 'watching_tv_alpha.png') return tvLayeredPaths(variant);
     if (image === 'approval.gif') {
       return [
         ...imagePaths('approval.gif', variant),
@@ -122,6 +144,13 @@
     ];
   }
 
+  function tvLayeredPaths(variantId) {
+    return [
+      `./avatar-scenes/variants/${encodeURIComponent(variantKey(variantId))}/watching_tv_alpha.png`,
+      ...variantImagePaths(variantId, 'working.gif')
+    ];
+  }
+
   function fallbackSources(paths) {
     return paths.slice(1).join('|');
   }
@@ -133,7 +162,11 @@
   }
 
   function layoutStyle(variantId, kind = 'working') {
-    const layout = kind === 'gaming' ? gamingLayoutsByVariant.get(variantId) : workingLayoutsByVariant.get(variantId);
+    const layout = kind === 'gaming'
+      ? gamingLayoutsByVariant.get(variantId)
+      : kind === 'tv'
+        ? tvLayoutsByVariant.get(variantId)
+        : workingLayoutsByVariant.get(variantId);
     if (!layout) return '';
     const width = Number(workingCanvas.width) || 384;
     const height = Number(workingCanvas.height) || 512;
@@ -162,6 +195,35 @@
     art.src = artPaths[0];
     if (isLayered) {
       const screenPaths = sharedScreenPaths('gaming', animation.image);
+      screen.hidden = false;
+      screen.dataset.fallbackIndex = '0';
+      screen.dataset.fallbackSrcs = fallbackSources(screenPaths);
+      screen.src = screenPaths[0];
+    } else {
+      screen.hidden = true;
+      screen.removeAttribute('src');
+      delete screen.dataset.fallbackIndex;
+      delete screen.dataset.fallbackSrcs;
+    }
+  }
+
+  function applyTVAnimation(stack, animation, variant) {
+    const variantId = animatedVariantId(variant);
+    const art = stack.querySelector('.sceneArt--watching_tv');
+    const screen = stack.querySelector('.sceneTVScreen');
+    if (!art || !screen) return;
+    const isLayered = animation.kind === 'shared' && tvLayoutsByVariant.has(variantId);
+    const artPaths = tvLayeredPaths(variantId);
+    stack.classList.toggle('is-layered', isLayered);
+    stack.dataset.tvKind = isLayered ? 'shared' : 'avatar';
+    stack.style.cssText = isLayered ? layoutStyle(variantId, 'tv') : '';
+    art.dataset.animation = isLayered ? animation.image.replace(/\.(?:gif|webp)$/i, '') : 'watching_tv';
+    art.dataset.fallbackIndex = '0';
+    art.dataset.fallbackSrcs = fallbackSources(artPaths);
+    art.dataset.canonicalSrc = tvLayeredPaths(variantId)[0];
+    art.src = artPaths[0];
+    if (isLayered) {
+      const screenPaths = sharedScreenPaths('tv', animation.image);
       screen.hidden = false;
       screen.dataset.fallbackIndex = '0';
       screen.dataset.fallbackSrcs = fallbackSources(screenPaths);
@@ -227,6 +289,18 @@
     }
   }
 
+  function refreshVisibleTVImages(changedVariants) {
+    if (typeof document === 'undefined') return;
+    for (const stack of document.querySelectorAll('.sceneTVStack[data-animation-key]')) {
+      const animationKey = stack.dataset.animationKey || '';
+      const variant = stack.dataset.avatarVariant || 'v0';
+      const variantId = animatedVariantId(variant);
+      if (!animationKey || !variantId || !changedVariants.has(variantId)) continue;
+      tvAnimationByAgent.delete(animationKey);
+      applyTVAnimation(stack, animationForPose('watching_tv', variant, animationKey), variant);
+    }
+  }
+
   function validLayout(layout) {
     if (!layout || typeof layout !== 'object') return null;
     const safe = {};
@@ -269,6 +343,12 @@
       const gamingChanged = nextGaming.length !== sharedGamingImages.length
         || nextGaming.some((image, index) => image !== sharedGamingImages[index]);
       sharedGamingImages = nextGaming;
+      const nextTV = Array.isArray(payload?.tvScreens)
+        ? payload.tvScreens.filter((image) => /^tv\d+\.(?:gif|webp)$/i.test(image))
+        : [];
+      const tvChanged = nextTV.length !== sharedTVImages.length
+        || nextTV.some((image, index) => image !== sharedTVImages[index]);
+      sharedTVImages = nextTV;
       workingCanvas = {
         width: Number(payload?.canvas?.width) || 384,
         height: Number(payload?.canvas?.height) || 512
@@ -295,6 +375,17 @@
           changedVariants.add(variantId);
         }
       }
+      let tvLayoutChanged = false;
+      for (const [variantId, candidate] of Object.entries(payload?.tvLayouts || {})) {
+        const layout = validLayout(candidate);
+        if (!layout) continue;
+        const current = tvLayoutsByVariant.get(variantId);
+        if (!current || ['left', 'top', 'width', 'height'].some((key) => current[key] !== layout[key])) {
+          tvLayoutsByVariant.set(variantId, layout);
+          tvLayoutChanged = true;
+          changedVariants.add(variantId);
+        }
+      }
       if (sharedChanged || layoutChanged) {
         for (const variantId of workingImagesByVariant.keys()) changedVariants.add(variantId);
       }
@@ -302,6 +393,10 @@
       if (gamingChanged || gamingLayoutChanged) {
         const gamingVariants = new Set(gamingLayoutsByVariant.keys());
         refreshVisibleGamingImages(gamingVariants);
+      }
+      if (tvChanged || tvLayoutChanged) {
+        const tvVariants = new Set(tvLayoutsByVariant.keys());
+        refreshVisibleTVImages(tvVariants);
       }
     } catch (_error) {
       // The canonical working animation remains available when discovery is offline.
@@ -345,6 +440,18 @@
       art.src = art.dataset.canonicalSrc || art.src;
       return;
     }
+    if (image.classList.contains('sceneTVScreen')) {
+      if (useNextFallback(image)) return;
+      const stack = image.closest('.sceneTVStack');
+      const art = stack?.querySelector('.sceneArt--watching_tv');
+      if (!stack || !art) return;
+      stack.classList.remove('is-layered');
+      stack.dataset.tvKind = 'avatar';
+      image.hidden = true;
+      image.removeAttribute('src');
+      art.src = art.dataset.canonicalSrc || art.src;
+      return;
+    }
     if (!image.classList.contains('sceneArt')) return;
     useNextFallback(image);
   }
@@ -374,12 +481,16 @@
     const variantId = animatedVariantId(variant);
     const usesWorkingAnimation = pose === 'working' || pose === 'meeting';
     const usesGamingAnimation = pose === 'gaming';
+    const usesTVAnimation = pose === 'watching_tv';
     const isLayered = usesWorkingAnimation && animation.kind === 'shared' && workingLayoutsByVariant.has(variantId);
     const isGamingLayered = usesGamingAnimation && animation.kind === 'shared' && gamingLayoutsByVariant.has(variantId);
+    const isTVLayered = usesTVAnimation && animation.kind === 'shared' && tvLayoutsByVariant.has(variantId);
     const paths = isLayered
       ? layeredPaths(variantId)
       : isGamingLayered
         ? gamingLayeredPaths(variantId)
+        : isTVLayered
+          ? tvLayeredPaths(variantId)
         : pathsForAvatarImage(animation.image, variant);
     const roleClass = esc(role || 'agent');
     const poseClass = esc(pose || 'working');
@@ -389,6 +500,7 @@
     const art = artMarkup({ poseClass, roleClass, paths, animation, animationKey, variant, title });
     const workingScreenPaths = isLayered ? sharedScreenPaths('working', animation.image) : [];
     const gamingScreenPaths = isGamingLayered ? sharedScreenPaths('gaming', animation.image) : [];
+    const tvScreenPaths = isTVLayered ? sharedScreenPaths('tv', animation.image) : [];
     const visual = usesWorkingAnimation && variantId
       ? `<span
           class="sceneWorkingStack${isLayered ? ' is-layered' : ''}"
@@ -410,6 +522,17 @@
         >
           <img class="sceneGamingScreen"${isGamingLayered ? ` src="${esc(gamingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(gamingScreenPaths))}" data-fallback-index="0"` : ' hidden'} alt="" draggable="false" />
           ${art.replace('draggable="false"', `data-canonical-src="${esc(variantImagePaths(variantId, 'gaming.gif')[0])}" draggable="false"`)}
+        </span>`
+        : usesTVAnimation && variantId
+          ? `<span
+          class="sceneTVStack${isTVLayered ? ' is-layered' : ''}"
+          data-tv-kind="${isTVLayered ? 'shared' : 'avatar'}"
+          data-animation-key="${esc(animationKey)}"
+          data-avatar-variant="${esc(variantKey(variant))}"
+          style="${isTVLayered ? layoutStyle(variantId, 'tv') : ''}"
+        >
+          <img class="sceneTVScreen"${isTVLayered ? ` src="${esc(tvScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(tvScreenPaths))}" data-fallback-index="0"` : ' hidden'} alt="" draggable="false" />
+          ${art.replace('draggable="false"', `data-canonical-src="${esc(tvLayeredPaths(variantId)[0])}" draggable="false"`)}
         </span>`
         : art;
     return `

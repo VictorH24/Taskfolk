@@ -204,8 +204,8 @@ function idlePose(agent) {
   const age = agentAgeClass(agent);
   if (age !== 'fresh' && age !== 'warm') return 'sleeping';
   const poses = age === 'fresh'
-    ? ['reading', 'walking', 'coffee', 'headphones', 'gaming']
-    : ['coffee', 'reading', 'gaming'];
+    ? ['reading', 'walking', 'coffee', 'headphones', 'gaming', 'watching_tv']
+    : ['coffee', 'reading', 'gaming', 'watching_tv'];
   const identity = `${agent.id || ''}:${agent.name || ''}`;
   const activity = agent.activity || {};
   const marker = activity.successAt || activity.updatedAt || agent.lastSeen || agent.updatedAt || 'unknown';

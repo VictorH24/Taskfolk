@@ -1257,7 +1257,8 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   image-rendering: auto;
 }
 .sceneFigure > .sceneWorkingStack,
-.sceneFigure > .sceneGamingStack {
+.sceneFigure > .sceneGamingStack,
+.sceneFigure > .sceneTVStack {
   position: relative;
   align-self: end;
   display: block;
@@ -1267,7 +1268,8 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   aspect-ratio: 3 / 4;
 }
 .sceneWorkingStack > .sceneArt,
-.sceneGamingStack > .sceneArt {
+.sceneGamingStack > .sceneArt,
+.sceneTVStack > .sceneArt {
   position: relative;
   z-index: 2;
   display: block;
@@ -1300,6 +1302,20 @@ body.preview-fullscreen .previewBody textarea { min-height: calc(100vh - 250px);
   display: block;
   width: var(--gaming-screen-width);
   height: var(--gaming-screen-height);
+  object-fit: fill;
+  image-rendering: auto;
+}
+.sceneTVScreen {
+  display: none;
+}
+.sceneTVStack.is-layered > .sceneTVScreen {
+  position: absolute;
+  z-index: 1;
+  left: var(--tv-screen-left);
+  top: var(--tv-screen-top);
+  display: block;
+  width: var(--tv-screen-width);
+  height: var(--tv-screen-height);
   object-fit: fill;
   image-rendering: auto;
 }

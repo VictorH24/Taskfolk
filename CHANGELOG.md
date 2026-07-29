@@ -4,6 +4,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.20 (July 28, 2026)
+- New gaming/working screens added
+- New watching TV status
+
 ## Version 1.0.19 (July 27, 2026)
 - Refresh cadence updated form 8 to 5 seconds
 - Achievement rank board with separate global and last-7-days rankings

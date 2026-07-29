@@ -440,8 +440,8 @@ function idlePose(agent) {
   }
 
   const poses = age === 'fresh'
-    ? ['reading', 'walking', 'coffee', 'headphones', 'gaming']
-    : ['coffee', 'reading', 'gaming'];
+    ? ['reading', 'walking', 'coffee', 'headphones', 'gaming', 'watching_tv']
+    : ['coffee', 'reading', 'gaming', 'watching_tv'];
   const episode = idleEpisodeKey(agent, age);
   const history = idlePoseHistory();
   const previous = history[identity];
@@ -479,7 +479,7 @@ function displayedPoseEpisode(agent, pose) {
 }
 
 function reportPoseAchievement(agent, pose) {
-  if (randomStatusMode || !['coffee', 'reading', 'gaming', 'headphones', 'music', 'walking'].includes(pose)) return;
+  if (randomStatusMode || !['coffee', 'reading', 'gaming', 'watching_tv', 'headphones', 'music', 'walking'].includes(pose)) return;
   const key = String(agent.avatarAssignmentKey || agent.id || '').trim();
   if (!key) return;
   const episode = displayedPoseEpisode(agent, pose);

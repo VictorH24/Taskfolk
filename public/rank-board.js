@@ -79,9 +79,10 @@ function renderSummary(achievements) {
     coffees: summary.coffees + (Number(entry.coffeeCount) || 0),
     books: summary.books + (Number(entry.booksRead) || 0),
     games: summary.games + (Number(entry.gamesCompleted) || 0),
+    moviesShows: summary.moviesShows + (Number(entry.moviesShowsWatched) || 0),
     music: summary.music + (Number(entry.musicCount) || 0),
     steps: summary.steps + (Number(entry.stepCount) || 0)
-  }), { activeMs: 0, successes: 0, approvals: 0, blocked: 0, coffees: 0, books: 0, games: 0, music: 0, steps: 0 });
+  }), { activeMs: 0, successes: 0, approvals: 0, blocked: 0, coffees: 0, books: 0, games: 0, moviesShows: 0, music: 0, steps: 0 });
   rankBoardSummary.innerHTML = `
     <article><strong>${formatNumber(achievements.length)}</strong><span>Ranked agents</span></article>
     <article><strong>${esc(achievementDuration(totals.activeMs))}</strong><span>Total worked</span></article>
@@ -91,6 +92,7 @@ function renderSummary(achievements) {
     <article><strong>☕ ${formatNumber(totals.coffees)}</strong><span>Coffees enjoyed</span></article>
     <article><strong>📚 ${formatBooks(totals.books)}</strong><span>Books read</span></article>
     <article><strong>🎮 ${formatBooks(totals.games)}</strong><span>Games completed</span></article>
+    <article><strong>📺 ${formatBooks(totals.moviesShows)}</strong><span>Movies/shows watched</span></article>
     <article><strong>🎵 ${formatNumber(totals.music)}</strong><span>Music listened</span></article>
     <article><strong>👟 ${formatNumber(totals.steps)}</strong><span>Steps walked</span></article>`;
 }
@@ -133,6 +135,7 @@ function renderRankBoard(data = {}) {
         <span title="Coffees enjoyed">☕ <b>${formatNumber(entry.coffeeCount)}</b></span>
         <span title="Books read">📚 <b>${formatBooks(entry.booksRead)}</b></span>
         <span title="Games completed">🎮 <b>${formatBooks(entry.gamesCompleted)}</b></span>
+        <span title="Movies or shows watched">📺 <b>${formatBooks(entry.moviesShowsWatched)}</b></span>
         <span title="Music listened">🎵 <b>${formatNumber(entry.musicCount)}</b></span>
         <span title="Steps walked">👟 <b>${formatNumber(entry.stepCount)}</b></span>
       </div></td>
@@ -171,7 +174,7 @@ rankBoardRows.addEventListener('click', async (event) => {
   const key = button.dataset.resetAchievement;
   const name = button.dataset.agentName || key;
   const confirmed = window.confirm(
-    `Reset achievement counters for ${name}?\n\nThis permanently resets worked time, successes, approvals, blocked events, coffees, books, games, music, and steps to zero. This action cannot be undone.`
+    `Reset achievement counters for ${name}?\n\nThis permanently resets worked time, successes, approvals, blocked events, coffees, books, games, movies/shows, music, and steps to zero. This action cannot be undone.`
   );
   if (!confirmed) return;
   button.disabled = true;
