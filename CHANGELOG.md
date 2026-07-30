@@ -2,7 +2,11 @@
 
 Notable changes to Taskfolk are recorded here. Add new entries under **Unreleased**, then move them into a version dated section when released.
 
-## Unreleased
+## Version 1.0.22 (July 29, 2026)
+- Add Cursor agent
+- Handling of Network error as blocked in codex
+- Allow to delete agent from rankboard when disconnected
+- Add failover to TV screen
 
 ## Version 1.0.21 (July 28, 2026)
 - New TV-screens added

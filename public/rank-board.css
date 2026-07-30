@@ -147,6 +147,13 @@
   border-color: color-mix(in srgb, var(--danger), transparent 45%);
 }
 
+.rankBoardActions {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  white-space: nowrap;
+}
+
 .rankBoardAgent strong,
 .rankBoardAgent span {
   display: block;

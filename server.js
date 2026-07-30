@@ -1884,10 +1884,11 @@ function achievementMode(agent = {}) {
   return 'other';
 }
 
-function publicAchievement(key, entry, rank = null, stats = entry) {
+function publicAchievement(key, entry, rank = null, stats = entry, available = true) {
   return {
     key,
     ...(rank === null ? {} : { rank }),
+    available,
     name: entry.name,
     source: entry.source,
     avatarVariant: entry.avatarVariant,
@@ -1905,7 +1906,7 @@ function publicAchievement(key, entry, rank = null, stats = entry) {
   };
 }
 
-function rankedAchievements(entries, { weekly = false, nowMs = Date.now() } = {}) {
+function rankedAchievements(entries, { weekly = false, nowMs = Date.now(), availableKeys = new Set() } = {}) {
   return Object.entries(entries)
     .map(([key, entry]) => [key, entry, weekly ? achievementWeeklyStats(entry, nowMs) : entry])
     .sort(([leftKey, left, leftStats], [rightKey, right, rightStats]) => (
@@ -1915,7 +1916,13 @@ function rankedAchievements(entries, { weekly = false, nowMs = Date.now() } = {}
       || left.name.localeCompare(right.name)
       || leftKey.localeCompare(rightKey)
     ))
-    .map(([key, entry, stats], index) => publicAchievement(key, entry, index + 1, stats));
+    .map(([key, entry, stats], index) => publicAchievement(
+      key,
+      entry,
+      index + 1,
+      stats,
+      availableKeys.has(key)
+    ));
 }
 
 async function updateAgentAchievementsNow(agents, nowMs = Date.now()) {
@@ -1962,8 +1969,8 @@ async function updateAgentAchievementsNow(agents, nowMs = Date.now()) {
     ? await writeAgentAchievements(achievements)
     : achievements;
   return {
-    global: rankedAchievements(written.agents, { nowMs }),
-    last7Days: rankedAchievements(written.agents, { weekly: true, nowMs })
+    global: rankedAchievements(written.agents, { nowMs, availableKeys: presentKeys }),
+    last7Days: rankedAchievements(written.agents, { weekly: true, nowMs, availableKeys: presentKeys })
   };
 }
 
@@ -2775,6 +2782,38 @@ app.post('/api/achievements/:key/reset', async (req, res, next) => {
     const achievement = await reset;
     if (!achievement) return res.status(404).json({ error: 'Agent achievement record not found' });
     res.json({ path: AGENT_ACHIEVEMENTS_PATH, achievement });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/achievements/:key', async (req, res, next) => {
+  try {
+    if (req.body?.confirm !== true) {
+      return res.status(400).json({ error: 'Delete confirmation is required' });
+    }
+    const key = String(req.params.key || '').trim();
+    if (!key) return res.status(400).json({ error: 'Agent key is required' });
+    const removal = achievementUpdateQueue.then(async () => {
+      const availableKeys = new Set((await achievementTrackingAgents())
+        .map((agent) => String(agent.avatarAssignmentKey || agent.id || '').trim())
+        .filter(Boolean));
+      if (availableKeys.has(key)) return { available: true };
+      const achievements = await readAgentAchievements();
+      if (!achievements.agents[key]) return { missing: true };
+      delete achievements.agents[key];
+      await writeAgentAchievements(achievements);
+      return { deleted: true };
+    });
+    achievementUpdateQueue = removal.catch((error) => {
+      console.warn(`Unable to delete agent achievements: ${error.message}`);
+    });
+    const result = await removal;
+    if (result.available) {
+      return res.status(409).json({ error: 'Available agents cannot be deleted from the Rank Board' });
+    }
+    if (result.missing) return res.status(404).json({ error: 'Agent achievement record not found' });
+    res.json({ path: AGENT_ACHIEVEMENTS_PATH, key, deleted: true });
   } catch (err) {
     next(err);
   }

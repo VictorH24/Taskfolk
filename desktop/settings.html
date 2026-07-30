@@ -159,6 +159,20 @@
       </section>
       <section class="integrationField">
         <label class="checkRow">
+          <input id="cursorEnabled" name="cursorEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/cursor.png" alt="" />Track Cursor agents</span>
+        </label>
+        <label id="cursorGroupingField">
+          <span>Cursor agents</span>
+          <select id="cursorGrouping" name="cursorGrouping">
+            <option value="single">One agent for all projects</option>
+            <option value="project">One agent per project</option>
+          </select>
+          <small>Reads local conversation titles, project identity, model, timestamps, and lifecycle flags only. Prompt bodies, responses, previews, context, credentials, and encryption data stay private.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
           <input id="codexEnabled" name="codexEnabled" type="checkbox" />
           <span class="integrationLabel"><img class="integrationIcon" src="./assets/codex.png" alt="" />Track Codex Desktop and CLI tasks</span>
         </label>

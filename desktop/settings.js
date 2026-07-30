@@ -39,6 +39,9 @@ const openClawTestStatus = document.querySelector('#openClawTestStatus');
 const vsCodeCopilotEnabledInput = document.querySelector('#vsCodeCopilotEnabled');
 const vsCodeCopilotGroupingField = document.querySelector('#vsCodeCopilotGroupingField');
 const vsCodeCopilotGroupingInput = document.querySelector('#vsCodeCopilotGrouping');
+const cursorEnabledInput = document.querySelector('#cursorEnabled');
+const cursorGroupingField = document.querySelector('#cursorGroupingField');
+const cursorGroupingInput = document.querySelector('#cursorGrouping');
 const codexEnabledInput = document.querySelector('#codexEnabled');
 const codexGroupingField = document.querySelector('#codexGroupingField');
 const codexGroupingInput = document.querySelector('#codexGrouping');
@@ -102,6 +105,10 @@ function updateOpenCodeFields() {
 
 function updateVsCodeCopilotFields() {
   vsCodeCopilotGroupingField.classList.toggle('hidden', !vsCodeCopilotEnabledInput.checked);
+}
+
+function updateCursorFields() {
+  cursorGroupingField.classList.toggle('hidden', !cursorEnabledInput.checked);
 }
 
 function updateCodexFields() {
@@ -191,6 +198,8 @@ async function initialize() {
     : 'Only if gateway password auth is enabled';
   vsCodeCopilotEnabledInput.checked = Boolean(settings.vsCodeCopilotEnabled);
   vsCodeCopilotGroupingInput.value = settings.vsCodeCopilotGrouping === 'single' ? 'single' : 'project';
+  cursorEnabledInput.checked = Boolean(settings.cursorEnabled);
+  cursorGroupingInput.value = settings.cursorGrouping === 'single' ? 'single' : 'project';
   codexEnabledInput.checked = Boolean(settings.codexEnabled);
   codexGroupingInput.value = settings.codexGrouping === 'single' ? 'single' : 'project';
   claudeEnabledInput.checked = Boolean(settings.claudeEnabled);
@@ -223,6 +232,7 @@ async function initialize() {
   updateOpenCodeFields();
   updateOpenClawFields();
   updateVsCodeCopilotFields();
+  updateCursorFields();
   updateCodexFields();
   updateClaudeFields();
   updateGeminiFields();
@@ -246,6 +256,7 @@ opacityInput.addEventListener('input', updateOpacityLabel);
 openCodeEnabledInput.addEventListener('change', updateOpenCodeFields);
 openClawEnabledInput.addEventListener('change', updateOpenClawFields);
 vsCodeCopilotEnabledInput.addEventListener('change', updateVsCodeCopilotFields);
+cursorEnabledInput.addEventListener('change', updateCursorFields);
 codexEnabledInput.addEventListener('change', updateCodexFields);
 claudeEnabledInput.addEventListener('change', updateClaudeFields);
 geminiEnabledInput.addEventListener('change', updateGeminiFields);
@@ -377,6 +388,8 @@ form.addEventListener('submit', async (event) => {
       openClawPassword: openClawPasswordInput.value,
       vsCodeCopilotEnabled: vsCodeCopilotEnabledInput.checked,
       vsCodeCopilotGrouping: vsCodeCopilotGroupingInput.value,
+      cursorEnabled: cursorEnabledInput.checked,
+      cursorGrouping: cursorGroupingInput.value,
       codexEnabled: codexEnabledInput.checked,
       codexGrouping: codexGroupingInput.value,
       claudeEnabled: claudeEnabledInput.checked,

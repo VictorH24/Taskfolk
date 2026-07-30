@@ -87,6 +87,13 @@ You can enable one or several integrations in Setup. For project-based tools, **
 
 No extra VS Code extension or Copilot token is required. Taskfolk detects non-empty chats while VS Code or VS Code Insiders is running.
 
+### Cursor
+
+1. Enable **Track Cursor agents**.
+2. Choose **One agent per project** or **One agent for all projects**.
+
+No Cursor API key, hook, or extra extension is required. Cursor Desktop must be running for its agents to appear. Taskfolk reads only local conversation titles, project identity, model, timestamps, generation and queue state, changed-file count, and approval or plan-review flags. It does not select or publish prompt bodies, responses, previews, context, credentials, or encryption data.
+
 ### Codex Desktop and CLI
 
 1. Enable **Track Codex Desktop and CLI tasks**.

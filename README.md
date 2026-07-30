@@ -26,7 +26,7 @@ npm run desktop
 
 On first launch, choose how the companion gets its data:
 
-- **Run in this app** starts a private Taskfolk server automatically. No separate server is required. This mode supports local or remote OpenClaw gateways plus OpenCode, Codex, Claude, Gemini CLI, Gemini Code Assist Agent mode, and Visual Studio Code Copilot activity.
+- **Run in this app** starts a private Taskfolk server automatically. No separate server is required. This mode supports local or remote OpenClaw gateways plus OpenCode, Cursor, Codex, Claude, Gemini CLI, Gemini Code Assist Agent mode, and Visual Studio Code Copilot activity.
 - **Connect to a remote server** connects the companion to an existing Taskfolk instance using its URL and gateway credentials.
 
 The companion can display the complete office or one live avatar on a transparent background. Drag it anywhere, resize it, adjust its opacity, keep it above other windows, or leave it running from the tray or menu bar. Window settings are remembered between launches.
@@ -53,6 +53,7 @@ These avatars animate in the companion as their live state changes:
 
 - **OpenCode Desktop and terminal sessions** — detects projects, session state, model, agent, and activity timestamps. For terminal sessions, run `opencode --port 4096` so the companion can connect.
 - **Visual Studio Code Copilot chats** — detects active chats in VS Code and VS Code Insiders without an extra extension, server, or Copilot token.
+- **Cursor agents** — detects local Cursor project activity, models, generation state, queued work, and approval or plan-review requests from Cursor's local read-only metadata.
 - **Codex Desktop and CLI tasks** — detects active Codex work from its local, read-only task index and lifecycle event metadata without an API token.
 - **Gemini CLI and Gemini Code Assist Agent mode** — detects Gemini CLI projects from local session metadata and Code Assist Agent-mode workspaces from its local VS Code agent process.
 - **OpenClaw gateway** — connects to a local or remote OpenClaw instance and reads configured agents plus safe session metadata over the gateway's read-only RPCs.
@@ -68,7 +69,7 @@ The packaged desktop app uses the universal digital-agent icon at `desktop/icon.
 
 Choose one of two office sources:
 
-- **Run in this app** starts a private Taskfolk server on a loopback port selected during the first launch and saved for reuse on later launches. It requires no separately running Taskfolk server and offers local OpenClaw, OpenCode, Codex, Claude, Gemini, Antigravity, Ollama, LM Studio, and VS Code Copilot agents. The folder-view module is disabled by default in this mode. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
+- **Run in this app** starts a private Taskfolk server on a loopback port selected during the first launch and saved for reuse on later launches. It requires no separately running Taskfolk server and offers local OpenClaw, OpenCode, Cursor, Codex, Claude, Gemini, Antigravity, Ollama, LM Studio, and VS Code Copilot agents. The folder-view module is disabled by default in this mode. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
 - **Connect to a remote server** uses a running Taskfolk URL (for example `http://127.0.0.1:3000`), its gateway token, and optional gateway password. The companion exchanges those credentials for the normal Taskfolk session cookie.
 
 Remote credentials are never placed in the URL and are encrypted with Electron `safeStorage` when operating-system encryption is available. You can switch office sources later from **Setup**.
@@ -127,6 +128,12 @@ Taskfolk requests `agents.list` and `sessions.list` with the `operator.read` sco
 The desktop companion can also publish GitHub Copilot chat activity from Visual Studio Code and Visual Studio Code Insiders. In **Setup**, enable **Track Visual Studio Code Copilot chats**, then choose **One agent per project** or **One agent for all projects**. No Copilot server, token, or additional VS Code extension is required.
 
 This connector reads VS Code's local, machine-scoped chat index and session file timestamps in read-only mode. It uses only the workspace identity, session title, empty-session flag, and timestamps needed to build Taskfolk agents. It does not load or publish prompt bodies, response text, tool output, attachments, or Copilot credentials. Sessions are shown only while VS Code is running, empty chats are ignored, and each workspace keeps a stable avatar configuration key across chat sessions and restarts.
+
+### Track Cursor agents
+
+In **Setup**, enable **Track Cursor agents**, then choose **One agent per project** or **One agent for all projects**. No Cursor API key, server, hook, or extra extension is required. Taskfolk discovers Cursor's local state database from the platform's standard Cursor user-data directory and shows activity only while Cursor Desktop is running.
+
+The connector opens Cursor's conversation index read-only and uses a strict field whitelist for conversation ID and title, workspace or local project identity, model, timestamps, local or cloud location, generation and queue counts, changed-file count, and approval or plan-review lifecycle flags. Drafts, archived conversations, and internal subagents are ignored. Prompt and response bodies, previews, context, tool data, attachments, authentication records, and encryption material are never selected or published. Because the database is an internal Cursor interface, unsupported schema versions fail closed and publish no agents. Managed launches may set `CURSOR_USER_DATA_DIR` when Cursor uses a nonstandard user-data directory.
 
 ### Track Codex Desktop and CLI tasks
 

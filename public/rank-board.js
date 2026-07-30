@@ -126,7 +126,7 @@ function renderRankBoard(data = {}) {
   rankBoardRows.innerHTML = achievements.map((entry) => `
     <tr>
       <td><strong>#${formatNumber(entry.rank)}</strong></td>
-      <td class="rankBoardAgent"><strong>${esc(entry.name)}</strong><span>${esc(entry.source || 'agent')}</span></td>
+      <td class="rankBoardAgent"><strong>${esc(entry.name)}</strong><span>${esc(entry.source || 'agent')}${entry.available === false ? ' · unavailable' : ''}</span></td>
       <td>${esc(achievementDuration(entry.activeMs))}</td>
       <td>${formatNumber(entry.successCount)}</td>
       <td>${formatNumber(entry.approvalCount)}</td>
@@ -139,7 +139,10 @@ function renderRankBoard(data = {}) {
         <span title="Music listened">🎵 <b>${formatNumber(entry.musicCount)}</b></span>
         <span title="Steps walked">👟 <b>${formatNumber(entry.stepCount)}</b></span>
       </div></td>
-      <td><button class="secondary dangerButton" type="button" data-reset-achievement="${esc(entry.key)}" data-agent-name="${esc(entry.name)}">Reset counters</button></td>
+      <td><div class="rankBoardActions">
+        <button class="secondary dangerButton" type="button" data-reset-achievement="${esc(entry.key)}" data-agent-name="${esc(entry.name)}">${entry.available === false ? 'Reset' : 'Reset counters'}</button>
+        ${entry.available === false ? `<button class="secondary dangerButton" type="button" data-delete-achievement="${esc(entry.key)}" data-agent-name="${esc(entry.name)}">Delete</button>` : ''}
+      </div></td>
     </tr>
   `).join('');
 }
@@ -169,6 +172,29 @@ async function loadRankBoard() {
 }
 
 rankBoardRows.addEventListener('click', async (event) => {
+  const deleteButton = event.target.closest('[data-delete-achievement]');
+  if (deleteButton) {
+    const key = deleteButton.dataset.deleteAchievement;
+    const name = deleteButton.dataset.agentName || key;
+    const confirmed = window.confirm(
+      `Delete ${name} from the Rank Board?\n\nThis permanently removes the agent and all of its stats from agent-achievements.json. This action cannot be undone.`
+    );
+    if (!confirmed) return;
+    deleteButton.disabled = true;
+    rankBoardStatus.textContent = `Deleting ${name} from the Rank Board…`;
+    try {
+      await api(`/api/achievements/${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ confirm: true })
+      });
+      await loadRankBoard();
+      rankBoardStatus.textContent = `${name} was deleted from the Rank Board.`;
+    } catch (error) {
+      rankBoardStatus.textContent = `Unable to delete agent: ${error.message}`;
+      deleteButton.disabled = false;
+    }
+    return;
+  }
   const button = event.target.closest('[data-reset-achievement]');
   if (!button) return;
   const key = button.dataset.resetAchievement;

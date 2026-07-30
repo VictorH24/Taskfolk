@@ -119,7 +119,11 @@ function readRolloutActivity(rolloutPath) {
         if (record?.type === 'event_msg') {
           const eventType = String(record?.payload?.type || '');
           if (['task_started', 'task_complete', 'turn_aborted', 'stream_error', 'error'].includes(eventType)) {
-            latestSignal = eventType;
+            // Codex can report transport failures as a completed task with a
+            // nested error instead of emitting a standalone stream_error.
+            latestSignal = eventType === 'task_complete' && record?.payload?.error
+              ? 'error'
+              : eventType;
           }
         }
       }

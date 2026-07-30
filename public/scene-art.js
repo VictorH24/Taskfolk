@@ -147,7 +147,7 @@
   function tvLayeredPaths(variantId) {
     return [
       `./avatar-scenes/variants/${encodeURIComponent(variantKey(variantId))}/watching_tv_alpha.png`,
-      ...variantImagePaths(variantId, 'working.gif')
+      ...variantImagePaths(variantId, 'gaming.gif')
     ];
   }
 

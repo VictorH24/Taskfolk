@@ -23,6 +23,10 @@ const {
   normalizeVsCodeCopilotGrouping
 } = require('./providers/vscode-copilot.cjs');
 const {
+  fetchCursorAgents,
+  normalizeCursorGrouping
+} = require('./providers/cursor.cjs');
+const {
   fetchCodexAgents,
   normalizeCodexGrouping
 } = require('./providers/codex.cjs');
@@ -73,6 +77,7 @@ const OPENCODE_REFRESH_MS = 5_000;
 const OPENCODE_REQUEST_TIMEOUT_MS = 2_500;
 const RUNTIME_PUBLISH_TIMEOUT_MS = 5_000;
 const VSCODE_COPILOT_REFRESH_MS = 5_000;
+const CURSOR_REFRESH_MS = 5_000;
 const CODEX_REFRESH_MS = 5_000;
 const CLAUDE_REFRESH_MS = 5_000;
 const GEMINI_REFRESH_MS = 5_000;
@@ -138,6 +143,10 @@ let vsCodeCopilotTimer = null;
 let vsCodeCopilotSyncInFlight = false;
 let vsCodeCopilotPublished = false;
 let vsCodeCopilotLastError = '';
+let cursorTimer = null;
+let cursorSyncInFlight = false;
+let cursorPublished = false;
+let cursorLastError = '';
 let codexTimer = null;
 let codexSyncInFlight = false;
 let codexPublished = false;
@@ -1192,6 +1201,59 @@ function startVsCodeCopilotAdapter() {
   void syncVsCodeCopilotAdapter();
 }
 
+function scheduleCursorSync() {
+  clearTimeout(cursorTimer);
+  cursorTimer = null;
+  if (readConfig().cursorEnabled || cursorPublished) {
+    cursorTimer = setTimeout(syncCursorAdapter, CURSOR_REFRESH_MS);
+  }
+}
+
+async function syncCursorAdapter() {
+  if (cursorSyncInFlight) {
+    scheduleCursorSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
+  cursorSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.cursorEnabled) {
+      if (cursorPublished) await publishRuntimeAgents('cursor', [], config);
+      cursorPublished = false;
+      cursorLastError = '';
+      return;
+    }
+    const agents = await fetchCursorAgents({
+      grouping: normalizeCursorGrouping(config.cursorGrouping)
+    });
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    await publishRuntimeAgents('cursor', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    cursorPublished = agents.length > 0;
+    cursorLastError = '';
+  } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    const message = error?.message || 'Could not read Cursor activity.';
+    if (message !== cursorLastError) console.warn(`Cursor adapter: ${message}`);
+    cursorLastError = message;
+    if (cursorPublished) {
+      try { await publishRuntimeAgents('cursor', []); } catch {}
+      cursorPublished = false;
+    }
+  } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    cursorSyncInFlight = false;
+    scheduleCursorSync();
+  }
+}
+
+function startCursorAdapter() {
+  clearTimeout(cursorTimer);
+  cursorTimer = null;
+  void syncCursorAdapter();
+}
+
 function scheduleCodexSync() {
   clearTimeout(codexTimer);
   codexTimer = null;
@@ -1624,6 +1686,7 @@ function startOpenClawAdapter() {
 function startRuntimeAdapters() {
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
+  startCursorAdapter();
   startCodexAdapter();
   startClaudeAdapter();
   startGeminiAdapter();
@@ -1638,6 +1701,7 @@ function stopRuntimeAdapters() {
   for (const timer of [
     openCodeTimer,
     vsCodeCopilotTimer,
+    cursorTimer,
     codexTimer,
     claudeTimer,
     geminiTimer,
@@ -1648,6 +1712,7 @@ function stopRuntimeAdapters() {
   ]) clearTimeout(timer);
   openCodeTimer = null;
   vsCodeCopilotTimer = null;
+  cursorTimer = null;
   codexTimer = null;
   claudeTimer = null;
   geminiTimer = null;
@@ -1657,6 +1722,7 @@ function stopRuntimeAdapters() {
   openClawTimer = null;
   openCodeSyncInFlight = false;
   vsCodeCopilotSyncInFlight = false;
+  cursorSyncInFlight = false;
   codexSyncInFlight = false;
   claudeSyncInFlight = false;
   geminiSyncInFlight = false;
@@ -1671,6 +1737,7 @@ function restartRuntimeAdaptersAfterWake() {
   runtimeSyncGeneration += 1;
   openCodeSyncInFlight = false;
   vsCodeCopilotSyncInFlight = false;
+  cursorSyncInFlight = false;
   codexSyncInFlight = false;
   claudeSyncInFlight = false;
   geminiSyncInFlight = false;
@@ -1680,6 +1747,7 @@ function restartRuntimeAdaptersAfterWake() {
   openClawSyncInFlight = false;
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
+  startCursorAdapter();
   startCodexAdapter();
   startClaudeAdapter();
   startGeminiAdapter();
@@ -2500,6 +2568,8 @@ ipcMain.handle('settings:load', () => {
     openCodeCredentialsStored: Boolean(runtimeOpenCodeCredentials?.password || decrypt(config.encryptedOpenCodePassword)),
     vsCodeCopilotEnabled: Boolean(config.vsCodeCopilotEnabled),
     vsCodeCopilotGrouping: normalizeVsCodeCopilotGrouping(config.vsCodeCopilotGrouping),
+    cursorEnabled: Boolean(config.cursorEnabled),
+    cursorGrouping: normalizeCursorGrouping(config.cursorGrouping),
     codexEnabled: Boolean(config.codexEnabled),
     codexGrouping: normalizeCodexGrouping(config.codexGrouping),
     claudeEnabled: Boolean(config.claudeEnabled),
@@ -2796,6 +2866,8 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     encryptedOpenCodePassword: encrypt(runtimeOpenCodeCredentials.password),
     vsCodeCopilotEnabled: Boolean(input.vsCodeCopilotEnabled),
     vsCodeCopilotGrouping: normalizeVsCodeCopilotGrouping(input.vsCodeCopilotGrouping),
+    cursorEnabled: Boolean(input.cursorEnabled),
+    cursorGrouping: normalizeCursorGrouping(input.cursorGrouping),
     codexEnabled: Boolean(input.codexEnabled),
     codexGrouping: normalizeCodexGrouping(input.codexGrouping),
     claudeEnabled: Boolean(input.claudeEnabled),
