@@ -5,11 +5,17 @@ const os = require('node:os');
 const path = require('node:path');
 
 const ACTIVE_ACTIVITY_MS = 30_000;
+// VS Code persists the request completion marker before its chat UI has
+// necessarily finished committing the last reasoning/response updates. Keep
+// the agent working briefly so that persistence race cannot flash Success
+// while Copilot still shows "Considering".
+const COMPLETION_SETTLE_MS = 5_000;
 const DEFAULT_MAX_AGENTS = 24;
 const VSCODE_COPILOT_GROUPING_PROJECT = 'project';
 const VSCODE_COPILOT_GROUPING_SINGLE = 'single';
 const CHAT_INDEX_KEY = 'chat.ChatSessionStore.index';
 const SESSION_TAIL_BYTES = 256 * 1024;
+const AGENT_HOST_LOG_TAIL_BYTES = 512 * 1024;
 
 function defaultVsCodeWorkspaceStorageRoots({
   platform = process.platform,
@@ -27,6 +33,12 @@ function defaultVsCodeWorkspaceStorageRoots({
   }
   const configHome = env.XDG_CONFIG_HOME || path.join(home, '.config');
   return ['Code', 'Code - Insiders'].map((name) => path.join(configHome, name, 'User', 'workspaceStorage'));
+}
+
+function defaultVsCodeAgentHostLogRoots(workspaceStorageRoots = defaultVsCodeWorkspaceStorageRoots()) {
+  return [...new Set(workspaceStorageRoots
+    .filter((root) => path.basename(root) === 'workspaceStorage')
+    .map((root) => path.join(path.dirname(path.dirname(root)), 'logs')))];
 }
 
 function runProcess(file, args) {
@@ -108,6 +120,77 @@ function sessionFileMtime(workspaceStoragePath, sessionId) {
   return 0;
 }
 
+function readFileTail(filePath, maxBytes) {
+  let handle;
+  try {
+    handle = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(handle).size;
+    const length = Math.min(size, maxBytes);
+    if (!length) return '';
+    const buffer = Buffer.alloc(length);
+    fs.readSync(handle, buffer, 0, length, size - length);
+    return buffer.toString('utf8');
+  } catch {
+    return '';
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
+}
+
+function agentHostLogFiles(logRoots) {
+  const files = [];
+  for (const root of logRoots) {
+    let entries = [];
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const filePath = path.join(root, entry.name, 'agenthost.log');
+      try {
+        files.push({ filePath, mtimeMs: fs.statSync(filePath).mtimeMs });
+      } catch {}
+    }
+  }
+  return files
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, 16)
+    .map((entry) => entry.filePath);
+}
+
+function readCopilotAgentHostStates(logRoots) {
+  const events = new Map();
+  for (const filePath of agentHostLogFiles(logRoots)) {
+    for (const line of readFileTail(filePath, AGENT_HOST_LOG_TAIL_BYTES).split(/\r?\n/)) {
+      // Intentionally stop matching before any prompt or error body. TaskFolk
+      // retains only the timestamp, opaque session id, and lifecycle marker.
+      const match = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[\w+\] \[Copilot:([^\]]+)\] (sendMessage called:|Session error:|Session idle\b)/.exec(line);
+      if (!match) continue;
+      const timestamp = Date.parse(match[1].replace(' ', 'T'));
+      if (!Number.isFinite(timestamp)) continue;
+      const sessionId = match[2];
+      const state = events.get(sessionId) || { activeAt: 0, errorAt: 0, idleAt: 0 };
+      if (match[3] === 'sendMessage called:') state.activeAt = Math.max(state.activeAt, timestamp);
+      else if (match[3] === 'Session error:') state.errorAt = Math.max(state.errorAt, timestamp);
+      else state.idleAt = Math.max(state.idleAt, timestamp);
+      events.set(sessionId, state);
+    }
+  }
+
+  const states = new Map();
+  for (const [sessionId, event] of events) {
+    const updatedAt = Math.max(event.activeAt, event.errorAt, event.idleAt);
+    const status = event.errorAt > event.activeAt
+      ? 'blocked'
+      : (event.activeAt > event.idleAt ? 'active' : 'idle');
+    states.set(sessionId, { status, updatedAt });
+  }
+  return states;
+}
+
+function copilotAgentHostSessionKey(sessionId) {
+  const match = /^(?:agent-host-)?copilotcli:\/(.+)$/.exec(String(sessionId || ''));
+  return match?.[1] || '';
+}
+
 function setNestedValue(target, key, value) {
   if (!target || !Array.isArray(key) || !key.length) return;
   let current = target;
@@ -139,6 +222,16 @@ function responseNeedsApproval(response) {
   });
 }
 
+function responseIsStillThinking(response) {
+  if (!Array.isArray(response)) return false;
+  for (let index = response.length - 1; index >= 0; index -= 1) {
+    const item = response[index];
+    if (item?.kind !== 'thinking' || !item.id) continue;
+    return !Number.isFinite(item.reasoningDurationMs);
+  }
+  return false;
+}
+
 function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
   let sessionPath = '';
   for (const extension of ['jsonl', 'json']) {
@@ -161,6 +254,7 @@ function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
     const lines = buffer.toString('utf8').split(/\r?\n/);
     let latestRequest = -1;
     let latestState = null;
+    let latestResult = null;
     let latestResponse = [];
 
     function useRequest(request, index) {
@@ -169,6 +263,9 @@ function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
       latestState = request?.modelState && typeof request.modelState === 'object'
         ? request.modelState
         : null;
+      latestResult = request?.result && typeof request.result === 'object'
+        ? request.result
+        : (request?.responseErrorDetails ? { errorDetails: request.responseErrorDetails } : null);
       latestResponse = Array.isArray(request?.response) ? request.response : [];
     }
 
@@ -196,12 +293,17 @@ function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
       if (requestIndex > latestRequest) {
         latestRequest = requestIndex;
         latestState = null;
+        latestResult = null;
         latestResponse = [];
       }
       if (key[2] === 'modelState' && key.length === 3 && record.v && typeof record.v === 'object') {
         latestState = record.v;
       } else if (key[2] === 'modelState' && key[3] === 'completedAt') {
         latestState = { ...(latestState || {}), completedAt: record.v };
+      } else if (key[2] === 'result' && key.length === 3) {
+        latestResult = record.v && typeof record.v === 'object' ? record.v : null;
+      } else if (key[2] === 'responseErrorDetails' && key.length === 3) {
+        latestResult = { errorDetails: record.v };
       } else if (key[2] === 'response') {
         if (record.kind === 2 && key.length === 3 && Array.isArray(record.v)) {
           latestResponse.push(...record.v);
@@ -214,7 +316,9 @@ function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
     }
     return {
       modelState: latestState,
-      awaitingApproval: responseNeedsApproval(latestResponse)
+      awaitingApproval: responseNeedsApproval(latestResponse),
+      failed: Number(latestState?.value) === 3 || Boolean(latestResult?.errorDetails),
+      stillThinking: responseIsStillThinking(latestResponse)
     };
   } catch {
     return null;
@@ -227,10 +331,31 @@ function latestSessionModelState(workspaceStoragePath, sessionId) {
   return latestSessionRuntimeState(workspaceStoragePath, sessionId)?.modelState || null;
 }
 
-function sessionCompletionStatus(workspaceStoragePath, sessionId) {
-  const state = latestSessionModelState(workspaceStoragePath, sessionId);
+function modelStateStatus(state, nowMs = Date.now(), stillThinking = false, failed = false) {
+  if (failed) return 'blocked';
   if (!state) return null;
-  return state.completedAt ? 'idle' : 'active';
+  // VS Code model state 3 is a terminal request error. A failed response can
+  // leave its final thinking item unfinished, so the error must win over the
+  // streaming-reasoning signal.
+  if (Number(state.value) === 3) return 'blocked';
+  if (stillThinking) return 'active';
+  const completedAt = Number(state.completedAt) || 0;
+  if (!completedAt) return 'active';
+  return nowMs - completedAt >= COMPLETION_SETTLE_MS ? 'idle' : 'active';
+}
+
+function sessionCompletionStatus(workspaceStoragePath, sessionId, nowMs = Date.now()) {
+  const runtimeState = latestSessionRuntimeState(workspaceStoragePath, sessionId);
+  const fileMtimeMs = sessionFileMtime(workspaceStoragePath, sessionId);
+  const stillThinking = runtimeState?.stillThinking
+    && (!runtimeState?.modelState?.completedAt
+      || (fileMtimeMs > 0 && nowMs - fileMtimeMs <= ACTIVE_ACTIVITY_MS));
+  return modelStateStatus(
+    runtimeState?.modelState,
+    nowMs,
+    stillThinking,
+    runtimeState?.failed
+  );
 }
 
 function sessionNeedsApproval(workspaceStoragePath, sessionId) {
@@ -246,18 +371,30 @@ function projectIdentity(reference) {
   };
 }
 
-function normalizeSession(entry, reference, workspaceStoragePath, nowMs) {
+function normalizeSession(entry, reference, workspaceStoragePath, nowMs, agentHostStates = new Map()) {
   const sessionId = String(entry?.sessionId || '').trim();
   if (!sessionId || !reference || entry?.isEmpty === true) return null;
   const lastMessageMs = Number(entry?.lastMessageDate) || 0;
   const fileMtimeMs = sessionFileMtime(workspaceStoragePath, sessionId);
-  const updatedAt = Math.max(lastMessageMs, fileMtimeMs);
+  const agentHostState = agentHostStates.get(copilotAgentHostSessionKey(sessionId));
+  const updatedAt = Math.max(lastMessageMs, fileMtimeMs, agentHostState?.updatedAt || 0);
+  // Agent Host can refresh the chat index merely by restoring an old session.
+  // Its log timestamp is the authoritative lifecycle time when available.
+  const statusUpdatedAt = agentHostState?.updatedAt || updatedAt;
   const runtimeState = latestSessionRuntimeState(workspaceStoragePath, sessionId);
   const awaitingApproval = runtimeState?.awaitingApproval === true;
-  const explicitStatus = runtimeState?.modelState
-    ? (runtimeState.modelState.completedAt ? 'idle' : 'active')
-    : null;
-  const status = awaitingApproval
+  const stillThinking = runtimeState?.stillThinking
+    && (!runtimeState?.modelState?.completedAt
+      || (fileMtimeMs > 0 && nowMs - fileMtimeMs <= ACTIVE_ACTIVITY_MS));
+  const explicitStatus = agentHostState?.status || modelStateStatus(
+      runtimeState?.modelState,
+      nowMs,
+      stillThinking,
+      runtimeState?.failed
+    );
+  const failed = explicitStatus === 'blocked';
+  const needsApproval = awaitingApproval && !failed;
+  const status = needsApproval
     ? 'blocked'
     : (explicitStatus || (updatedAt > 0 && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS ? 'active' : 'idle'));
   const workspace = workspaceDetails(reference);
@@ -269,17 +406,21 @@ function normalizeSession(entry, reference, workspaceStoragePath, nowMs) {
     role: 'VS Code · GitHub Copilot',
     status,
     task: (title && title !== 'New Chat' ? title : `Copilot chat in ${workspace.name}`).slice(0, 240),
-    lastSeen: new Date(updatedAt || nowMs).toISOString(),
+    lastSeen: new Date(statusUpdatedAt || nowMs).toISOString(),
     workspacePath: workspace.workspacePath,
     source: 'vscode-copilot',
     avatarAssignmentKey: project.assignmentKey,
-    displayState: awaitingApproval ? 'Needs approval' : (status === 'active' ? 'Working' : 'Idle'),
-    pose: awaitingApproval ? 'approval' : (status === 'active' ? 'working' : null),
+    displayState: needsApproval
+      ? 'Needs approval'
+      : (status === 'blocked' ? 'Blocked' : (status === 'active' ? 'Working' : 'Idle')),
+    pose: needsApproval ? 'approval' : (status === 'active' ? 'working' : null),
     activity: {
       provider: 'vscode-copilot',
-      status: awaitingApproval ? 'approval' : (status === 'active' ? 'busy' : 'idle'),
+      status: needsApproval
+        ? 'approval'
+        : (status === 'blocked' ? 'error' : (status === 'active' ? 'busy' : 'idle')),
       derivedStatus: status,
-      updatedAt: updatedAt || nowMs,
+      updatedAt: statusUpdatedAt || nowMs,
       sessionLabel: title && title !== 'New Chat' ? title.slice(0, 120) : 'Copilot chat',
       sessionKeyShort: sessionId,
       client: 'vscode'
@@ -311,6 +452,7 @@ function workspaceStorageDirectories(roots) {
 
 async function fetchVsCodeCopilotAgents({
   workspaceStorageRoots = defaultVsCodeWorkspaceStorageRoots(),
+  agentHostLogRoots = defaultVsCodeAgentHostLogRoots(workspaceStorageRoots),
   DatabaseSyncImpl,
   processRunning,
   maxAgents = DEFAULT_MAX_AGENTS,
@@ -320,16 +462,29 @@ async function fetchVsCodeCopilotAgents({
   const running = processRunning === undefined ? await isVsCodeRunning() : Boolean(processRunning);
   if (!running) return [];
   const nowMs = now();
+  const agentHostStates = readCopilotAgentHostStates(agentHostLogRoots);
   const agents = [];
   for (const workspaceStoragePath of workspaceStorageDirectories(workspaceStorageRoots)) {
     const reference = readWorkspaceReference(workspaceStoragePath);
     if (!reference) continue;
     let entries;
     try { entries = readChatIndex(workspaceStoragePath, DatabaseSyncImpl); } catch { continue; }
-    const latest = entries
+    const candidates = entries
       .filter((entry) => entry?.isEmpty !== true)
-      .sort((left, right) => Number(right?.lastMessageDate || 0) - Number(left?.lastMessageDate || 0))[0];
-    const agent = normalizeSession(latest, reference, workspaceStoragePath, nowMs);
+      .map((entry) => normalizeSession(
+        entry,
+        reference,
+        workspaceStoragePath,
+        nowMs,
+        agentHostStates
+      ))
+      .filter(Boolean);
+    const agent = candidates.reduce((selected, candidate) => {
+      if (!selected) return candidate;
+      return Number(candidate.activity?.updatedAt || 0) > Number(selected.activity?.updatedAt || 0)
+        ? candidate
+        : selected;
+    }, null);
     if (agent) agents.push(agent);
   }
   agents.sort((left, right) => {
@@ -338,7 +493,13 @@ async function fetchVsCodeCopilotAgents({
     return statusDelta || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
   });
   if (normalizeVsCodeCopilotGrouping(grouping) === VSCODE_COPILOT_GROUPING_SINGLE) {
-    return agents[0] ? [singleVsCodeCopilotAgent(agents[0])] : [];
+    const latest = agents.reduce((selected, agent) => {
+      if (!selected) return agent;
+      return Number(agent.activity?.updatedAt || 0) > Number(selected.activity?.updatedAt || 0)
+        ? agent
+        : selected;
+    }, null);
+    return latest ? [singleVsCodeCopilotAgent(latest)] : [];
   }
   const limit = Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, 24));
   return agents.slice(0, limit);
@@ -346,10 +507,13 @@ async function fetchVsCodeCopilotAgents({
 
 module.exports = {
   ACTIVE_ACTIVITY_MS,
+  AGENT_HOST_LOG_TAIL_BYTES,
   CHAT_INDEX_KEY,
+  COMPLETION_SETTLE_MS,
   VSCODE_COPILOT_GROUPING_PROJECT,
   VSCODE_COPILOT_GROUPING_SINGLE,
   defaultVsCodeWorkspaceStorageRoots,
+  defaultVsCodeAgentHostLogRoots,
   fetchVsCodeCopilotAgents,
   isVsCodeRunning,
   normalizeSession,

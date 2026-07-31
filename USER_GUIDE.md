@@ -85,7 +85,7 @@ You can enable one or several integrations in Setup. For project-based tools, **
 1. Enable **Track Visual Studio Code Copilot chats**.
 2. Choose **One agent per project** or **One agent for all projects**.
 
-No extra VS Code extension or Copilot token is required. Taskfolk detects non-empty chats while VS Code or VS Code Insiders is running.
+No extra VS Code extension or Copilot token is required. Taskfolk detects non-empty chats while VS Code or VS Code Insiders is running. For newer agent-host sessions without a transcript file, Taskfolk reads only send, error, and idle lifecycle markers from VS Code's local agent-host log; prompt and error text are not retained or published.
 
 ### Cursor
 

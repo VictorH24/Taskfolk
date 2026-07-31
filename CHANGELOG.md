@@ -2,6 +2,9 @@
 
 Notable changes to Taskfolk are recorded here. Add new entries under **Unreleased**, then move them into a version dated section when released.
 
+## Version 1.0.23 (July 30, 2026)
+- Fix VScode Copilot status detection
+
 ## Version 1.0.22 (July 29, 2026)
 - Add Cursor agent
 - Handling of Network error as blocked in codex

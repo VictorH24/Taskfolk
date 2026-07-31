@@ -127,7 +127,7 @@ Taskfolk requests `agents.list` and `sessions.list` with the `operator.read` sco
 
 The desktop companion can also publish GitHub Copilot chat activity from Visual Studio Code and Visual Studio Code Insiders. In **Setup**, enable **Track Visual Studio Code Copilot chats**, then choose **One agent per project** or **One agent for all projects**. No Copilot server, token, or additional VS Code extension is required.
 
-This connector reads VS Code's local, machine-scoped chat index and session file timestamps in read-only mode. It uses only the workspace identity, session title, empty-session flag, and timestamps needed to build Taskfolk agents. It does not load or publish prompt bodies, response text, tool output, attachments, or Copilot credentials. Sessions are shown only while VS Code is running, empty chats are ignored, and each workspace keeps a stable avatar configuration key across chat sessions and restarts.
+This connector reads VS Code's local, machine-scoped chat index and session file timestamps in read-only mode. For newer Copilot agent-host sessions that do not create a chat transcript file, it also reads only send, error, and idle lifecycle markers from the tail of VS Code's local agent-host log. It uses only the workspace identity, session title, empty-session flag, opaque session identity, and timestamps needed to build Taskfolk agents. It does not retain or publish prompt bodies, response or error text, tool output, attachments, or Copilot credentials. Sessions are shown only while VS Code is running, empty chats are ignored, and each workspace keeps a stable avatar configuration key across chat sessions and restarts.
 
 ### Track Cursor agents
 
