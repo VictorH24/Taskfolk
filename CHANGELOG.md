@@ -4,6 +4,11 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.25 (August 1, 2026)
+- Add first-class Goose Desktop and CLI session tracking with project and combined grouping
+- Add first-class Buzz managed-agent tracking with privacy-safe lifecycle detection
+- Add branded Goose and Buzz integration icons
+
 ## Version 1.0.24 (July 31, 2026)
 - Discover Codex sessions through ACP before using the read-only local-index fallback
 - Discover VScode Copilot (in agents) using AHP

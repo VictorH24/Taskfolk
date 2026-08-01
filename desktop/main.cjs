@@ -34,6 +34,14 @@ const {
   normalizeCodexGrouping
 } = require('./providers/codex.cjs');
 const {
+  fetchGooseAgents,
+  normalizeGooseGrouping
+} = require('./providers/goose.cjs');
+const {
+  fetchBuzzAgents,
+  normalizeBuzzGrouping
+} = require('./providers/buzz.cjs');
+const {
   fetchClaudeAgents,
   normalizeClaudeGrouping
 } = require('./providers/claude.cjs');
@@ -82,6 +90,8 @@ const RUNTIME_PUBLISH_TIMEOUT_MS = 5_000;
 const VSCODE_COPILOT_REFRESH_MS = 1_000;
 const CURSOR_REFRESH_MS = 5_000;
 const CODEX_REFRESH_MS = 5_000;
+const GOOSE_REFRESH_MS = 5_000;
+const BUZZ_REFRESH_MS = 2_000;
 const CLAUDE_REFRESH_MS = 5_000;
 const GEMINI_REFRESH_MS = 5_000;
 const ANTIGRAVITY_REFRESH_MS = 5_000;
@@ -157,6 +167,14 @@ let codexTimer = null;
 let codexSyncInFlight = false;
 let codexPublished = false;
 let codexLastError = '';
+let gooseTimer = null;
+let gooseSyncInFlight = false;
+let goosePublished = false;
+let gooseLastError = '';
+let buzzTimer = null;
+let buzzSyncInFlight = false;
+let buzzPublished = false;
+let buzzLastError = '';
 let claudeTimer = null;
 let claudeSyncInFlight = false;
 let claudePublished = false;
@@ -1409,6 +1427,108 @@ function startCodexAdapter() {
   void syncCodexAdapter();
 }
 
+function scheduleGooseSync() {
+  clearTimeout(gooseTimer);
+  gooseTimer = null;
+  if (readConfig().gooseEnabled || goosePublished) {
+    gooseTimer = setTimeout(syncGooseAdapter, GOOSE_REFRESH_MS);
+  }
+}
+
+async function syncGooseAdapter() {
+  if (gooseSyncInFlight) {
+    scheduleGooseSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
+  gooseSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.gooseEnabled) {
+      if (goosePublished) await publishRuntimeAgents('goose', [], config);
+      goosePublished = false;
+      gooseLastError = '';
+      return;
+    }
+    const agents = await fetchGooseAgents({ grouping: normalizeGooseGrouping(config.gooseGrouping) });
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    await publishRuntimeAgents('goose', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    goosePublished = agents.length > 0;
+    gooseLastError = '';
+  } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    const message = error?.message || 'Could not read Goose activity.';
+    if (message !== gooseLastError) console.warn(`Goose adapter: ${message}`);
+    gooseLastError = message;
+    if (goosePublished) {
+      try { await publishRuntimeAgents('goose', []); } catch {}
+      goosePublished = false;
+    }
+  } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    gooseSyncInFlight = false;
+    scheduleGooseSync();
+  }
+}
+
+function startGooseAdapter() {
+  clearTimeout(gooseTimer);
+  gooseTimer = null;
+  void syncGooseAdapter();
+}
+
+function scheduleBuzzSync() {
+  clearTimeout(buzzTimer);
+  buzzTimer = null;
+  if (readConfig().buzzEnabled || buzzPublished) {
+    buzzTimer = setTimeout(syncBuzzAdapter, BUZZ_REFRESH_MS);
+  }
+}
+
+async function syncBuzzAdapter() {
+  if (buzzSyncInFlight) {
+    scheduleBuzzSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
+  buzzSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.buzzEnabled) {
+      if (buzzPublished) await publishRuntimeAgents('buzz', [], config);
+      buzzPublished = false;
+      buzzLastError = '';
+      return;
+    }
+    const agents = await fetchBuzzAgents({ grouping: normalizeBuzzGrouping(config.buzzGrouping) });
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    await publishRuntimeAgents('buzz', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    buzzPublished = agents.length > 0;
+    buzzLastError = '';
+  } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    const message = error?.message || 'Could not read Buzz activity.';
+    if (message !== buzzLastError) console.warn(`Buzz adapter: ${message}`);
+    buzzLastError = message;
+    if (buzzPublished) {
+      try { await publishRuntimeAgents('buzz', []); } catch {}
+      buzzPublished = false;
+    }
+  } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    buzzSyncInFlight = false;
+    scheduleBuzzSync();
+  }
+}
+
+function startBuzzAdapter() {
+  clearTimeout(buzzTimer);
+  buzzTimer = null;
+  void syncBuzzAdapter();
+}
+
 function scheduleClaudeSync() {
   clearTimeout(claudeTimer);
   claudeTimer = null;
@@ -1792,6 +1912,8 @@ function startRuntimeAdapters() {
   startVsCodeCopilotAdapter();
   startCursorAdapter();
   startCodexAdapter();
+  startGooseAdapter();
+  startBuzzAdapter();
   startClaudeAdapter();
   startGeminiAdapter();
   startAntigravityAdapter();
@@ -1807,6 +1929,8 @@ function stopRuntimeAdapters() {
     vsCodeCopilotTimer,
     cursorTimer,
     codexTimer,
+    gooseTimer,
+    buzzTimer,
     claudeTimer,
     geminiTimer,
     antigravityTimer,
@@ -1819,6 +1943,8 @@ function stopRuntimeAdapters() {
   vsCodeCopilotTimer = null;
   cursorTimer = null;
   codexTimer = null;
+  gooseTimer = null;
+  buzzTimer = null;
   claudeTimer = null;
   geminiTimer = null;
   antigravityTimer = null;
@@ -1829,6 +1955,8 @@ function stopRuntimeAdapters() {
   vsCodeCopilotSyncInFlight = false;
   cursorSyncInFlight = false;
   codexSyncInFlight = false;
+  gooseSyncInFlight = false;
+  buzzSyncInFlight = false;
   claudeSyncInFlight = false;
   geminiSyncInFlight = false;
   antigravitySyncInFlight = false;
@@ -1844,6 +1972,8 @@ function restartRuntimeAdaptersAfterWake() {
   vsCodeCopilotSyncInFlight = false;
   cursorSyncInFlight = false;
   codexSyncInFlight = false;
+  gooseSyncInFlight = false;
+  buzzSyncInFlight = false;
   claudeSyncInFlight = false;
   geminiSyncInFlight = false;
   antigravitySyncInFlight = false;
@@ -1854,6 +1984,8 @@ function restartRuntimeAdaptersAfterWake() {
   startVsCodeCopilotAdapter();
   startCursorAdapter();
   startCodexAdapter();
+  startGooseAdapter();
+  startBuzzAdapter();
   startClaudeAdapter();
   startGeminiAdapter();
   startAntigravityAdapter();
@@ -2475,6 +2607,13 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
     runtimeAgentMenuSignatures.clear();
     openCodePublished = false;
     vsCodeCopilotPublished = false;
+    cursorPublished = false;
+    codexPublished = false;
+    goosePublished = false;
+    buzzPublished = false;
+    claudePublished = false;
+    geminiPublished = false;
+    antigravityPublished = false;
     ollamaPublished = false;
     lmStudioPublished = false;
     openClawPublished = false;
@@ -2677,6 +2816,10 @@ ipcMain.handle('settings:load', () => {
     cursorGrouping: normalizeCursorGrouping(config.cursorGrouping),
     codexEnabled: Boolean(config.codexEnabled),
     codexGrouping: normalizeCodexGrouping(config.codexGrouping),
+    gooseEnabled: Boolean(config.gooseEnabled),
+    gooseGrouping: normalizeGooseGrouping(config.gooseGrouping),
+    buzzEnabled: Boolean(config.buzzEnabled),
+    buzzGrouping: normalizeBuzzGrouping(config.buzzGrouping),
     claudeEnabled: Boolean(config.claudeEnabled),
     claudeGrouping: normalizeClaudeGrouping(config.claudeGrouping),
     geminiEnabled: Boolean(config.geminiEnabled),
@@ -2975,6 +3118,10 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     cursorGrouping: normalizeCursorGrouping(input.cursorGrouping),
     codexEnabled: Boolean(input.codexEnabled),
     codexGrouping: normalizeCodexGrouping(input.codexGrouping),
+    gooseEnabled: Boolean(input.gooseEnabled),
+    gooseGrouping: normalizeGooseGrouping(input.gooseGrouping),
+    buzzEnabled: Boolean(input.buzzEnabled),
+    buzzGrouping: normalizeBuzzGrouping(input.buzzGrouping),
     claudeEnabled: Boolean(input.claudeEnabled),
     claudeGrouping: normalizeClaudeGrouping(input.claudeGrouping),
     geminiEnabled: Boolean(input.geminiEnabled),

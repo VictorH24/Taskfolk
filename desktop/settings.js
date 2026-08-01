@@ -45,6 +45,12 @@ const cursorGroupingInput = document.querySelector('#cursorGrouping');
 const codexEnabledInput = document.querySelector('#codexEnabled');
 const codexGroupingField = document.querySelector('#codexGroupingField');
 const codexGroupingInput = document.querySelector('#codexGrouping');
+const gooseEnabledInput = document.querySelector('#gooseEnabled');
+const gooseGroupingField = document.querySelector('#gooseGroupingField');
+const gooseGroupingInput = document.querySelector('#gooseGrouping');
+const buzzEnabledInput = document.querySelector('#buzzEnabled');
+const buzzGroupingField = document.querySelector('#buzzGroupingField');
+const buzzGroupingInput = document.querySelector('#buzzGrouping');
 const claudeEnabledInput = document.querySelector('#claudeEnabled');
 const claudeGroupingField = document.querySelector('#claudeGroupingField');
 const claudeGroupingInput = document.querySelector('#claudeGrouping');
@@ -113,6 +119,14 @@ function updateCursorFields() {
 
 function updateCodexFields() {
   codexGroupingField.classList.toggle('hidden', !codexEnabledInput.checked);
+}
+
+function updateGooseFields() {
+  gooseGroupingField.classList.toggle('hidden', !gooseEnabledInput.checked);
+}
+
+function updateBuzzFields() {
+  buzzGroupingField.classList.toggle('hidden', !buzzEnabledInput.checked);
 }
 
 function updateClaudeFields() {
@@ -202,6 +216,10 @@ async function initialize() {
   cursorGroupingInput.value = settings.cursorGrouping === 'single' ? 'single' : 'project';
   codexEnabledInput.checked = Boolean(settings.codexEnabled);
   codexGroupingInput.value = settings.codexGrouping === 'single' ? 'single' : 'project';
+  gooseEnabledInput.checked = Boolean(settings.gooseEnabled);
+  gooseGroupingInput.value = settings.gooseGrouping === 'single' ? 'single' : 'project';
+  buzzEnabledInput.checked = Boolean(settings.buzzEnabled);
+  buzzGroupingInput.value = settings.buzzGrouping === 'agent' ? 'agent' : 'single';
   claudeEnabledInput.checked = Boolean(settings.claudeEnabled);
   claudeGroupingInput.value = settings.claudeGrouping === 'single' ? 'single' : 'project';
   geminiEnabledInput.checked = Boolean(settings.geminiEnabled);
@@ -234,6 +252,8 @@ async function initialize() {
   updateVsCodeCopilotFields();
   updateCursorFields();
   updateCodexFields();
+  updateGooseFields();
+  updateBuzzFields();
   updateClaudeFields();
   updateGeminiFields();
   updateAntigravityFields();
@@ -258,6 +278,8 @@ openClawEnabledInput.addEventListener('change', updateOpenClawFields);
 vsCodeCopilotEnabledInput.addEventListener('change', updateVsCodeCopilotFields);
 cursorEnabledInput.addEventListener('change', updateCursorFields);
 codexEnabledInput.addEventListener('change', updateCodexFields);
+gooseEnabledInput.addEventListener('change', updateGooseFields);
+buzzEnabledInput.addEventListener('change', updateBuzzFields);
 claudeEnabledInput.addEventListener('change', updateClaudeFields);
 geminiEnabledInput.addEventListener('change', updateGeminiFields);
 antigravityEnabledInput.addEventListener('change', updateAntigravityFields);
@@ -392,6 +414,10 @@ form.addEventListener('submit', async (event) => {
       cursorGrouping: cursorGroupingInput.value,
       codexEnabled: codexEnabledInput.checked,
       codexGrouping: codexGroupingInput.value,
+      gooseEnabled: gooseEnabledInput.checked,
+      gooseGrouping: gooseGroupingInput.value,
+      buzzEnabled: buzzEnabledInput.checked,
+      buzzGrouping: buzzGroupingInput.value,
       claudeEnabled: claudeEnabledInput.checked,
       claudeGrouping: claudeGroupingInput.value,
       geminiEnabled: geminiEnabledInput.checked,

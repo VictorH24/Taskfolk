@@ -101,6 +101,20 @@ No Cursor API key, hook, or extra extension is required. Cursor Desktop must be 
 
 No OpenAI API key or extra extension is required. Codex Desktop or the Codex CLI must be running for its tasks to appear. Taskfolk discovers session metadata through the local Codex ACP adapter, with a read-only local-index fallback for compatibility.
 
+### Goose Desktop and CLI
+
+1. Enable **Track Goose Desktop and CLI sessions**.
+2. Choose **One agent per project** or **One agent for all projects**.
+
+Goose Desktop, the Goose CLI, its ACP server, or `goosed` must be running for sessions to appear. Taskfolk opens Goose's local session index read-only and selects only the session name, project path, provider, model, session type, and timestamps. It does not read conversations, prompts, responses, tool data, extensions, or credentials. Custom Goose data roots set with `GOOSE_PATH_ROOT` are supported.
+
+### Buzz managed agents
+
+1. Enable **Track Buzz managed agents**.
+2. Choose **One folk per managed agent** or **One agent for all Buzz activity**.
+
+Taskfolk displays locally running agent harnesses managed by Buzz Desktop. It uses the local managed-agent roster, PID sidecars, and a bounded log tail to extract lifecycle markers for connected, working, blocked, and approval states. Buzz messages, system prompts, responses, auth tags, private keys, avatar data, and complete log lines are not retained or published. Relay-only agents without a local Desktop harness do not appear.
+
 ### Claude Cowork and Claude Code
 
 1. Enable **Track Claude Cowork and Claude Code tasks**.

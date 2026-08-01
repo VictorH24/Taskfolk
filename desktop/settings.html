@@ -187,6 +187,34 @@
       </section>
       <section class="integrationField">
         <label class="checkRow">
+          <input id="gooseEnabled" name="gooseEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/goose.svg" alt="" />Track Goose Desktop and CLI sessions</span>
+        </label>
+        <label id="gooseGroupingField">
+          <span>Goose agents</span>
+          <select id="gooseGrouping" name="gooseGrouping">
+            <option value="single">One agent for all projects</option>
+            <option value="project">One agent per project</option>
+          </select>
+          <small>Reads Goose's local session name, project path, provider, model, and timestamps only. Conversation content, tool output, and credentials stay private.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="buzzEnabled" name="buzzEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/buzz.svg" alt="" />Track Buzz managed agents</span>
+        </label>
+        <label id="buzzGroupingField">
+          <span>Buzz agents</span>
+          <select id="buzzGrouping" name="buzzGrouping">
+            <option value="single">One agent for all Buzz activity</option>
+            <option value="agent">One folk per managed agent</option>
+          </select>
+          <small>Reads the local managed-agent roster, process sidecars, and lifecycle markers only. System prompts, messages, authentication tags, and private keys stay private.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
           <input id="claudeEnabled" name="claudeEnabled" type="checkbox" />
           <span class="integrationLabel"><img class="integrationIcon" src="./assets/claude.svg" alt="" />Track Claude Cowork and Claude Code tasks</span>
         </label>
