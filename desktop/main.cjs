@@ -19,6 +19,9 @@ const {
   normalizeOpenClawUrl
 } = require('./providers/openclaw.cjs');
 const {
+  copilotChatLogDirectories,
+  defaultVsCodeAgentHostLogRoots,
+  defaultVsCodeWorkspaceStorageRoots,
   fetchVsCodeCopilotAgents,
   normalizeVsCodeCopilotGrouping
 } = require('./providers/vscode-copilot.cjs');
@@ -76,7 +79,7 @@ const MOST_RECENT_AGENT_ID = '__latest__';
 const OPENCODE_REFRESH_MS = 5_000;
 const OPENCODE_REQUEST_TIMEOUT_MS = 2_500;
 const RUNTIME_PUBLISH_TIMEOUT_MS = 5_000;
-const VSCODE_COPILOT_REFRESH_MS = 5_000;
+const VSCODE_COPILOT_REFRESH_MS = 1_000;
 const CURSOR_REFRESH_MS = 5_000;
 const CODEX_REFRESH_MS = 5_000;
 const CLAUDE_REFRESH_MS = 5_000;
@@ -143,6 +146,9 @@ let vsCodeCopilotTimer = null;
 let vsCodeCopilotSyncInFlight = false;
 let vsCodeCopilotPublished = false;
 let vsCodeCopilotLastError = '';
+let vsCodeCopilotSnapshotSignature = '';
+let vsCodeCopilotWatchDebounceTimer = null;
+const vsCodeCopilotWatchers = new Map();
 let cursorTimer = null;
 let cursorSyncInFlight = false;
 let cursorPublished = false;
@@ -1156,6 +1162,88 @@ function scheduleVsCodeCopilotSync() {
   }
 }
 
+function stopVsCodeCopilotWatchers() {
+  clearTimeout(vsCodeCopilotWatchDebounceTimer);
+  vsCodeCopilotWatchDebounceTimer = null;
+  for (const watcher of vsCodeCopilotWatchers.values()) {
+    try { watcher.close(); } catch {}
+  }
+  vsCodeCopilotWatchers.clear();
+}
+
+function scheduleVsCodeCopilotWatchSync() {
+  clearTimeout(vsCodeCopilotWatchDebounceTimer);
+  vsCodeCopilotWatchDebounceTimer = setTimeout(() => {
+    vsCodeCopilotWatchDebounceTimer = null;
+    if (vsCodeCopilotSyncInFlight) return scheduleVsCodeCopilotWatchSync();
+    clearTimeout(vsCodeCopilotTimer);
+    vsCodeCopilotTimer = null;
+    void syncVsCodeCopilotAdapter();
+  }, 100);
+  vsCodeCopilotWatchDebounceTimer.unref();
+}
+
+function refreshVsCodeCopilotWatchers() {
+  if (!readConfig().vsCodeCopilotEnabled) return;
+  const workspaceStorageRoots = defaultVsCodeWorkspaceStorageRoots();
+  for (const root of workspaceStorageRoots) {
+    let workspaces = [];
+    try { workspaces = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const workspace of workspaces) {
+      if (!workspace.isDirectory()) continue;
+      const sessionsPath = path.join(root, workspace.name, 'chatSessions');
+      if (vsCodeCopilotWatchers.has(sessionsPath)) continue;
+      try {
+        const watcher = fs.watch(sessionsPath, scheduleVsCodeCopilotWatchSync);
+        watcher.on('error', () => {
+          try { watcher.close(); } catch {}
+          vsCodeCopilotWatchers.delete(sessionsPath);
+        });
+        vsCodeCopilotWatchers.set(sessionsPath, watcher);
+      } catch {}
+    }
+  }
+  for (const { chatLogDirectory } of copilotChatLogDirectories(
+    defaultVsCodeAgentHostLogRoots(workspaceStorageRoots)
+  )) {
+    if (vsCodeCopilotWatchers.has(chatLogDirectory)) continue;
+    try {
+      const watcher = fs.watch(chatLogDirectory, (_eventType, filename) => {
+        if (!filename || String(filename) === 'GitHub Copilot Chat.log') {
+          scheduleVsCodeCopilotWatchSync();
+        }
+      });
+      watcher.on('error', () => {
+        try { watcher.close(); } catch {}
+        vsCodeCopilotWatchers.delete(chatLogDirectory);
+      });
+      vsCodeCopilotWatchers.set(chatLogDirectory, watcher);
+    } catch {}
+  }
+}
+
+function startVsCodeCopilotWatchers() {
+  stopVsCodeCopilotWatchers();
+  refreshVsCodeCopilotWatchers();
+}
+
+function vsCodeCopilotStatusSignature(agents) {
+  return JSON.stringify(agents.map((agent) => ({
+    id: agent.id,
+    status: agent.status,
+    displayState: agent.displayState,
+    task: agent.task,
+    session: agent.activity?.sessionKeyShort
+  })));
+}
+
+function refreshAgentSnapshotAfterRuntimePublish() {
+  const pending = agentSnapshotRequest;
+  void Promise.resolve(pending)
+    .finally(() => refreshAgentSnapshot())
+    .finally(scheduleAgentSnapshotPolling);
+}
+
 async function syncVsCodeCopilotAdapter() {
   if (vsCodeCopilotSyncInFlight) {
     scheduleVsCodeCopilotSync();
@@ -1169,6 +1257,10 @@ async function syncVsCodeCopilotAdapter() {
       if (vsCodeCopilotPublished) await publishRuntimeAgents('vscode-copilot', [], config);
       vsCodeCopilotPublished = false;
       vsCodeCopilotLastError = '';
+      if (vsCodeCopilotSnapshotSignature) {
+        vsCodeCopilotSnapshotSignature = '';
+        refreshAgentSnapshotAfterRuntimePublish();
+      }
       return;
     }
     const agents = await fetchVsCodeCopilotAgents({
@@ -1177,6 +1269,11 @@ async function syncVsCodeCopilotAdapter() {
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('vscode-copilot', agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
+    const snapshotSignature = vsCodeCopilotStatusSignature(agents);
+    if (snapshotSignature !== vsCodeCopilotSnapshotSignature) {
+      vsCodeCopilotSnapshotSignature = snapshotSignature;
+      refreshAgentSnapshotAfterRuntimePublish();
+    }
     vsCodeCopilotPublished = agents.length > 0;
     vsCodeCopilotLastError = '';
   } catch (error) {
@@ -1187,10 +1284,15 @@ async function syncVsCodeCopilotAdapter() {
     if (vsCodeCopilotPublished) {
       try { await publishRuntimeAgents('vscode-copilot', []); } catch {}
       vsCodeCopilotPublished = false;
+      if (vsCodeCopilotSnapshotSignature) {
+        vsCodeCopilotSnapshotSignature = '';
+        refreshAgentSnapshotAfterRuntimePublish();
+      }
     }
   } finally {
     if (syncGeneration !== runtimeSyncGeneration) return;
     vsCodeCopilotSyncInFlight = false;
+    refreshVsCodeCopilotWatchers();
     scheduleVsCodeCopilotSync();
   }
 }
@@ -1198,6 +1300,7 @@ async function syncVsCodeCopilotAdapter() {
 function startVsCodeCopilotAdapter() {
   clearTimeout(vsCodeCopilotTimer);
   vsCodeCopilotTimer = null;
+  startVsCodeCopilotWatchers();
   void syncVsCodeCopilotAdapter();
 }
 
@@ -1271,13 +1374,14 @@ async function syncCodexAdapter() {
   codexSyncInFlight = true;
   try {
     const config = readConfig();
+    const grouping = normalizeCodexGrouping(config.codexGrouping);
     if (!config.codexEnabled) {
       if (codexPublished) await publishRuntimeAgents('codex', [], config);
       codexPublished = false;
       codexLastError = '';
       return;
     }
-    const agents = await fetchCodexAgents({ grouping: normalizeCodexGrouping(config.codexGrouping) });
+    const agents = await fetchCodexAgents({ grouping });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('codex', agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
@@ -1710,6 +1814,7 @@ function stopRuntimeAdapters() {
     lmStudioTimer,
     openClawTimer
   ]) clearTimeout(timer);
+  stopVsCodeCopilotWatchers();
   openCodeTimer = null;
   vsCodeCopilotTimer = null;
   cursorTimer = null;

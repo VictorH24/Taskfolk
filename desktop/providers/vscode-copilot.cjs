@@ -3,19 +3,24 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const {
+  defaultVsCodeAgentHostMetadataPaths,
+  fetchVsCodeAhpSessions
+} = require('./vscode-ahp.cjs');
 
 const ACTIVE_ACTIVITY_MS = 30_000;
 // VS Code persists the request completion marker before its chat UI has
 // necessarily finished committing the last reasoning/response updates. Keep
 // the agent working briefly so that persistence race cannot flash Success
 // while Copilot still shows "Considering".
-const COMPLETION_SETTLE_MS = 5_000;
+const COMPLETION_SETTLE_MS = 1_500;
 const DEFAULT_MAX_AGENTS = 24;
 const VSCODE_COPILOT_GROUPING_PROJECT = 'project';
 const VSCODE_COPILOT_GROUPING_SINGLE = 'single';
 const CHAT_INDEX_KEY = 'chat.ChatSessionStore.index';
 const SESSION_TAIL_BYTES = 256 * 1024;
 const AGENT_HOST_LOG_TAIL_BYTES = 512 * 1024;
+const COPILOT_CHAT_LOG_TAIL_BYTES = 256 * 1024;
 
 function defaultVsCodeWorkspaceStorageRoots({
   platform = process.platform,
@@ -135,6 +140,79 @@ function readFileTail(filePath, maxBytes) {
   } finally {
     if (handle !== undefined) fs.closeSync(handle);
   }
+}
+
+function readFileHead(filePath, maxBytes) {
+  let handle;
+  try {
+    handle = fs.openSync(filePath, 'r');
+    const length = Math.min(fs.fstatSync(handle).size, maxBytes);
+    if (!length) return '';
+    const buffer = Buffer.alloc(length);
+    fs.readSync(handle, buffer, 0, length, 0);
+    return buffer.toString('utf8');
+  } catch {
+    return '';
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
+}
+
+function copilotChatLogDirectories(logRoots) {
+  const directories = [];
+  for (const root of logRoots) {
+    let sessions = [];
+    try { sessions = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const session of sessions
+      .filter((entry) => entry.isDirectory())
+      .sort((left, right) => right.name.localeCompare(left.name))
+      .slice(0, 4)) {
+      const sessionPath = path.join(root, session.name);
+      let windows = [];
+      try { windows = fs.readdirSync(sessionPath, { withFileTypes: true }); } catch { continue; }
+      for (const window of windows) {
+        if (!window.isDirectory() || !/^window\d+$/i.test(window.name)) continue;
+        const exthostPath = path.join(sessionPath, window.name, 'exthost');
+        const chatLogDirectory = path.join(exthostPath, 'GitHub.copilot-chat');
+        if (fs.existsSync(chatLogDirectory)) {
+          directories.push({ exthostPath, chatLogDirectory });
+        }
+      }
+    }
+  }
+  return directories;
+}
+
+function readCopilotChatWindowStates(logRoots) {
+  const states = new Map();
+  for (const { exthostPath, chatLogDirectory } of copilotChatLogDirectories(logRoots)) {
+    const exthostLog = readFileHead(path.join(exthostPath, 'exthost.log'), 128 * 1024);
+    const workspaceMatch = /[\\/]workspaceStorage[\\/]([a-f\d]{32})(?:[\\/.\s]|$)/i.exec(exthostLog);
+    if (!workspaceMatch) continue;
+
+    let latest = null;
+    const chatLog = readFileTail(
+      path.join(chatLogDirectory, 'GitHub Copilot Chat.log'),
+      COPILOT_CHAT_LOG_TAIL_BYTES
+    );
+    for (const line of chatLog.split(/\r?\n/)) {
+      // These markers contain only lifecycle timing. Do not retain or parse
+      // prompt, response, tool, or error content from the Copilot Chat log.
+      const match = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}).*\[(AutomaticInstructionsCollector|ToolCallingLoop)\](?:.*Stop hook result:)?/.exec(line);
+      if (!match || (match[2] === 'ToolCallingLoop' && !line.includes('Stop hook result:'))) continue;
+      const updatedAt = Date.parse(match[1].replace(' ', 'T'));
+      if (!Number.isFinite(updatedAt) || updatedAt <= Number(latest?.updatedAt || 0)) continue;
+      latest = {
+        status: match[2] === 'AutomaticInstructionsCollector' ? 'active' : 'idle',
+        updatedAt
+      };
+    }
+    if (!latest) continue;
+    const workspaceStorageId = workspaceMatch[1].toLowerCase();
+    const current = states.get(workspaceStorageId);
+    if (!current || latest.updatedAt > current.updatedAt) states.set(workspaceStorageId, latest);
+  }
+  return states;
 }
 
 function agentHostLogFiles(logRoots) {
@@ -371,22 +449,38 @@ function projectIdentity(reference) {
   };
 }
 
-function normalizeSession(entry, reference, workspaceStoragePath, nowMs, agentHostStates = new Map()) {
+function normalizeSession(
+  entry,
+  reference,
+  workspaceStoragePath,
+  nowMs,
+  agentHostStates = new Map(),
+  copilotChatState = null
+) {
   const sessionId = String(entry?.sessionId || '').trim();
   if (!sessionId || !reference || entry?.isEmpty === true) return null;
   const lastMessageMs = Number(entry?.lastMessageDate) || 0;
   const fileMtimeMs = sessionFileMtime(workspaceStoragePath, sessionId);
   const agentHostState = agentHostStates.get(copilotAgentHostSessionKey(sessionId));
-  const updatedAt = Math.max(lastMessageMs, fileMtimeMs, agentHostState?.updatedAt || 0);
+  const lifecycleState = [agentHostState, copilotChatState].reduce((selected, state) => {
+    if (!state) return selected;
+    return !selected || state.updatedAt > selected.updatedAt ? state : selected;
+  }, null);
+  const updatedAt = Math.max(
+    lastMessageMs,
+    fileMtimeMs,
+    agentHostState?.updatedAt || 0,
+    copilotChatState?.updatedAt || 0
+  );
   // Agent Host can refresh the chat index merely by restoring an old session.
   // Its log timestamp is the authoritative lifecycle time when available.
-  const statusUpdatedAt = agentHostState?.updatedAt || updatedAt;
+  const statusUpdatedAt = lifecycleState?.updatedAt || updatedAt;
   const runtimeState = latestSessionRuntimeState(workspaceStoragePath, sessionId);
   const awaitingApproval = runtimeState?.awaitingApproval === true;
   const stillThinking = runtimeState?.stillThinking
     && (!runtimeState?.modelState?.completedAt
       || (fileMtimeMs > 0 && nowMs - fileMtimeMs <= ACTIVE_ACTIVITY_MS));
-  const explicitStatus = agentHostState?.status || modelStateStatus(
+  const explicitStatus = lifecycleState?.status || modelStateStatus(
       runtimeState?.modelState,
       nowMs,
       stillThinking,
@@ -438,6 +532,139 @@ function singleVsCodeCopilotAgent(agent) {
   };
 }
 
+function isCopilotAhpProvider(value) {
+  return /^(?:github-?)?copilot(?:cli)?$/i.test(String(value || '').trim());
+}
+
+function ahpSessionReference(session) {
+  const directories = Array.isArray(session?.workingDirectories) ? session.workingDirectories : [];
+  return String(directories[0] || session?.project?.uri || '').trim();
+}
+
+function ahpInputDisplay(inputKinds) {
+  const kinds = new Set(Array.isArray(inputKinds) ? inputKinds : []);
+  if (kinds.has('toolConfirmation')) return { displayState: 'Needs approval', activityStatus: 'approval' };
+  if (kinds.has('toolAuthentication')) return { displayState: 'Needs authentication', activityStatus: 'authentication' };
+  if (kinds.has('chatInput')) return { displayState: 'Needs input', activityStatus: 'input' };
+  if (kinds.has('toolClientExecution')) return { displayState: 'Needs client tool', activityStatus: 'client-tool' };
+  return { displayState: 'Needs input', activityStatus: 'input' };
+}
+
+function normalizeAhpSession(session, nowMs = Date.now()) {
+  if (!isCopilotAhpProvider(session?.provider)) return null;
+  const rawStatus = Number(session?.status) || 0;
+  if ((rawStatus & 64) !== 0) return null;
+  const needsInput = (rawStatus & 16) !== 0;
+  const failed = (rawStatus & 2) !== 0;
+  const active = !needsInput && !failed && (rawStatus & 8) !== 0;
+  const status = needsInput || failed ? 'blocked' : active ? 'active' : 'idle';
+  const input = ahpInputDisplay(session?.inputKinds);
+  const reference = ahpSessionReference(session);
+  const workspace = reference ? workspaceDetails(reference) : { name: 'VS Code', workspacePath: null };
+  const identity = projectIdentity(reference || 'vscode-ahp:unknown-workspace');
+  const title = String(session?.title || '').trim();
+  const modifiedAt = Date.parse(session?.modifiedAt || '') || nowMs;
+  const displayState = needsInput
+    ? input.displayState
+    : failed ? 'Blocked' : active ? 'Working' : 'Idle';
+  return {
+    id: identity.id,
+    name: `Copilot · ${workspace.name}`,
+    role: 'VS Code · GitHub Copilot',
+    status,
+    task: (title || `Copilot chat in ${workspace.name}`).slice(0, 240),
+    lastSeen: new Date(modifiedAt).toISOString(),
+    workspacePath: workspace.workspacePath,
+    source: 'vscode-copilot',
+    avatarAssignmentKey: identity.assignmentKey,
+    displayState,
+    pose: needsInput ? 'approval' : active ? 'working' : null,
+    activity: {
+      provider: 'vscode-copilot',
+      status: needsInput ? input.activityStatus : failed ? 'error' : active ? 'busy' : 'idle',
+      derivedStatus: status,
+      updatedAt: modifiedAt,
+      sessionLabel: title ? title.slice(0, 120) : 'Copilot chat',
+      sessionKeyShort: String(session?.resource || ''),
+      client: 'vscode',
+      transport: 'ahp'
+    }
+  };
+}
+
+function agentsFromAhpSessions(sessions, nowMs, maxAgents, grouping) {
+  const byProject = new Map();
+  for (const session of sessions) {
+    const agent = normalizeAhpSession(session, nowMs);
+    if (!agent) continue;
+    const current = byProject.get(agent.id);
+    if (!current || Number(agent.activity.updatedAt) > Number(current.activity.updatedAt)) {
+      byProject.set(agent.id, agent);
+    }
+  }
+  const agents = [...byProject.values()].sort((left, right) => {
+    const priority = (agent) => agent.status === 'blocked' ? 2 : Number(agent.status === 'active');
+    const statusDelta = priority(right) - priority(left);
+    return statusDelta || Number(right.activity.updatedAt) - Number(left.activity.updatedAt);
+  });
+  if (normalizeVsCodeCopilotGrouping(grouping) === VSCODE_COPILOT_GROUPING_SINGLE) {
+    const latest = agents.reduce((selected, agent) => {
+      if (!selected) return agent;
+      return Number(agent.activity.updatedAt) > Number(selected.activity.updatedAt) ? agent : selected;
+    }, null);
+    return latest ? [singleVsCodeCopilotAgent(latest)] : [];
+  }
+  const limit = Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, 24));
+  return agents.slice(0, limit);
+}
+
+function copilotSessionIdentity(value) {
+  const raw = String(value || '').trim();
+  const uuid = /(?:^|[:/])([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})$/i.exec(raw);
+  if (uuid) return uuid[1].toLowerCase();
+  return raw.replace(/^agent-host-/i, '').toLowerCase();
+}
+
+function mergeVsCodeCopilotAgents(ahpAgents, localAgents, maxAgents, grouping) {
+  const bySession = new Map();
+  for (const agent of localAgents) {
+    const key = copilotSessionIdentity(agent?.activity?.sessionKeyShort) || `local:${agent.id}`;
+    bySession.set(key, agent);
+  }
+  // AHP owns lifecycle state for sessions visible through both sources.
+  for (const agent of ahpAgents) {
+    const key = copilotSessionIdentity(agent?.activity?.sessionKeyShort) || `ahp:${agent.id}`;
+    bySession.set(key, agent);
+  }
+
+  const byProject = new Map();
+  for (const agent of bySession.values()) {
+    const current = byProject.get(agent.id);
+    const currentUpdatedAt = Number(current?.activity?.updatedAt || 0);
+    const updatedAt = Number(agent?.activity?.updatedAt || 0);
+    if (!current || updatedAt > currentUpdatedAt
+      || (updatedAt === currentUpdatedAt && agent?.activity?.transport === 'ahp')) {
+      byProject.set(agent.id, agent);
+    }
+  }
+  const merged = [...byProject.values()].sort((left, right) => {
+    const priority = (agent) => agent.status === 'blocked' ? 2 : Number(agent.status === 'active');
+    const statusDelta = priority(right) - priority(left);
+    return statusDelta || Number(right.activity?.updatedAt || 0) - Number(left.activity?.updatedAt || 0);
+  });
+  if (normalizeVsCodeCopilotGrouping(grouping) === VSCODE_COPILOT_GROUPING_SINGLE) {
+    const latest = merged.reduce((selected, agent) => {
+      if (!selected) return agent;
+      return Number(agent.activity?.updatedAt || 0) > Number(selected.activity?.updatedAt || 0)
+        ? agent
+        : selected;
+    }, null);
+    return latest ? [singleVsCodeCopilotAgent(latest)] : [];
+  }
+  const limit = Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, 24));
+  return merged.slice(0, limit);
+}
+
 function workspaceStorageDirectories(roots) {
   const directories = [];
   for (const root of roots) {
@@ -453,6 +680,8 @@ function workspaceStorageDirectories(roots) {
 async function fetchVsCodeCopilotAgents({
   workspaceStorageRoots = defaultVsCodeWorkspaceStorageRoots(),
   agentHostLogRoots = defaultVsCodeAgentHostLogRoots(workspaceStorageRoots),
+  agentHostMetadataPaths = defaultVsCodeAgentHostMetadataPaths(workspaceStorageRoots),
+  ahpSessionFetcher = fetchVsCodeAhpSessions,
   DatabaseSyncImpl,
   processRunning,
   maxAgents = DEFAULT_MAX_AGENTS,
@@ -462,21 +691,43 @@ async function fetchVsCodeCopilotAgents({
   const running = processRunning === undefined ? await isVsCodeRunning() : Boolean(processRunning);
   if (!running) return [];
   const nowMs = now();
+  let ahpAgents = [];
+  try {
+    const ahp = await ahpSessionFetcher({ metadataPaths: agentHostMetadataPaths });
+    ahpAgents = ahp?.available
+      ? agentsFromAhpSessions(ahp.sessions || [], nowMs, maxAgents, grouping)
+      : [];
+  } catch {}
   const agentHostStates = readCopilotAgentHostStates(agentHostLogRoots);
+  const copilotChatWindowStates = readCopilotChatWindowStates(agentHostLogRoots);
   const agents = [];
   for (const workspaceStoragePath of workspaceStorageDirectories(workspaceStorageRoots)) {
     const reference = readWorkspaceReference(workspaceStoragePath);
     if (!reference) continue;
     let entries;
     try { entries = readChatIndex(workspaceStoragePath, DatabaseSyncImpl); } catch { continue; }
-    const candidates = entries
-      .filter((entry) => entry?.isEmpty !== true)
+    const nonEmptyEntries = entries.filter((entry) => entry?.isEmpty !== true);
+    const latestEntry = nonEmptyEntries.reduce((selected, entry) => {
+      if (!selected) return entry;
+      const entryUpdatedAt = Math.max(
+        Number(entry?.lastMessageDate) || 0,
+        sessionFileMtime(workspaceStoragePath, String(entry?.sessionId || ''))
+      );
+      const selectedUpdatedAt = Math.max(
+        Number(selected?.lastMessageDate) || 0,
+        sessionFileMtime(workspaceStoragePath, String(selected?.sessionId || ''))
+      );
+      return entryUpdatedAt > selectedUpdatedAt ? entry : selected;
+    }, null);
+    const chatWindowState = copilotChatWindowStates.get(path.basename(workspaceStoragePath).toLowerCase());
+    const candidates = nonEmptyEntries
       .map((entry) => normalizeSession(
         entry,
         reference,
         workspaceStoragePath,
         nowMs,
-        agentHostStates
+        agentHostStates,
+        entry === latestEntry ? chatWindowState : null
       ))
       .filter(Boolean);
     const agent = candidates.reduce((selected, candidate) => {
@@ -492,6 +743,7 @@ async function fetchVsCodeCopilotAgents({
     const statusDelta = priority(right) - priority(left);
     return statusDelta || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
   });
+  let localAgents = agents;
   if (normalizeVsCodeCopilotGrouping(grouping) === VSCODE_COPILOT_GROUPING_SINGLE) {
     const latest = agents.reduce((selected, agent) => {
       if (!selected) return agent;
@@ -499,10 +751,12 @@ async function fetchVsCodeCopilotAgents({
         ? agent
         : selected;
     }, null);
-    return latest ? [singleVsCodeCopilotAgent(latest)] : [];
+    localAgents = latest ? [singleVsCodeCopilotAgent(latest)] : [];
+  } else {
+    const limit = Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, 24));
+    localAgents = agents.slice(0, limit);
   }
-  const limit = Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, 24));
-  return agents.slice(0, limit);
+  return mergeVsCodeCopilotAgents(ahpAgents, localAgents, maxAgents, grouping);
 }
 
 module.exports = {
@@ -510,15 +764,26 @@ module.exports = {
   AGENT_HOST_LOG_TAIL_BYTES,
   CHAT_INDEX_KEY,
   COMPLETION_SETTLE_MS,
+  COPILOT_CHAT_LOG_TAIL_BYTES,
   VSCODE_COPILOT_GROUPING_PROJECT,
   VSCODE_COPILOT_GROUPING_SINGLE,
   defaultVsCodeWorkspaceStorageRoots,
+  agentsFromAhpSessions,
+  ahpInputDisplay,
+  ahpSessionReference,
+  copilotChatLogDirectories,
   defaultVsCodeAgentHostLogRoots,
+  defaultVsCodeAgentHostMetadataPaths,
   fetchVsCodeCopilotAgents,
+  isCopilotAhpProvider,
   isVsCodeRunning,
+  copilotSessionIdentity,
+  mergeVsCodeCopilotAgents,
   normalizeSession,
+  normalizeAhpSession,
   normalizeVsCodeCopilotGrouping,
   projectIdentity,
+  readCopilotChatWindowStates,
   sessionCompletionStatus,
   sessionNeedsApproval,
   singleVsCodeCopilotAgent,

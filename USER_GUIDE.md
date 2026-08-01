@@ -99,7 +99,7 @@ No Cursor API key, hook, or extra extension is required. Cursor Desktop must be 
 1. Enable **Track Codex Desktop and CLI tasks**.
 2. Choose **One agent per project** or **One agent for all projects**.
 
-No OpenAI API key or extra extension is required. Codex Desktop or the Codex CLI must be running for its tasks to appear.
+No OpenAI API key or extra extension is required. Codex Desktop or the Codex CLI must be running for its tasks to appear. Taskfolk discovers session metadata through the local Codex ACP adapter, with a read-only local-index fallback for compatibility.
 
 ### Claude Cowork and Claude Code
 

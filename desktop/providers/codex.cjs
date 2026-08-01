@@ -3,12 +3,17 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { probeCodexAcp } = require('./acp.cjs');
 
 const ACTIVE_ACTIVITY_MS = 60_000;
 const DEFAULT_MAX_AGENTS = 24;
 const CODEX_GROUPING_PROJECT = 'project';
 const CODEX_GROUPING_SINGLE = 'single';
 const ROLLOUT_TAIL_BYTES = 256 * 1024;
+const ACP_SNAPSHOT_TTL_MS = 15_000;
+const MAX_ROLLOUT_FILES_SCANNED = 500;
+let acpSnapshotCache = null;
+let acpSnapshotPromise = null;
 
 function normalizeCodexGrouping(value) {
   return value === CODEX_GROUPING_PROJECT ? CODEX_GROUPING_PROJECT : CODEX_GROUPING_SINGLE;
@@ -35,6 +40,65 @@ function defaultCodexDbPath(options = {}) {
     }
   }
   return candidates.sort((left, right) => right.mtimeMs - left.mtimeMs)[0]?.candidate || direct;
+}
+
+function defaultCodexSessionsRoot(options = {}) {
+  return path.join(codexHome(options), 'sessions');
+}
+
+function rolloutFiles(sessionsRoot, maxFiles = MAX_ROLLOUT_FILES_SCANNED) {
+  const candidates = [];
+  const pending = [sessionsRoot];
+  while (pending.length) {
+    const root = pending.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const candidate = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(candidate);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      try { candidates.push({ path: candidate, name: entry.name, mtimeMs: fs.statSync(candidate).mtimeMs }); } catch {}
+    }
+  }
+  return candidates
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, Math.max(1, Number(maxFiles) || MAX_ROLLOUT_FILES_SCANNED));
+}
+
+function rowsFromAcpSessions(sessions, sessionsRoot) {
+  const files = rolloutFiles(sessionsRoot);
+  return sessions.map((session) => {
+    const id = String(session?.sessionId || '').trim();
+    const rollout = id ? files.find((candidate) => candidate.name.includes(id)) : null;
+    return {
+      id,
+      rollout_path: rollout?.path || '',
+      updated_at_ms: Date.parse(String(session?.updatedAt || '')) || rollout?.mtimeMs || 0,
+      source: String(session?._meta?.source || ''),
+      cwd: String(session?.cwd || ''),
+      title: String(session?.title || ''),
+      model: String(session?._meta?.model || '')
+    };
+  });
+}
+
+async function cachedCodexAcpProbe(probe, nowMs) {
+  if (acpSnapshotCache && nowMs - acpSnapshotCache.at < ACP_SNAPSHOT_TTL_MS) {
+    return acpSnapshotCache.value;
+  }
+  if (!acpSnapshotPromise) {
+    acpSnapshotPromise = Promise.resolve()
+      .then(() => probe())
+      .then((value) => {
+        acpSnapshotCache = { at: Date.now(), value };
+        return value;
+      })
+      .finally(() => { acpSnapshotPromise = null; });
+  }
+  return acpSnapshotPromise;
 }
 
 function runProcess(file, args) {
@@ -228,18 +292,41 @@ function agentsFromRows(rows, nowMs, maxAgents, grouping = CODEX_GROUPING_PROJEC
 
 async function fetchCodexAgents({
   dbPath = defaultCodexDbPath(),
+  sessionsRoot = defaultCodexSessionsRoot(),
   DatabaseSyncImpl,
   processRunning,
+  acpProbe = probeCodexAcp,
+  useAcp = true,
   maxAgents = DEFAULT_MAX_AGENTS,
   grouping = CODEX_GROUPING_PROJECT,
   now = Date.now
 } = {}) {
   const running = processRunning === undefined ? await isCodexRunning() : Boolean(processRunning);
-  if (!running || !fs.existsSync(dbPath)) return [];
+  if (!running) return [];
+  const nowMs = now();
+  if (useAcp && typeof acpProbe === 'function') {
+    try {
+      const snapshot = acpProbe === probeCodexAcp
+        ? await cachedCodexAcpProbe(acpProbe, nowMs)
+        : await acpProbe();
+      if (Array.isArray(snapshot?.sessions) && snapshot.sessions.length) {
+        return agentsFromRows(
+          rowsFromAcpSessions(snapshot.sessions, sessionsRoot),
+          nowMs,
+          maxAgents,
+          grouping
+        );
+      }
+    } catch {
+      // ACP discovery is preferred, but older/broken installations must not
+      // make the existing read-only integration disappear.
+    }
+  }
+  if (!fs.existsSync(dbPath)) return [];
   const db = openReadOnlyDatabase(dbPath, DatabaseSyncImpl);
   try {
     const limit = Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, DEFAULT_MAX_AGENTS));
-    return agentsFromRows(threadRows(db, Math.max(500, limit * 50)), now(), limit, grouping);
+    return agentsFromRows(threadRows(db, Math.max(500, limit * 50)), nowMs, limit, grouping);
   } finally {
     db.close();
   }
@@ -252,10 +339,13 @@ module.exports = {
   agentsFromRows,
   codexHome,
   defaultCodexDbPath,
+  defaultCodexSessionsRoot,
   fetchCodexAgents,
   isCodexRunning,
   normalizeCodexGrouping,
   projectIdentity,
   readRolloutActivity,
+  rolloutFiles,
+  rowsFromAcpSessions,
   singleCodexAgent
 };

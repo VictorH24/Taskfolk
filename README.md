@@ -54,7 +54,7 @@ These avatars animate in the companion as their live state changes:
 - **OpenCode Desktop and terminal sessions** — detects projects, session state, model, agent, and activity timestamps. For terminal sessions, run `opencode --port 4096` so the companion can connect.
 - **Visual Studio Code Copilot chats** — detects active chats in VS Code and VS Code Insiders without an extra extension, server, or Copilot token.
 - **Cursor agents** — detects local Cursor project activity, models, generation state, queued work, and approval or plan-review requests from Cursor's local read-only metadata.
-- **Codex Desktop and CLI tasks** — detects active Codex work from its local, read-only task index and lifecycle event metadata without an API token.
+- **Codex Desktop and CLI tasks** — discovers Codex sessions over local ACP and combines them with lifecycle event metadata, without an API token.
 - **Gemini CLI and Gemini Code Assist Agent mode** — detects Gemini CLI projects from local session metadata and Code Assist Agent-mode workspaces from its local VS Code agent process.
 - **OpenClaw gateway** — connects to a local or remote OpenClaw instance and reads configured agents plus safe session metadata over the gateway's read-only RPCs.
 - **OpenClaw and manual agents** — connect to a remote Taskfolk server to display configured OpenClaw agents or agents that publish their own status through the API.
@@ -137,9 +137,9 @@ The connector opens Cursor's conversation index read-only and uses a strict fiel
 
 ### Track Codex Desktop and CLI tasks
 
-In **Setup**, enable **Track Codex Desktop and CLI tasks**, then choose **One agent per project** or **One agent for all projects**. No OpenAI API key, ChatGPT credential, server, or extra extension is required. Taskfolk automatically discovers the local Codex state database under `CODEX_HOME` or `~/.codex` and shows sessions only while Codex Desktop or the Codex CLI is running.
+In **Setup**, enable **Track Codex Desktop and CLI tasks**, then choose **One agent per project** or **One agent for all projects**. No OpenAI API key, ChatGPT credential, server, or extra extension is required. Taskfolk asks the local Codex installation for its sessions through Agent Client Protocol (ACP) and shows them only while Codex Desktop or the Codex CLI is running.
 
-The connector opens Codex's task index read-only and uses task title, project path, model, client type, timestamps, and lifecycle event kinds to build Taskfolk agents. It inspects only the tail of each current rollout to distinguish started, completed, aborted, and failed work. Prompt bodies, response text, reasoning, tool inputs and outputs, attachments, and credentials are not published. Each project keeps a stable avatar configuration key across Codex tasks and restarts.
+The connector uses ACP's `initialize` and capability-gated `session/list` methods for session identity, title, project path, and timestamps. It inspects only the tail of each matching local rollout to distinguish started, completed, aborted, failed, and approval-blocked work because ACP session metadata does not expose live lifecycle state. If ACP is unavailable or returns no sessions, Taskfolk falls back to opening Codex's task index read-only. Prompt bodies, response text, reasoning, tool inputs and outputs, attachments, and credentials are not published. Each project keeps a stable avatar configuration key across Codex tasks and restarts.
 
 ### Track Claude Cowork and Claude Code tasks
 

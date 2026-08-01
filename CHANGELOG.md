@@ -2,6 +2,14 @@
 
 Notable changes to Taskfolk are recorded here. Add new entries under **Unreleased**, then move them into a version dated section when released.
 
+## Unreleased
+
+## Version 1.0.24 (July 31, 2026)
+- Discover Codex sessions through ACP before using the read-only local-index fallback
+- Discover VScode Copilot (in agents) using AHP
+- improve VScode Chat status detection speed
+
+
 ## Version 1.0.23 (July 30, 2026)
 - Fix VScode Copilot status detection
 
