@@ -4,6 +4,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.26 (August 1, 2026)
+- Add a configurable refresh speed for every integration, from one second to five minutes
+- Fix Buzz managed agents skipping the Working pose by sampling privacy-safe local process activity
+
 ## Version 1.0.25 (August 1, 2026)
 - Add first-class Goose Desktop and CLI session tracking with project and combined grouping
 - Add first-class Buzz managed-agent tracking with privacy-safe lifecycle detection

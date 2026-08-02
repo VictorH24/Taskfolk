@@ -79,7 +79,69 @@ const configStatus = document.querySelector('#configStatus');
 const connectButton = document.querySelector('#connectButton');
 const message = document.querySelector('#message');
 const securityNote = document.querySelector('#securityNote');
+const integrationRefreshDefaults = Object.freeze({
+  openCode: 5_000,
+  openClaw: 5_000,
+  vsCodeCopilot: 5_000,
+  cursor: 5_000,
+  codex: 5_000,
+  goose: 5_000,
+  buzz: 5_000,
+  claude: 5_000,
+  gemini: 5_000,
+  antigravity: 5_000,
+  ollama: 5_000,
+  lmStudio: 5_000
+});
+const integrationRefreshChoices = [1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+const integrationRefreshInputs = {};
 let encryptionAvailable = false;
+
+function refreshChoiceLabel(milliseconds) {
+  const seconds = milliseconds / 1_000;
+  if (seconds < 60) return `Every ${seconds} second${seconds === 1 ? '' : 's'}`;
+  const minutes = seconds / 60;
+  return `Every ${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+function createIntegrationRefreshFields() {
+  for (const [integration, defaultMs] of Object.entries(integrationRefreshDefaults)) {
+    const enabledInput = document.querySelector(`#${integration}Enabled`);
+    const checkRow = enabledInput?.closest('.checkRow');
+    if (!checkRow) continue;
+    const field = document.createElement('label');
+    field.className = 'refreshSpeedField hidden';
+    const label = document.createElement('span');
+    label.textContent = 'Refresh speed';
+    const select = document.createElement('select');
+    select.id = `${integration}RefreshMs`;
+    select.name = select.id;
+    for (const milliseconds of integrationRefreshChoices) {
+      const option = document.createElement('option');
+      option.value = String(milliseconds);
+      option.textContent = refreshChoiceLabel(milliseconds);
+      select.append(option);
+    }
+    select.value = String(defaultMs);
+    const note = document.createElement('small');
+    note.textContent = 'Longer intervals reduce energy use, but status changes may appear later.';
+    field.append(label, select, note);
+    checkRow.after(field);
+    integrationRefreshInputs[integration] = select;
+    enabledInput.addEventListener('change', () => {
+      field.classList.toggle('hidden', !enabledInput.checked);
+    });
+  }
+}
+
+function updateIntegrationRefreshFields() {
+  for (const [integration, input] of Object.entries(integrationRefreshInputs)) {
+    const enabled = document.querySelector(`#${integration}Enabled`)?.checked;
+    input.closest('.refreshSpeedField')?.classList.toggle('hidden', !enabled);
+  }
+}
+
+createIntegrationRefreshFields();
 
 function showError(value) {
   message.textContent = value || '';
@@ -195,6 +257,10 @@ async function initialize() {
   opacityInput.value = String(Math.round((settings.opacity || 1) * 100));
   avatarWidthInput.value = String(settings.avatarWidth || 300);
   avatarHeightInput.value = String(settings.avatarHeight || 380);
+  for (const [integration, defaultMs] of Object.entries(integrationRefreshDefaults)) {
+    const milliseconds = settings.integrationRefreshMs?.[integration] || defaultMs;
+    integrationRefreshInputs[integration].value = String(milliseconds);
+  }
   openCodeEnabledInput.checked = Boolean(settings.openCodeEnabled);
   openCodeGroupingInput.value = settings.openCodeGrouping === 'single' ? 'single' : 'project';
   openCodeUrlInput.value = settings.openCodeUrl || 'http://127.0.0.1:4096';
@@ -259,6 +325,7 @@ async function initialize() {
   updateAntigravityFields();
   updateOllamaFields();
   updateLmStudioFields();
+  updateIntegrationRefreshFields();
   updateConnectionFields();
   tokenInput.placeholder = settings.credentialsStored
     ? 'Saved securely — enter a value to replace it'
@@ -399,6 +466,10 @@ form.addEventListener('submit', async (event) => {
       opacity: Number(opacityInput.value) / 100,
       avatarWidth: Number(avatarWidthInput.value),
       avatarHeight: Number(avatarHeightInput.value),
+      ...Object.fromEntries(Object.entries(integrationRefreshInputs).map(([integration, input]) => [
+        `${integration}RefreshMs`,
+        Number(input.value)
+      ])),
       openCodeEnabled: openCodeEnabledInput.checked,
       openCodeGrouping: openCodeGroupingInput.value,
       openCodeUrl: openCodeUrlInput.value,

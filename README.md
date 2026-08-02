@@ -56,7 +56,7 @@ These avatars animate in the companion as their live state changes:
 - **Cursor agents** — detects local Cursor project activity, models, generation state, queued work, and approval or plan-review requests from Cursor's local read-only metadata.
 - **Codex Desktop and CLI tasks** — discovers Codex sessions over local ACP and combines them with lifecycle event metadata, without an API token.
 - **Goose Desktop and CLI sessions** — discovers active Goose projects from its local read-only session index, including safe provider, model, title, and timestamp metadata.
-- **Buzz managed agents** — discovers live local Buzz ACP harnesses from the Desktop managed-agent roster and process sidecars, with bounded lifecycle-marker inspection.
+- **Buzz managed agents** — discovers live local Buzz ACP harnesses from the Desktop managed-agent roster and process sidecars, using lifecycle markers plus privacy-safe process-tree activity sampling for the Working state.
 - **Gemini CLI and Gemini Code Assist Agent mode** — detects Gemini CLI projects from local session metadata and Code Assist Agent-mode workspaces from its local VS Code agent process.
 - **OpenClaw gateway** — connects to a local or remote OpenClaw instance and reads configured agents plus safe session metadata over the gateway's read-only RPCs.
 - **OpenClaw and manual agents** — connect to a remote Taskfolk server to display configured OpenClaw agents or agents that publish their own status through the API.
@@ -151,9 +151,9 @@ Goose sessions appear only while the Goose Desktop app, CLI, ACP server, or `goo
 
 ### Track Buzz managed agents
 
-In **Setup**, enable **Track Buzz managed agents**, then choose **One folk per managed agent** or **One agent for all Buzz activity**. Taskfolk discovers only locally running harnesses created by Buzz Desktop. It reads a strict whitelist from `managed-agents.json`, verifies the corresponding PID sidecars, and scans a bounded log tail for lifecycle words such as turn start, completion, failure, or approval.
+In **Setup**, enable **Track Buzz managed agents**, then choose **One folk per managed agent** or **One agent for all Buzz activity**. Taskfolk discovers only locally running harnesses created by Buzz Desktop. It reads a strict whitelist from `managed-agents.json`, verifies the corresponding PID sidecars, scans a bounded log tail for lifecycle markers, and samples only PID relationships and CPU time from each harness process tree so active work reaches the Working pose even when Buzz's encrypted observer events are unavailable locally.
 
-Buzz system prompts, messages, responses, authentication tags, private keys, avatar data, and full log lines are neither retained nor published. Remote agents without a locally running Buzz Desktop harness are not displayed. Managed launches may set `BUZZ_DATA_DIR` when Buzz uses a nonstandard data directory.
+Buzz system prompts, messages, responses, authentication tags, private keys, avatar data, process command lines, and full log lines are neither retained nor published. Remote agents without a locally running Buzz Desktop harness are not displayed. Managed launches may set `BUZZ_DATA_DIR` when Buzz uses a nonstandard data directory.
 
 ### Track Claude Cowork and Claude Code tasks
 

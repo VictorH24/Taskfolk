@@ -113,7 +113,7 @@ Goose Desktop, the Goose CLI, its ACP server, or `goosed` must be running for se
 1. Enable **Track Buzz managed agents**.
 2. Choose **One folk per managed agent** or **One agent for all Buzz activity**.
 
-Taskfolk displays locally running agent harnesses managed by Buzz Desktop. It uses the local managed-agent roster, PID sidecars, and a bounded log tail to extract lifecycle markers for connected, working, blocked, and approval states. Buzz messages, system prompts, responses, auth tags, private keys, avatar data, and complete log lines are not retained or published. Relay-only agents without a local Desktop harness do not appear.
+Taskfolk displays locally running agent harnesses managed by Buzz Desktop. It uses the local managed-agent roster, PID sidecars, bounded lifecycle markers, and process-tree CPU time changes to represent connected, working, blocked, and approval states. Buzz messages, system prompts, responses, auth tags, private keys, avatar data, process command lines, and complete log lines are not retained or published. Relay-only agents without a local Desktop harness do not appear.
 
 ### Claude Cowork and Claude Code
 

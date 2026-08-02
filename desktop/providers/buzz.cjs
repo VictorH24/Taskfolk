@@ -1,13 +1,17 @@
 const crypto = require('node:crypto');
+const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const ACTIVE_LOG_MS = 90_000;
+const PROCESS_ACTIVITY_HOLD_MS = 15_000;
+const PROCESS_CPU_DELTA_MS = 20;
 const DEFAULT_MAX_AGENTS = 24;
 const LOG_TAIL_BYTES = 256 * 1024;
 const BUZZ_GROUPING_AGENT = 'agent';
 const BUZZ_GROUPING_SINGLE = 'single';
+const processActivitySamples = new Map();
 
 function normalizeBuzzGrouping(value) {
   return value === BUZZ_GROUPING_AGENT ? BUZZ_GROUPING_AGENT : BUZZ_GROUPING_SINGLE;
@@ -69,13 +73,101 @@ function defaultProcessAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+function runProcess(file, args) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { encoding: 'utf8', timeout: 2_000, windowsHide: true }, (error, stdout) => {
+      if (error && !stdout) return reject(error);
+      resolve(String(stdout || ''));
+    });
+  });
+}
+
+function processCpuTimeMs(value) {
+  const parts = String(value || '').trim().split(/[:-]/).map(Number);
+  if (!parts.length || parts.some((part) => !Number.isFinite(part))) return 0;
+  let seconds = parts.pop() || 0;
+  let minutes = parts.pop() || 0;
+  let hours = parts.pop() || 0;
+  const days = parts.pop() || 0;
+  hours += days * 24;
+  return Math.round((((hours * 60) + minutes) * 60 + seconds) * 1000);
+}
+
+function parsePsProcessTable(source) {
+  return String(source || '').split(/\r?\n/).map((line) => {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+([\d:.-]+)(?:\s+.*)?$/);
+    if (!match) return null;
+    return {
+      pid: Number(match[1]), ppid: Number(match[2]), cpuPercent: Number(match[3]) || 0,
+      cpuTimeMs: processCpuTimeMs(match[4])
+    };
+  }).filter(Boolean);
+}
+
+function processTreeStats(records, rootPid) {
+  const children = new Map();
+  for (const record of records) {
+    if (!children.has(record.ppid)) children.set(record.ppid, []);
+    children.get(record.ppid).push(record);
+  }
+  const pending = [Number(rootPid)];
+  const seen = new Set();
+  let cpuTimeMs = 0;
+  let cpuPercent = 0;
+  while (pending.length) {
+    const pid = pending.pop();
+    if (!Number.isInteger(pid) || seen.has(pid)) continue;
+    seen.add(pid);
+    const record = records.find((entry) => entry.pid === pid);
+    if (record) {
+      cpuTimeMs += record.cpuTimeMs;
+      cpuPercent += record.cpuPercent;
+    }
+    for (const child of children.get(pid) || []) pending.push(child.pid);
+  }
+  return { cpuTimeMs, cpuPercent, pids: [...seen].sort((left, right) => left - right) };
+}
+
+async function sampleBuzzProcessActivity({
+  rootPids, nowMs = Date.now(), platform = process.platform, run = runProcess,
+  holdMs = PROCESS_ACTIVITY_HOLD_MS, samples = processActivitySamples
+} = {}) {
+  const result = new Map();
+  const roots = [...new Set((rootPids || []).map(Number).filter((pid) => Number.isInteger(pid) && pid > 0))];
+  if (!roots.length || platform === 'win32') return result;
+  let records = [];
+  try {
+    records = parsePsProcessTable(await run('ps', ['-axo', 'pid=,ppid=,%cpu=,time=']));
+  } catch {
+    return result;
+  }
+  for (const rootPid of roots) {
+    const current = processTreeStats(records, rootPid);
+    const previous = samples.get(rootPid);
+    const newDescendant = Boolean(previous)
+      && current.pids.some((pid) => !previous.pids.includes(pid));
+    const cpuAdvanced = Boolean(previous)
+      && current.cpuTimeMs - previous.cpuTimeMs >= PROCESS_CPU_DELTA_MS;
+    const visiblyBusy = current.cpuPercent >= 1;
+    const lastBusyAt = cpuAdvanced || newDescendant || visiblyBusy
+      ? nowMs
+      : previous?.lastBusyAt || 0;
+    samples.set(rootPid, { ...current, lastBusyAt, seenAt: nowMs });
+    result.set(rootPid, lastBusyAt > 0 && nowMs - lastBusyAt <= holdMs);
+  }
+  for (const [pid, sample] of samples) {
+    if (!roots.includes(pid) && nowMs - sample.seenAt > holdMs) samples.delete(pid);
+  }
+  return result;
+}
+
 function buzzLogSignal(source) {
   let latest = '';
   const patterns = [
     ['approval', /(?:approval|permission).{0,32}(?:required|requested|pending|waiting)/i],
     ['blocked', /(?:turn|prompt|agent).{0,40}(?:failed|error|timed out|timeout|stalled)/i],
-    ['idle', /(?:turn|prompt|session).{0,40}(?:completed|complete|finished|cancelled|canceled)/i],
-    ['active', /(?:turn.{0,24}(?:started|starting|dispatch)|session\/prompt|dispatching.{0,24}(?:message|mention|job)|tool.?call)/i],
+    ['idle', /(?:turn_completed|(?:turn|prompt|session).{0,40}(?:completed|complete|finished|cancelled|canceled))/i],
+    ['active', /(?:turn_(?:started|liveness)|turn.{0,24}(?:started|starting|dispatch)|session\/prompt|dispatching.{0,24}(?:message|mention|job)|tool.?call)/i],
     ['idle', /(?:connected|online presence|waiting for events)/i]
   ];
   for (const line of String(source || '').split(/\r?\n/)) {
@@ -121,12 +213,12 @@ function agentIdentity(pubkey) {
   return { id: `buzz-agent:${digest}`, assignmentKey: `runtime:buzz-agent:${digest}` };
 }
 
-function createBuzzAgent(config, pidSnapshot, logActivity, nowMs) {
+function createBuzzAgent(config, pidSnapshot, logActivity, nowMs, processWorking = false) {
   const identity = agentIdentity(config.pubkey);
   const updatedAt = Math.max(config.updatedAt, pidSnapshot?.startedAt || 0, logActivity.updatedAt || 0) || nowMs;
   const recentSignal = nowMs - (logActivity.updatedAt || 0) <= ACTIVE_LOG_MS ? logActivity.signal : '';
   const blocked = Boolean(config.lastError) || recentSignal === 'blocked' || recentSignal === 'approval';
-  const working = !blocked && recentSignal === 'active';
+  const working = !blocked && (recentSignal === 'active' || processWorking);
   const approval = recentSignal === 'approval';
   const runtime = config.runtime || 'Buzz ACP';
   const relay = (() => { try { return new URL(config.relayUrl).hostname; } catch { return ''; } })();
@@ -151,7 +243,10 @@ function createBuzzAgent(config, pidSnapshot, logActivity, nowMs) {
   };
 }
 
-function agentsFromManaged({ agents, pids, logRoot, processAlive = defaultProcessAlive, nowMs, maxAgents = DEFAULT_MAX_AGENTS, grouping = BUZZ_GROUPING_AGENT }) {
+function agentsFromManaged({
+  agents, pids, logRoot, processAlive = defaultProcessAlive, processActivity = new Map(),
+  nowMs, maxAgents = DEFAULT_MAX_AGENTS, grouping = BUZZ_GROUPING_AGENT
+}) {
   const livePids = new Map(pids.filter((entry) => processAlive(entry.pid)).map((entry) => [entry.pubkey, entry]));
   for (const agent of agents) {
     if (!livePids.has(agent.pubkey) && processAlive(agent.runtimePid)) {
@@ -160,7 +255,11 @@ function agentsFromManaged({ agents, pids, logRoot, processAlive = defaultProces
   }
   const result = agents.filter((agent) => livePids.has(agent.pubkey)).map((agent) => {
     const logPath = findAgentLog(logRoot, agent.pubkey);
-    return createBuzzAgent(agent, livePids.get(agent.pubkey), logPath ? readLogActivity(logPath) : { signal: '', updatedAt: 0 }, nowMs);
+    const pidSnapshot = livePids.get(agent.pubkey);
+    return createBuzzAgent(
+      agent, pidSnapshot, logPath ? readLogActivity(logPath) : { signal: '', updatedAt: 0 },
+      nowMs, Boolean(processActivity.get(pidSnapshot.pid))
+    );
   }).sort((left, right) => {
     const rank = (agent) => agent.status === 'blocked' ? 2 : agent.status === 'active' ? 1 : 0;
     return rank(right) - rank(left) || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
@@ -173,18 +272,25 @@ function agentsFromManaged({ agents, pids, logRoot, processAlive = defaultProces
 
 async function fetchBuzzAgents({
   dataRoot = buzzDataRoot(), processAlive = defaultProcessAlive,
+  processActivity, processActivitySampler = sampleBuzzProcessActivity,
   maxAgents = DEFAULT_MAX_AGENTS, grouping = BUZZ_GROUPING_AGENT, now = Date.now
 } = {}) {
   const agentRoot = path.join(dataRoot, 'agents');
+  const agents = readManagedAgents(path.join(agentRoot, 'managed-agents.json'));
+  const pids = readPidSnapshots(path.join(agentRoot, 'agent-pids'));
+  const nowMs = now();
+  const sampledActivity = processActivity || await processActivitySampler({
+    rootPids: [...pids.map((entry) => entry.pid), ...agents.map((agent) => agent.runtimePid)], nowMs
+  });
   return agentsFromManaged({
-    agents: readManagedAgents(path.join(agentRoot, 'managed-agents.json')),
-    pids: readPidSnapshots(path.join(agentRoot, 'agent-pids')),
-    logRoot: path.join(agentRoot, 'logs'), processAlive, nowMs: now(), maxAgents, grouping
+    agents, pids, logRoot: path.join(agentRoot, 'logs'), processAlive,
+    processActivity: sampledActivity, nowMs, maxAgents, grouping
   });
 }
 
 module.exports = {
-  ACTIVE_LOG_MS, BUZZ_GROUPING_AGENT, BUZZ_GROUPING_SINGLE, agentIdentity,
+  ACTIVE_LOG_MS, BUZZ_GROUPING_AGENT, BUZZ_GROUPING_SINGLE, PROCESS_ACTIVITY_HOLD_MS, agentIdentity,
   agentsFromManaged, buzzDataRoot, buzzLogSignal, createBuzzAgent, fetchBuzzAgents,
-  findAgentLog, normalizeBuzzGrouping, readLogActivity, readManagedAgents, readPidSnapshots
+  findAgentLog, normalizeBuzzGrouping, parsePsProcessTable, processCpuTimeMs, processTreeStats,
+  readLogActivity, readManagedAgents, readPidSnapshots, sampleBuzzProcessActivity
 };

@@ -69,6 +69,11 @@ const {
 const { fetchLmStudioDesktopAgents } = require('./providers/lmstudio-desktop.cjs');
 const { isLocalServerPortConflict, normalizeLocalServerPort } = require('./local-server.cjs');
 const { normalizeAdditionalFolks } = require('./companion-state.cjs');
+const {
+  integrationRefreshConfig,
+  integrationRefreshMs,
+  integrationRefreshSettings
+} = require('./refresh-intervals.cjs');
 
 const DEFAULT_BOUNDS = { width: 720, height: 500 };
 const DEFAULT_AVATAR_BOUNDS = { width: 300, height: 380 };
@@ -84,22 +89,10 @@ const PARTITION = 'persist:taskfolk';
 const APP_ICON_PATH = path.join(__dirname, 'icon.png');
 const MAC_TRAY_ICON_PATH = path.join(__dirname, 'assets', 'trayTemplate.png');
 const MOST_RECENT_AGENT_ID = '__latest__';
-const OPENCODE_REFRESH_MS = 5_000;
 const OPENCODE_REQUEST_TIMEOUT_MS = 2_500;
 const RUNTIME_PUBLISH_TIMEOUT_MS = 5_000;
-const VSCODE_COPILOT_REFRESH_MS = 1_000;
-const CURSOR_REFRESH_MS = 5_000;
-const CODEX_REFRESH_MS = 5_000;
-const GOOSE_REFRESH_MS = 5_000;
-const BUZZ_REFRESH_MS = 2_000;
-const CLAUDE_REFRESH_MS = 5_000;
-const GEMINI_REFRESH_MS = 5_000;
-const ANTIGRAVITY_REFRESH_MS = 5_000;
-const OLLAMA_REFRESH_MS = 5_000;
 const OLLAMA_REQUEST_TIMEOUT_MS = 2_500;
-const LM_STUDIO_REFRESH_MS = 5_000;
 const LM_STUDIO_REQUEST_TIMEOUT_MS = 2_500;
-const OPENCLAW_REFRESH_MS = 5_000;
 const AGENT_SNAPSHOT_REFRESH_MS = 5_000;
 const AGENT_SNAPSHOT_REQUEST_TIMEOUT_MS = 12_000;
 const LOCAL_SERVER_START_TIMEOUT_MS = 12_000;
@@ -1081,7 +1074,7 @@ function scheduleOpenCodeSync() {
   clearTimeout(openCodeTimer);
   openCodeTimer = null;
   if (readConfig().openCodeEnabled || openCodePublished) {
-    openCodeTimer = setTimeout(syncOpenCodeAdapter, OPENCODE_REFRESH_MS);
+    openCodeTimer = setTimeout(syncOpenCodeAdapter, integrationRefreshMs(readConfig(), 'openCode'));
   }
 }
 
@@ -1176,7 +1169,7 @@ function scheduleVsCodeCopilotSync() {
   clearTimeout(vsCodeCopilotTimer);
   vsCodeCopilotTimer = null;
   if (readConfig().vsCodeCopilotEnabled || vsCodeCopilotPublished) {
-    vsCodeCopilotTimer = setTimeout(syncVsCodeCopilotAdapter, VSCODE_COPILOT_REFRESH_MS);
+    vsCodeCopilotTimer = setTimeout(syncVsCodeCopilotAdapter, integrationRefreshMs(readConfig(), 'vsCodeCopilot'));
   }
 }
 
@@ -1326,7 +1319,7 @@ function scheduleCursorSync() {
   clearTimeout(cursorTimer);
   cursorTimer = null;
   if (readConfig().cursorEnabled || cursorPublished) {
-    cursorTimer = setTimeout(syncCursorAdapter, CURSOR_REFRESH_MS);
+    cursorTimer = setTimeout(syncCursorAdapter, integrationRefreshMs(readConfig(), 'cursor'));
   }
 }
 
@@ -1379,7 +1372,7 @@ function scheduleCodexSync() {
   clearTimeout(codexTimer);
   codexTimer = null;
   if (readConfig().codexEnabled || codexPublished) {
-    codexTimer = setTimeout(syncCodexAdapter, CODEX_REFRESH_MS);
+    codexTimer = setTimeout(syncCodexAdapter, integrationRefreshMs(readConfig(), 'codex'));
   }
 }
 
@@ -1431,7 +1424,7 @@ function scheduleGooseSync() {
   clearTimeout(gooseTimer);
   gooseTimer = null;
   if (readConfig().gooseEnabled || goosePublished) {
-    gooseTimer = setTimeout(syncGooseAdapter, GOOSE_REFRESH_MS);
+    gooseTimer = setTimeout(syncGooseAdapter, integrationRefreshMs(readConfig(), 'goose'));
   }
 }
 
@@ -1482,7 +1475,7 @@ function scheduleBuzzSync() {
   clearTimeout(buzzTimer);
   buzzTimer = null;
   if (readConfig().buzzEnabled || buzzPublished) {
-    buzzTimer = setTimeout(syncBuzzAdapter, BUZZ_REFRESH_MS);
+    buzzTimer = setTimeout(syncBuzzAdapter, integrationRefreshMs(readConfig(), 'buzz'));
   }
 }
 
@@ -1533,7 +1526,7 @@ function scheduleClaudeSync() {
   clearTimeout(claudeTimer);
   claudeTimer = null;
   if (readConfig().claudeEnabled || claudePublished) {
-    claudeTimer = setTimeout(syncClaudeAdapter, CLAUDE_REFRESH_MS);
+    claudeTimer = setTimeout(syncClaudeAdapter, integrationRefreshMs(readConfig(), 'claude'));
   }
 }
 
@@ -1584,7 +1577,7 @@ function scheduleGeminiSync() {
   clearTimeout(geminiTimer);
   geminiTimer = null;
   if (readConfig().geminiEnabled || geminiPublished) {
-    geminiTimer = setTimeout(syncGeminiAdapter, GEMINI_REFRESH_MS);
+    geminiTimer = setTimeout(syncGeminiAdapter, integrationRefreshMs(readConfig(), 'gemini'));
   }
 }
 
@@ -1635,7 +1628,7 @@ function scheduleAntigravitySync() {
   clearTimeout(antigravityTimer);
   antigravityTimer = null;
   if (readConfig().antigravityEnabled || antigravityPublished) {
-    antigravityTimer = setTimeout(syncAntigravityAdapter, ANTIGRAVITY_REFRESH_MS);
+    antigravityTimer = setTimeout(syncAntigravityAdapter, integrationRefreshMs(readConfig(), 'antigravity'));
   }
 }
 
@@ -1688,7 +1681,7 @@ function scheduleOllamaSync() {
   clearTimeout(ollamaTimer);
   ollamaTimer = null;
   if (readConfig().ollamaEnabled || ollamaPublished) {
-    ollamaTimer = setTimeout(syncOllamaAdapter, OLLAMA_REFRESH_MS);
+    ollamaTimer = setTimeout(syncOllamaAdapter, integrationRefreshMs(readConfig(), 'ollama'));
   }
 }
 
@@ -1775,7 +1768,7 @@ function scheduleLmStudioSync() {
   clearTimeout(lmStudioTimer);
   lmStudioTimer = null;
   if (readConfig().lmStudioEnabled || lmStudioPublished) {
-    lmStudioTimer = setTimeout(syncLmStudioAdapter, LM_STUDIO_REFRESH_MS);
+    lmStudioTimer = setTimeout(syncLmStudioAdapter, integrationRefreshMs(readConfig(), 'lmStudio'));
   }
 }
 
@@ -1851,7 +1844,7 @@ function scheduleOpenClawSync() {
   clearTimeout(openClawTimer);
   openClawTimer = null;
   if (readConfig().openClawEnabled || openClawPublished) {
-    openClawTimer = setTimeout(syncOpenClawAdapter, OPENCLAW_REFRESH_MS);
+    openClawTimer = setTimeout(syncOpenClawAdapter, integrationRefreshMs(readConfig(), 'openClaw'));
   }
 }
 
@@ -2805,6 +2798,7 @@ ipcMain.handle('settings:load', () => {
     opacity: normalizedOpacity(config.opacity),
     avatarWidth: Number(config.avatarBounds?.width) || DEFAULT_AVATAR_BOUNDS.width,
     avatarHeight: Number(config.avatarBounds?.height) || DEFAULT_AVATAR_BOUNDS.height,
+    integrationRefreshMs: integrationRefreshSettings(config),
     openCodeEnabled: Boolean(config.openCodeEnabled),
     openCodeGrouping: normalizeOpenCodeGrouping(config.openCodeGrouping),
     openCodeUrl: config.openCodeUrl || DEFAULT_OPENCODE_URL,
@@ -3107,6 +3101,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     opacity: normalizedOpacity(input.opacity),
     avatarBounds: { ...(config.avatarBounds || {}), width: avatarWidth, height: avatarHeight },
     runtimeSourceId: config.runtimeSourceId || `desktop-${crypto.randomUUID()}`,
+    ...integrationRefreshConfig(input),
     openCodeEnabled: Boolean(input.openCodeEnabled),
     openCodeGrouping: normalizeOpenCodeGrouping(input.openCodeGrouping),
     openCodeUrl,
