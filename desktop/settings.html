@@ -84,8 +84,41 @@
       </label>
       <label class="checkRow">
         <input id="lowEnergyMode" name="lowEnergyMode" type="checkbox" />
-        <span>Low Energy Mode<br /><small>Uses still idle poses, caps active animation near 5 FPS, removes the live shadow, and pauses background tracking while the Mac is asleep or locked.</small></span>
+        <span>Low Energy Mode<br /><small>Caps active animation near 5 FPS, removes the live shadow, pauses background tracking while the Mac is asleep or locked, and enables the options below.</small></span>
       </label>
+      <section id="lowEnergyOptions" class="lowEnergyOptions hidden">
+        <label class="checkRow">
+          <input id="lowEnergyRefreshOverrideEnabled" name="lowEnergyRefreshOverrideEnabled" type="checkbox" />
+          <span>Override every provider's refresh speed</span>
+        </label>
+        <label id="lowEnergyRefreshField" class="hidden">
+          <span>Low Energy refresh speed</span>
+          <select id="lowEnergyRefreshMs" name="lowEnergyRefreshMs">
+            <option value="1000">Every second</option>
+            <option value="2000">Every 2 seconds</option>
+            <option value="5000">Every 5 seconds</option>
+            <option value="10000">Every 10 seconds</option>
+            <option value="15000">Every 15 seconds</option>
+            <option value="30000" selected>Every 30 seconds</option>
+            <option value="60000">Every minute</option>
+            <option value="120000">Every 2 minutes</option>
+            <option value="300000">Every 5 minutes</option>
+          </select>
+          <small>When enabled, this takes priority over every provider-specific refresh speed below.</small>
+        </label>
+        <label class="checkRow">
+          <input id="lowEnergyVisibleProvidersOnly" name="lowEnergyVisibleProvidersOnly" type="checkbox" checked />
+          <span>Check visible providers only<br /><small>Office View checks all enabled providers. Single Avatar checks only providers represented by the visible folk.</small></span>
+        </label>
+        <label class="checkRow">
+          <input id="lowEnergyStaticAllPoses" name="lowEnergyStaticAllPoses" type="checkbox" />
+          <span>Use static artwork for all poses<br /><small>Stops Working, approval, blocked, and idle pose animation.</small></span>
+        </label>
+        <label id="lowEnergyStaticIdleField" class="checkRow">
+          <input id="lowEnergyStaticIdlePoses" name="lowEnergyStaticIdlePoses" type="checkbox" />
+          <span>Use static artwork for idle poses<br /><small>Shows the still PNG/WebP frame instead of playing idle pose animations.</small></span>
+        </label>
+      </section>
       <label id="showOnAllDesktopsField" class="checkRow hidden">
         <input id="showOnAllDesktops" name="showOnAllDesktops" type="checkbox" />
         <span>Show folk on all Desktops and full-screen Spaces</span>

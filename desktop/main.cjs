@@ -71,9 +71,15 @@ const { isLocalServerPortConflict, normalizeLocalServerPort } = require('./local
 const { normalizeAdditionalFolks } = require('./companion-state.cjs');
 const {
   integrationRefreshConfig,
-  integrationRefreshMs,
-  integrationRefreshSettings
+  integrationRefreshSettings,
+  normalizeIntegrationRefreshMs
 } = require('./refresh-intervals.cjs');
+const {
+  integrationKeyForProvider,
+  integrationPollingRefreshMs,
+  lowEnergyVisibleProvidersOnly,
+  providerPollingAllowedForVisibleSet
+} = require('./low-energy-options.cjs');
 
 const DEFAULT_BOUNDS = { width: 720, height: 500 };
 const DEFAULT_AVATAR_BOUNDS = { width: 300, height: 380 };
@@ -297,6 +303,27 @@ function isAlwaysOnTopEnabled(config = readConfig()) {
 
 function isLowEnergyModeEnabled(config = readConfig()) {
   return Boolean(config.lowEnergyMode);
+}
+
+function integrationForAgentId(agentId) {
+  const id = String(agentId || '');
+  const knownAgent = availableAgents.find((agent) => agent.id === id);
+  return knownAgent?.integration || integrationKeyForProvider(id.split(':')[0]);
+}
+
+function visibleIntegrationKeys(config = readConfig()) {
+  if (displayMode(config) !== 'avatar') return null;
+  if (config.selectedAgent === MOST_RECENT_AGENT_ID) return null;
+  const integrations = new Set();
+  for (const agentId of displayedAgentIds()) {
+    const integration = integrationForAgentId(agentId);
+    if (integration) integrations.add(integration);
+  }
+  return integrations;
+}
+
+function providerPollingAllowed(config, integration) {
+  return providerPollingAllowedForVisibleSet(config, integration, visibleIntegrationKeys(config));
 }
 
 function isShowOnAllDesktopsEnabled(config = readConfig()) {
@@ -684,6 +711,12 @@ function ensureDockHidden(retriesRemaining = 2) {
 
 function ensureDockVisible(retriesRemaining = 4) {
   if (process.platform !== 'darwin' || !app.dock) return;
+  // A window may finish opening with a stale config snapshot after the user
+  // has enabled menu-bar-only mode. Never let that late caller show the Dock.
+  if (readConfig().hideDockIcon) {
+    if (tray && !tray.isDestroyed()) ensureDockHidden();
+    return;
+  }
   // LSUIElement makes packaged builds start as accessory apps. Reassert the
   // regular policy on every attempt: macOS can accept the launch-time request
   // before it has finished registering the application with the Dock.
@@ -692,7 +725,10 @@ function ensureDockVisible(retriesRemaining = 4) {
   macDockMode = 'regular';
 
   const verifyVisible = () => {
-    if (readConfig().hideDockIcon) return;
+    if (readConfig().hideDockIcon) {
+      if (tray && !tray.isDestroyed()) ensureDockHidden();
+      return;
+    }
     if (app.dock.isVisible()) {
       clearTimeout(dockShowRetryTimer);
       dockShowRetryTimer = null;
@@ -716,8 +752,11 @@ function ensureDockVisible(retriesRemaining = 4) {
   verifyVisible();
 }
 
-function applyDockVisibility(config = readConfig()) {
+function applyDockVisibility() {
   if (process.platform !== 'darwin' || !app.dock) return;
+  // Callers that create windows can retain an older config object while doing
+  // asynchronous work. The persisted preference is the source of truth.
+  const config = readConfig();
   if (config.hideDockIcon) {
     clearTimeout(dockShowRetryTimer);
     dockShowRetryTimer = null;
@@ -1016,6 +1055,7 @@ async function fetchAvailableAgents(baseUrl, ses) {
     return (Array.isArray(data.agents) ? data.agents : []).map((agent) => ({
       id: String(agent.id || ''),
       name: String(agent.name || agent.id || 'Agent'),
+      integration: integrationKeyForProvider(agent.source || agent.activity?.provider || String(agent.id || '').split(':')[0]),
       recencyMs: Math.max(
         timestampCandidateMs(agent.lastSeen),
         timestampCandidateMs(agent.updatedAt),
@@ -1110,7 +1150,7 @@ function scheduleOpenCodeSync() {
   clearTimeout(openCodeTimer);
   openCodeTimer = null;
   if (readConfig().openCodeEnabled || openCodePublished) {
-    openCodeTimer = setTimeout(syncOpenCodeAdapter, integrationRefreshMs(readConfig(), 'openCode'));
+    openCodeTimer = setTimeout(syncOpenCodeAdapter, integrationPollingRefreshMs(readConfig(), 'openCode'));
   }
 }
 
@@ -1129,6 +1169,7 @@ async function syncOpenCodeAdapter() {
       openCodeLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'openCode')) return;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), OPENCODE_REQUEST_TIMEOUT_MS);
     let serverAgents = [];
@@ -1205,7 +1246,7 @@ function scheduleVsCodeCopilotSync() {
   clearTimeout(vsCodeCopilotTimer);
   vsCodeCopilotTimer = null;
   if (readConfig().vsCodeCopilotEnabled || vsCodeCopilotPublished) {
-    vsCodeCopilotTimer = setTimeout(syncVsCodeCopilotAdapter, integrationRefreshMs(readConfig(), 'vsCodeCopilot'));
+    vsCodeCopilotTimer = setTimeout(syncVsCodeCopilotAdapter, integrationPollingRefreshMs(readConfig(), 'vsCodeCopilot'));
   }
 }
 
@@ -1231,7 +1272,11 @@ function scheduleVsCodeCopilotWatchSync() {
 }
 
 function refreshVsCodeCopilotWatchers() {
-  if (!readConfig().vsCodeCopilotEnabled) return;
+  const config = readConfig();
+  if (!config.vsCodeCopilotEnabled || !providerPollingAllowed(config, 'vsCodeCopilot')) {
+    stopVsCodeCopilotWatchers();
+    return;
+  }
   const workspaceStorageRoots = defaultVsCodeWorkspaceStorageRoots();
   for (const root of workspaceStorageRoots) {
     let workspaces = [];
@@ -1310,6 +1355,7 @@ async function syncVsCodeCopilotAdapter() {
       }
       return;
     }
+    if (!providerPollingAllowed(config, 'vsCodeCopilot')) return;
     const agents = await fetchVsCodeCopilotAgents({
       grouping: normalizeVsCodeCopilotGrouping(config.vsCodeCopilotGrouping)
     });
@@ -1355,7 +1401,7 @@ function scheduleCursorSync() {
   clearTimeout(cursorTimer);
   cursorTimer = null;
   if (readConfig().cursorEnabled || cursorPublished) {
-    cursorTimer = setTimeout(syncCursorAdapter, integrationRefreshMs(readConfig(), 'cursor'));
+    cursorTimer = setTimeout(syncCursorAdapter, integrationPollingRefreshMs(readConfig(), 'cursor'));
   }
 }
 
@@ -1374,6 +1420,7 @@ async function syncCursorAdapter() {
       cursorLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'cursor')) return;
     const agents = await fetchCursorAgents({
       grouping: normalizeCursorGrouping(config.cursorGrouping)
     });
@@ -1408,7 +1455,7 @@ function scheduleCodexSync() {
   clearTimeout(codexTimer);
   codexTimer = null;
   if (readConfig().codexEnabled || codexPublished) {
-    codexTimer = setTimeout(syncCodexAdapter, integrationRefreshMs(readConfig(), 'codex'));
+    codexTimer = setTimeout(syncCodexAdapter, integrationPollingRefreshMs(readConfig(), 'codex'));
   }
 }
 
@@ -1428,6 +1475,7 @@ async function syncCodexAdapter() {
       codexLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'codex')) return;
     const agents = await fetchCodexAgents({ grouping });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('codex', agents, config);
@@ -1460,7 +1508,7 @@ function scheduleGooseSync() {
   clearTimeout(gooseTimer);
   gooseTimer = null;
   if (readConfig().gooseEnabled || goosePublished) {
-    gooseTimer = setTimeout(syncGooseAdapter, integrationRefreshMs(readConfig(), 'goose'));
+    gooseTimer = setTimeout(syncGooseAdapter, integrationPollingRefreshMs(readConfig(), 'goose'));
   }
 }
 
@@ -1479,6 +1527,7 @@ async function syncGooseAdapter() {
       gooseLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'goose')) return;
     const agents = await fetchGooseAgents({ grouping: normalizeGooseGrouping(config.gooseGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('goose', agents, config);
@@ -1511,7 +1560,7 @@ function scheduleBuzzSync() {
   clearTimeout(buzzTimer);
   buzzTimer = null;
   if (readConfig().buzzEnabled || buzzPublished) {
-    buzzTimer = setTimeout(syncBuzzAdapter, integrationRefreshMs(readConfig(), 'buzz'));
+    buzzTimer = setTimeout(syncBuzzAdapter, integrationPollingRefreshMs(readConfig(), 'buzz'));
   }
 }
 
@@ -1530,6 +1579,7 @@ async function syncBuzzAdapter() {
       buzzLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'buzz')) return;
     const agents = await fetchBuzzAgents({ grouping: normalizeBuzzGrouping(config.buzzGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('buzz', agents, config);
@@ -1562,7 +1612,7 @@ function scheduleClaudeSync() {
   clearTimeout(claudeTimer);
   claudeTimer = null;
   if (readConfig().claudeEnabled || claudePublished) {
-    claudeTimer = setTimeout(syncClaudeAdapter, integrationRefreshMs(readConfig(), 'claude'));
+    claudeTimer = setTimeout(syncClaudeAdapter, integrationPollingRefreshMs(readConfig(), 'claude'));
   }
 }
 
@@ -1581,6 +1631,7 @@ async function syncClaudeAdapter() {
       claudeLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'claude')) return;
     const agents = await fetchClaudeAgents({ grouping: normalizeClaudeGrouping(config.claudeGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('claude', agents, config);
@@ -1613,7 +1664,7 @@ function scheduleGeminiSync() {
   clearTimeout(geminiTimer);
   geminiTimer = null;
   if (readConfig().geminiEnabled || geminiPublished) {
-    geminiTimer = setTimeout(syncGeminiAdapter, integrationRefreshMs(readConfig(), 'gemini'));
+    geminiTimer = setTimeout(syncGeminiAdapter, integrationPollingRefreshMs(readConfig(), 'gemini'));
   }
 }
 
@@ -1632,6 +1683,7 @@ async function syncGeminiAdapter() {
       geminiLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'gemini')) return;
     const agents = await fetchGeminiAgents({ grouping: normalizeGeminiGrouping(config.geminiGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('gemini', agents, config);
@@ -1664,7 +1716,7 @@ function scheduleAntigravitySync() {
   clearTimeout(antigravityTimer);
   antigravityTimer = null;
   if (readConfig().antigravityEnabled || antigravityPublished) {
-    antigravityTimer = setTimeout(syncAntigravityAdapter, integrationRefreshMs(readConfig(), 'antigravity'));
+    antigravityTimer = setTimeout(syncAntigravityAdapter, integrationPollingRefreshMs(readConfig(), 'antigravity'));
   }
 }
 
@@ -1683,6 +1735,7 @@ async function syncAntigravityAdapter() {
       antigravityLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'antigravity')) return;
     const agents = await fetchAntigravityAgents({
       grouping: normalizeAntigravityGrouping(config.antigravityGrouping)
     });
@@ -1717,7 +1770,7 @@ function scheduleOllamaSync() {
   clearTimeout(ollamaTimer);
   ollamaTimer = null;
   if (readConfig().ollamaEnabled || ollamaPublished) {
-    ollamaTimer = setTimeout(syncOllamaAdapter, integrationRefreshMs(readConfig(), 'ollama'));
+    ollamaTimer = setTimeout(syncOllamaAdapter, integrationPollingRefreshMs(readConfig(), 'ollama'));
   }
 }
 
@@ -1736,6 +1789,7 @@ async function syncOllamaAdapter() {
       ollamaLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'ollama')) return;
     const baseUrl = config.ollamaUrl || DEFAULT_OLLAMA_URL;
     const normalizedUrl = normalizeOllamaUrl(baseUrl);
     const hostname = new URL(normalizedUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -1804,7 +1858,7 @@ function scheduleLmStudioSync() {
   clearTimeout(lmStudioTimer);
   lmStudioTimer = null;
   if (readConfig().lmStudioEnabled || lmStudioPublished) {
-    lmStudioTimer = setTimeout(syncLmStudioAdapter, integrationRefreshMs(readConfig(), 'lmStudio'));
+    lmStudioTimer = setTimeout(syncLmStudioAdapter, integrationPollingRefreshMs(readConfig(), 'lmStudio'));
   }
 }
 
@@ -1823,6 +1877,7 @@ async function syncLmStudioAdapter() {
       lmStudioLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'lmStudio')) return;
     const baseUrl = normalizeLmStudioUrl(config.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
     const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
     const localServer = ['127.0.0.1', 'localhost', '::1'].includes(hostname);
@@ -1880,7 +1935,7 @@ function scheduleOpenClawSync() {
   clearTimeout(openClawTimer);
   openClawTimer = null;
   if (readConfig().openClawEnabled || openClawPublished) {
-    openClawTimer = setTimeout(syncOpenClawAdapter, integrationRefreshMs(readConfig(), 'openClaw'));
+    openClawTimer = setTimeout(syncOpenClawAdapter, integrationPollingRefreshMs(readConfig(), 'openClaw'));
   }
 }
 
@@ -1899,6 +1954,7 @@ async function syncOpenClawAdapter() {
       openClawLastError = '';
       return;
     }
+    if (!providerPollingAllowed(config, 'openClaw')) return;
     const baseUrl = runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL;
     const agents = await fetchOpenClawAgents({
       baseUrl,
@@ -2076,6 +2132,12 @@ function companionUrl(baseUrl = activeBaseUrl, config = readConfig(), agentId = 
   const url = new URL(endpoint(baseUrl, '/index.html'));
   url.searchParams.set('companion', '1');
   if (isLowEnergyModeEnabled(config)) url.searchParams.set('lowEnergy', '1');
+  if (isLowEnergyModeEnabled(config) && config.lowEnergyStaticIdlePoses) {
+    url.searchParams.set('lowEnergyStaticIdle', '1');
+  }
+  if (isLowEnergyModeEnabled(config) && config.lowEnergyStaticAllPoses) {
+    url.searchParams.set('lowEnergyStaticAll', '1');
+  }
   if (displayMode(config) === 'random') {
     url.searchParams.set('randomStatuses', '1');
   }
@@ -2206,7 +2268,10 @@ function viewMenuItems(config = readConfig()) {
   return [
     {
       label: 'Office View',
-      type: 'radio',
+      // Avatar choices live in a submenu, so this is the only item in its
+      // native menu-level group. A lone radio item can be selected by macOS
+      // even when `checked` is false (notably in the menu-bar tray menu).
+      type: 'checkbox',
       checked: currentMode === 'office',
       click: () => setDisplayMode('office')
     },
@@ -2887,6 +2952,11 @@ ipcMain.handle('settings:load', () => {
     ),
     alwaysOnTop: isAlwaysOnTopEnabled(config),
     lowEnergyMode: isLowEnergyModeEnabled(config),
+    lowEnergyRefreshOverrideEnabled: Boolean(config.lowEnergyRefreshOverrideEnabled),
+    lowEnergyRefreshMs: normalizeIntegrationRefreshMs(config.lowEnergyRefreshMs, 30_000),
+    lowEnergyVisibleProvidersOnly: lowEnergyVisibleProvidersOnly(config),
+    lowEnergyStaticAllPoses: Boolean(config.lowEnergyStaticAllPoses),
+    lowEnergyStaticIdlePoses: Boolean(config.lowEnergyStaticIdlePoses),
     showOnAllDesktopsSupported: process.platform === 'darwin',
     showOnAllDesktops: isShowOnAllDesktopsEnabled(config),
     dockIconSupported: process.platform === 'darwin',
@@ -3193,6 +3263,11 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     connectionMode: mode,
     alwaysOnTop: Boolean(input.alwaysOnTop),
     lowEnergyMode: Boolean(input.lowEnergyMode),
+    lowEnergyRefreshOverrideEnabled: Boolean(input.lowEnergyRefreshOverrideEnabled),
+    lowEnergyRefreshMs: normalizeIntegrationRefreshMs(input.lowEnergyRefreshMs, 30_000),
+    lowEnergyVisibleProvidersOnly: input.lowEnergyVisibleProvidersOnly !== false,
+    lowEnergyStaticAllPoses: Boolean(input.lowEnergyStaticAllPoses),
+    lowEnergyStaticIdlePoses: Boolean(input.lowEnergyStaticIdlePoses),
     showOnAllDesktops: process.platform === 'darwin' && Boolean(input.showOnAllDesktops),
     hideDockIcon: process.platform === 'darwin' && Boolean(input.hideDockIcon),
     displayMode: ['avatar', 'random'].includes(input.displayMode) ? input.displayMode : 'office',

@@ -5,6 +5,14 @@ const companionView = companionMode && pageParams.get('companionView') === 'avat
 const randomStatusMode = companionMode && pageParams.get('randomStatuses') === '1';
 const lowEnergyMode = companionMode && pageParams.get('lowEnergy') === '1';
 document.documentElement.classList.toggle('low-energy-mode', lowEnergyMode);
+document.documentElement.classList.toggle(
+  'low-energy-static-idle',
+  lowEnergyMode && pageParams.get('lowEnergyStaticIdle') === '1'
+);
+document.documentElement.classList.toggle(
+  'low-energy-static-all',
+  lowEnergyMode && pageParams.get('lowEnergyStaticAll') === '1'
+);
 const companionAgentId = pageParams.get('agent') || '';
 const MOST_RECENT_AGENT_ID = '__latest__';
 const themeOptions = ['system', 'light', 'dark'];

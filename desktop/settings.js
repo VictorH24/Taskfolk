@@ -17,6 +17,14 @@ const opacityInput = document.querySelector('#opacity');
 const opacityValue = document.querySelector('#opacityValue');
 const alwaysOnTopInput = document.querySelector('#alwaysOnTop');
 const lowEnergyModeInput = document.querySelector('#lowEnergyMode');
+const lowEnergyOptions = document.querySelector('#lowEnergyOptions');
+const lowEnergyRefreshOverrideEnabledInput = document.querySelector('#lowEnergyRefreshOverrideEnabled');
+const lowEnergyRefreshField = document.querySelector('#lowEnergyRefreshField');
+const lowEnergyRefreshMsInput = document.querySelector('#lowEnergyRefreshMs');
+const lowEnergyVisibleProvidersOnlyInput = document.querySelector('#lowEnergyVisibleProvidersOnly');
+const lowEnergyStaticAllPosesInput = document.querySelector('#lowEnergyStaticAllPoses');
+const lowEnergyStaticIdleField = document.querySelector('#lowEnergyStaticIdleField');
+const lowEnergyStaticIdlePosesInput = document.querySelector('#lowEnergyStaticIdlePoses');
 const showOnAllDesktopsField = document.querySelector('#showOnAllDesktopsField');
 const showOnAllDesktopsInput = document.querySelector('#showOnAllDesktops');
 const hideDockIconField = document.querySelector('#hideDockIconField');
@@ -165,6 +173,17 @@ function updateOpacityLabel() {
   opacityValue.textContent = opacityValue.value;
 }
 
+function updateLowEnergyFields() {
+  lowEnergyOptions.classList.toggle('hidden', !lowEnergyModeInput.checked);
+  lowEnergyRefreshField.classList.toggle(
+    'hidden',
+    !lowEnergyModeInput.checked || !lowEnergyRefreshOverrideEnabledInput.checked
+  );
+  const staticAllPoses = lowEnergyStaticAllPosesInput.checked;
+  lowEnergyStaticIdlePosesInput.disabled = staticAllPoses;
+  lowEnergyStaticIdleField.classList.toggle('optionDisabled', staticAllPoses);
+}
+
 function updateOpenCodeFields() {
   openCodeGroupingField.classList.toggle('hidden', !openCodeEnabledInput.checked);
   openCodeUrlField.classList.toggle('hidden', !openCodeEnabledInput.checked);
@@ -251,6 +270,11 @@ async function initialize() {
   urlInput.value = settings.url || 'http://127.0.0.1:3000';
   alwaysOnTopInput.checked = settings.alwaysOnTop;
   lowEnergyModeInput.checked = Boolean(settings.lowEnergyMode);
+  lowEnergyRefreshOverrideEnabledInput.checked = Boolean(settings.lowEnergyRefreshOverrideEnabled);
+  lowEnergyRefreshMsInput.value = String(settings.lowEnergyRefreshMs || 30_000);
+  lowEnergyVisibleProvidersOnlyInput.checked = settings.lowEnergyVisibleProvidersOnly !== false;
+  lowEnergyStaticAllPosesInput.checked = Boolean(settings.lowEnergyStaticAllPoses);
+  lowEnergyStaticIdlePosesInput.checked = Boolean(settings.lowEnergyStaticIdlePoses);
   showOnAllDesktopsField.classList.toggle('hidden', !settings.showOnAllDesktopsSupported);
   showOnAllDesktopsInput.checked = Boolean(settings.showOnAllDesktops);
   hideDockIconField.classList.toggle('hidden', !settings.dockIconSupported);
@@ -315,6 +339,7 @@ async function initialize() {
   resetConfigButton.classList.toggle('hidden', !settings.hasSavedConfiguration);
   updateDisplayFields();
   updateOpacityLabel();
+  updateLowEnergyFields();
   updateOpenCodeFields();
   updateOpenClawFields();
   updateVsCodeCopilotFields();
@@ -341,10 +366,14 @@ window.clawOffice.onDockVisibilityChanged((hidden) => {
 });
 window.clawOffice.onLowEnergyModeChanged((enabled) => {
   lowEnergyModeInput.checked = Boolean(enabled);
+  updateLowEnergyFields();
 });
 connectionModeInput.addEventListener('change', updateConnectionFields);
 displayModeInput.addEventListener('change', updateDisplayFields);
 opacityInput.addEventListener('input', updateOpacityLabel);
+lowEnergyModeInput.addEventListener('change', updateLowEnergyFields);
+lowEnergyRefreshOverrideEnabledInput.addEventListener('change', updateLowEnergyFields);
+lowEnergyStaticAllPosesInput.addEventListener('change', updateLowEnergyFields);
 openCodeEnabledInput.addEventListener('change', updateOpenCodeFields);
 openClawEnabledInput.addEventListener('change', updateOpenClawFields);
 vsCodeCopilotEnabledInput.addEventListener('change', updateVsCodeCopilotFields);
@@ -465,6 +494,11 @@ form.addEventListener('submit', async (event) => {
       password: passwordInput.value,
       alwaysOnTop: alwaysOnTopInput.checked,
       lowEnergyMode: lowEnergyModeInput.checked,
+      lowEnergyRefreshOverrideEnabled: lowEnergyRefreshOverrideEnabledInput.checked,
+      lowEnergyRefreshMs: Number(lowEnergyRefreshMsInput.value),
+      lowEnergyVisibleProvidersOnly: lowEnergyVisibleProvidersOnlyInput.checked,
+      lowEnergyStaticAllPoses: lowEnergyStaticAllPosesInput.checked,
+      lowEnergyStaticIdlePoses: lowEnergyStaticIdlePosesInput.checked,
       showOnAllDesktops: showOnAllDesktopsInput.checked,
       hideDockIcon: hideDockIconInput.checked,
       displayMode: displayModeInput.value,

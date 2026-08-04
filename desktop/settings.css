@@ -99,6 +99,16 @@ input[type="range"] { width: 100%; accent-color: #48d5a1; }
 .customSizeHeader > span { color: #dce4ec; font-size: 13px; font-weight: 750; }
 .sizeInputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .customSizeField small { color: #758392; line-height: 1.35; }
+.lowEnergyOptions {
+  display: grid;
+  gap: 12px;
+  margin: -5px 0 2px 27px;
+  border-left: 2px solid rgba(75, 215, 164, .25);
+  padding: 3px 0 3px 13px;
+}
+.lowEnergyOptions .checkRow { align-items: flex-start; }
+.lowEnergyOptions small { line-height: 1.35; }
+.lowEnergyOptions .optionDisabled { opacity: .45; }
 button.secondaryButton {
   margin: 0;
   padding: 6px 9px;

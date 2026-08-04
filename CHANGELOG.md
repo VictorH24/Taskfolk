@@ -4,6 +4,11 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.28 (August 4, 2026)
+
+- Expand Low Energy Mode Setup with an optional global provider refresh override and visible-provider-only polling, enabled by default
+- Add optional static artwork for idle poses or every pose; selecting every pose disables and dims the idle-only option
+
 ## Version 1.0.27 (August 3, 2026)
 
 - Add a persistent desktop Low Energy Mode to Setup and native menus, using static idle poses, approximately 5 FPS active and attention animations, and no live avatar drop shadow

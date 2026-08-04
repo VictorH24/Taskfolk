@@ -17,6 +17,10 @@
   const LOW_ENERGY_ANIMATED_POSES = new Set(['working', 'meeting', 'approval', 'blocked']);
   const lowEnergyMode = typeof window === 'object'
     && /(?:^|[?&])lowEnergy=1(?:&|$)/.test(String(window.location?.search || ''));
+  const lowEnergyStaticIdle = lowEnergyMode
+    && /(?:^|[?&])lowEnergyStaticIdle=1(?:&|$)/.test(String(window.location?.search || ''));
+  const lowEnergyStaticAll = lowEnergyMode
+    && /(?:^|[?&])lowEnergyStaticAll=1(?:&|$)/.test(String(window.location?.search || ''));
 
   const workingImagesByVariant = new Map();
   const workingAnimationByAgent = new Map();
@@ -196,8 +200,12 @@
     const art = stack.querySelector('.sceneArt--gaming');
     const screen = stack.querySelector('.sceneGamingScreen');
     if (!art || !screen) return;
-    const isLayered = animation.kind === 'shared' && gamingLayoutsByVariant.has(variantId);
-    const artPaths = isLayered ? gamingLayeredPaths(variantId) : pathsForAvatarImage('gaming.gif', variant);
+    const isLayered = !lowEnergyStaticAll
+      && animation.kind === 'shared'
+      && gamingLayoutsByVariant.has(variantId);
+    const artPaths = lowEnergyStaticAll
+      ? variantStaticPaths(variantId, 'gaming.gif')
+      : isLayered ? gamingLayeredPaths(variantId) : pathsForAvatarImage('gaming.gif', variant);
     stack.classList.toggle('is-layered', isLayered);
     stack.dataset.gamingKind = isLayered ? 'shared' : 'avatar';
     stack.style.cssText = isLayered ? layoutStyle(variantId, 'gaming') : '';
@@ -254,8 +262,12 @@
     const art = stack.querySelector('.sceneArt--working, .sceneArt--meeting');
     const screen = stack.querySelector('.sceneWorkingScreen');
     if (!art || !screen) return;
-    const isLayered = animation.kind === 'shared' && workingLayoutsByVariant.has(variantId);
-    const artPaths = isLayered ? layeredPaths(variantId) : pathsForAvatarImage(animation.image, variant);
+    const isLayered = !lowEnergyStaticAll
+      && animation.kind === 'shared'
+      && workingLayoutsByVariant.has(variantId);
+    const artPaths = lowEnergyStaticAll
+      ? variantStaticPaths(variantId, 'working.gif')
+      : isLayered ? layeredPaths(variantId) : pathsForAvatarImage(animation.image, variant);
     stack.classList.toggle('is-layered', isLayered);
     stack.dataset.workingKind = isLayered ? 'shared' : 'avatar';
     stack.style.cssText = isLayered ? layoutStyle(variantId) : '';
@@ -476,7 +488,11 @@
   }
 
   function artMarkup({ poseClass, roleClass, paths, animation, animationKey, variant, title }) {
-    const lowEnergyAnimation = LOW_ENERGY_ANIMATED_POSES.has(poseClass) ? 'animate' : 'static';
+    const lowEnergyAnimation = lowEnergyStaticAll
+      ? 'static'
+      : LOW_ENERGY_ANIMATED_POSES.has(poseClass)
+      ? 'animate'
+      : lowEnergyStaticIdle ? 'static' : '';
     return `<img
           class="sceneArt sceneArt--${poseClass} role-${roleClass}"
           src="${paths[0]}"
@@ -485,7 +501,7 @@
           data-animation="${esc(animation.image.replace(/\.(?:gif|webp)$/i, ''))}"
           data-animation-key="${esc(animationKey)}"
           data-avatar-variant="${esc(variantKey(variant))}"
-          ${lowEnergyMode ? `data-low-energy-animation="${lowEnergyAnimation}"` : ''}
+          ${lowEnergyMode && lowEnergyAnimation ? `data-low-energy-animation="${lowEnergyAnimation}"` : ''}
           alt="${title}"
           draggable="false"
         />`;
@@ -498,13 +514,16 @@
     const usesWorkingAnimation = pose === 'working' || pose === 'meeting';
     const usesGamingAnimation = pose === 'gaming';
     const usesTVAnimation = pose === 'watching_tv';
-    const isLayered = usesWorkingAnimation && animation.kind === 'shared' && workingLayoutsByVariant.has(variantId);
-    const isGamingLayered = usesGamingAnimation && animation.kind === 'shared' && gamingLayoutsByVariant.has(variantId);
+    const isLayered = !lowEnergyStaticAll
+      && usesWorkingAnimation && animation.kind === 'shared' && workingLayoutsByVariant.has(variantId);
+    const isGamingLayered = !lowEnergyStaticAll
+      && usesGamingAnimation && animation.kind === 'shared' && gamingLayoutsByVariant.has(variantId);
     const isTVLayered = usesTVAnimation && animation.kind === 'shared' && tvLayoutsByVariant.has(variantId);
-    const useStaticPose = lowEnergyMode
-      && !LOW_ENERGY_ANIMATED_POSES.has(pose)
-      && !usesGamingAnimation
-      && !usesTVAnimation;
+    const useStaticPose = (lowEnergyStaticAll && !usesTVAnimation)
+      || (lowEnergyStaticIdle
+        && !LOW_ENERGY_ANIMATED_POSES.has(pose)
+        && !usesGamingAnimation
+        && !usesTVAnimation);
     const paths = useStaticPose
       ? variantStaticPaths(variantId, defaultImage)
       : isLayered
@@ -531,7 +550,7 @@
           data-avatar-variant="${esc(variantKey(variant))}"
           style="${isLayered ? layoutStyle(variantId) : ''}"
         >
-          <img class="sceneWorkingScreen"${isLayered ? ` src="${esc(workingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(workingScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyMode ? ' data-low-energy-animation="animate"' : ''} alt="" draggable="false" />
+          <img class="sceneWorkingScreen"${isLayered ? ` src="${esc(workingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(workingScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyMode ? ` data-low-energy-animation="${lowEnergyStaticAll ? 'static' : 'animate'}"` : ''} alt="" draggable="false" />
           ${art.replace('draggable="false"', `data-canonical-src="${esc(variantImagePaths(variantId, 'working.gif')[0])}" draggable="false"`)}
         </span>`
       : usesGamingAnimation && variantId
@@ -542,7 +561,7 @@
           data-avatar-variant="${esc(variantKey(variant))}"
           style="${isGamingLayered ? layoutStyle(variantId, 'gaming') : ''}"
         >
-          <img class="sceneGamingScreen"${isGamingLayered ? ` src="${esc(gamingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(gamingScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyMode ? ' data-low-energy-animation="static"' : ''} alt="" draggable="false" />
+          <img class="sceneGamingScreen"${isGamingLayered ? ` src="${esc(gamingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(gamingScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyStaticIdle ? ' data-low-energy-animation="static"' : ''} alt="" draggable="false" />
           ${art.replace('draggable="false"', `data-canonical-src="${esc(variantImagePaths(variantId, 'gaming.gif')[0])}" draggable="false"`)}
         </span>`
         : usesTVAnimation && variantId
@@ -553,7 +572,7 @@
           data-avatar-variant="${esc(variantKey(variant))}"
           style="${isTVLayered ? layoutStyle(variantId, 'tv') : ''}"
         >
-          <img class="sceneTVScreen"${isTVLayered ? ` src="${esc(tvScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(tvScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyMode ? ' data-low-energy-animation="static"' : ''} alt="" draggable="false" />
+          <img class="sceneTVScreen"${isTVLayered ? ` src="${esc(tvScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(tvScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyStaticIdle || lowEnergyStaticAll ? ' data-low-energy-animation="static"' : ''} alt="" draggable="false" />
           ${art.replace('draggable="false"', `data-canonical-src="${esc(tvLayeredPaths(variantId)[0])}" draggable="false"`)}
         </span>`
         : art;
