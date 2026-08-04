@@ -249,6 +249,55 @@ body.companion-avatar-mode .companionAvatar {
   aspect-ratio: 3 / 4;
   filter: drop-shadow(0 10px 10px rgba(0, 0, 0, .22));
 }
+html.low-energy-mode body.companion-avatar-mode .companionAvatar {
+  filter: none;
+}
+html.low-energy-mode *,
+html.low-energy-mode *::before,
+html.low-energy-mode *::after {
+  animation-play-state: paused !important;
+}
+
+.lowEnergyAnimationSource {
+  display: none !important;
+}
+.lowEnergyAnimationCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.sceneWorkingStack > .lowEnergyAnimationCanvas.sceneArt,
+.sceneGamingStack > .lowEnergyAnimationCanvas.sceneArt,
+.sceneTVStack > .lowEnergyAnimationCanvas.sceneArt {
+  position: relative;
+  z-index: 2;
+}
+.sceneWorkingStack.is-layered > .lowEnergyAnimationCanvas.sceneWorkingScreen,
+.sceneGamingStack.is-layered > .lowEnergyAnimationCanvas.sceneGamingScreen,
+.sceneTVStack.is-layered > .lowEnergyAnimationCanvas.sceneTVScreen {
+  position: absolute;
+  z-index: 1;
+  display: block;
+  object-fit: fill;
+}
+.sceneWorkingStack.is-layered > .lowEnergyAnimationCanvas.sceneWorkingScreen {
+  left: var(--working-screen-left);
+  top: var(--working-screen-top);
+  width: var(--working-screen-width);
+  height: var(--working-screen-height);
+}
+.sceneGamingStack.is-layered > .lowEnergyAnimationCanvas.sceneGamingScreen {
+  left: var(--gaming-screen-left);
+  top: var(--gaming-screen-top);
+  width: var(--gaming-screen-width);
+  height: var(--gaming-screen-height);
+}
+.sceneTVStack.is-layered > .lowEnergyAnimationCanvas.sceneTVScreen {
+  left: var(--tv-screen-left);
+  top: var(--tv-screen-top);
+  width: var(--tv-screen-width);
+  height: var(--tv-screen-height);
+}
 body.companion-avatar-mode .companionAvatarName {
   position: absolute;
   left: 50%;

@@ -124,6 +124,7 @@ let automaticUpdateCheckTimer = null;
 // runtime transition because they use Electron's own bundle metadata.
 let macDockMode = process.platform === 'darwin' && app.isPackaged ? 'accessory' : null;
 let dockHideRetryTimer = null;
+let dockShowRetryTimer = null;
 let boundsTimer = null;
 let runtimeCredentials = null;
 let startupError = '';
@@ -193,6 +194,9 @@ let runtimeLmStudioCredentialsUrl = '';
 let runtimeSyncGeneration = 0;
 let lastRuntimeHeartbeatAt = Date.now();
 let quitting = false;
+let systemSuspended = false;
+let sessionLocked = false;
+let runtimePowerSuspended = false;
 let agentSnapshot = null;
 let agentSnapshotVersion = 0;
 let agentSnapshotTimer = null;
@@ -289,6 +293,10 @@ function displayMode(config = readConfig()) {
 
 function isAlwaysOnTopEnabled(config = readConfig()) {
   return config.alwaysOnTop === undefined ? true : Boolean(config.alwaysOnTop);
+}
+
+function isLowEnergyModeEnabled(config = readConfig()) {
+  return Boolean(config.lowEnergyMode);
 }
 
 function isShowOnAllDesktopsEnabled(config = readConfig()) {
@@ -674,9 +682,45 @@ function ensureDockHidden(retriesRemaining = 2) {
   }, 1_100);
 }
 
+function ensureDockVisible(retriesRemaining = 4) {
+  if (process.platform !== 'darwin' || !app.dock) return;
+  // LSUIElement makes packaged builds start as accessory apps. Reassert the
+  // regular policy on every attempt: macOS can accept the launch-time request
+  // before it has finished registering the application with the Dock.
+  for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(false);
+  app.setActivationPolicy('regular');
+  macDockMode = 'regular';
+
+  const verifyVisible = () => {
+    if (readConfig().hideDockIcon) return;
+    if (app.dock.isVisible()) {
+      clearTimeout(dockShowRetryTimer);
+      dockShowRetryTimer = null;
+      if (tray && !tray.isDestroyed()) {
+        tray.destroy();
+        tray = null;
+        rebuildMenus();
+      }
+      return;
+    }
+    if (dockShowRetryTimer || retriesRemaining <= 0) return;
+    dockShowRetryTimer = setTimeout(() => {
+      dockShowRetryTimer = null;
+      if (!readConfig().hideDockIcon) ensureDockVisible(retriesRemaining - 1);
+    }, 1_100);
+  };
+
+  app.dock.show().then(verifyVisible, verifyVisible);
+  // Do not depend on show() settling to schedule reconciliation. During early
+  // packaged-app startup macOS can leave that promise pending with no icon.
+  verifyVisible();
+}
+
 function applyDockVisibility(config = readConfig()) {
   if (process.platform !== 'darwin' || !app.dock) return;
   if (config.hideDockIcon) {
+    clearTimeout(dockShowRetryTimer);
+    dockShowRetryTimer = null;
     if (!tray || tray.isDestroyed()) {
       tray = null;
       createTray();
@@ -695,17 +739,9 @@ function applyDockVisibility(config = readConfig()) {
   // so switching modes cannot briefly make Taskfolk unreachable.
   clearTimeout(dockHideRetryTimer);
   dockHideRetryTimer = null;
-  if (macDockMode !== 'regular') {
-    for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(false);
-    app.setActivationPolicy('regular');
-    macDockMode = 'regular';
-  }
-  app.dock.show().then(() => {
-    if (readConfig().hideDockIcon || !tray) return;
-    tray.destroy();
-    tray = null;
-    rebuildMenus();
-  }).catch(() => {});
+  clearTimeout(dockShowRetryTimer);
+  dockShowRetryTimer = null;
+  ensureDockVisible();
 }
 
 function setHideDockIcon(enabled) {
@@ -895,7 +931,7 @@ function scheduleAgentSnapshotPolling() {
     && !targetWindow.isMinimized()
     && metadata?.rendererVisible !== false
   ));
-  if (quitting || !activeBaseUrl || !hasVisibleCompanion) return;
+  if (quitting || runtimePowerSuspended || !activeBaseUrl || !hasVisibleCompanion) return;
   agentSnapshotTimer = setTimeout(async () => {
     await refreshAgentSnapshot();
     scheduleAgentSnapshotPolling();
@@ -1901,6 +1937,7 @@ function startOpenClawAdapter() {
 }
 
 function startRuntimeAdapters() {
+  if (runtimePowerSuspended) return;
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
   startCursorAdapter();
@@ -1959,7 +1996,7 @@ function stopRuntimeAdapters() {
 }
 
 function restartRuntimeAdaptersAfterWake() {
-  if (!activeBaseUrl) return;
+  if (!activeBaseUrl || runtimePowerSuspended) return;
   runtimeSyncGeneration += 1;
   openCodeSyncInFlight = false;
   vsCodeCopilotSyncInFlight = false;
@@ -1999,12 +2036,46 @@ function checkForSystemSleepGap() {
   const now = Date.now();
   const elapsed = now - lastRuntimeHeartbeatAt;
   lastRuntimeHeartbeatAt = now;
-  if (elapsed > SYSTEM_SLEEP_GAP_MS) restartRuntimeAdaptersAfterWake();
+  if (elapsed > SYSTEM_SLEEP_GAP_MS && !runtimePowerSuspended) restartRuntimeAdaptersAfterWake();
+}
+
+async function publishBackgroundPollingSuspended(suspended) {
+  if (!activeBaseUrl) return;
+  try {
+    const ses = session.fromPartition(PARTITION, { cache: true });
+    await ses.fetch(endpoint(activeBaseUrl, '/api/background-polling'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ suspended: Boolean(suspended) })
+    });
+  } catch (error) {
+    console.warn(`Could not update background polling state: ${error.message}`);
+  }
+}
+
+function updateRuntimePowerSuspension() {
+  const suspended = isLowEnergyModeEnabled() && (systemSuspended || sessionLocked);
+  if (suspended === runtimePowerSuspended) return;
+  runtimePowerSuspended = suspended;
+  for (const targetWindow of companionWindows.keys()) {
+    if (!targetWindow.isDestroyed()) targetWindow.webContents.send('office:power-suspended', suspended);
+  }
+  if (suspended) {
+    stopRuntimeAdapters();
+    stopAgentSnapshotPolling();
+    agentSnapshotController?.abort();
+    void publishBackgroundPollingSuspended(true);
+  } else {
+    void publishBackgroundPollingSuspended(false);
+    restartRuntimeAdaptersAfterWake();
+  }
 }
 
 function companionUrl(baseUrl = activeBaseUrl, config = readConfig(), agentId = '') {
   const url = new URL(endpoint(baseUrl, '/index.html'));
   url.searchParams.set('companion', '1');
+  if (isLowEnergyModeEnabled(config)) url.searchParams.set('lowEnergy', '1');
   if (displayMode(config) === 'random') {
     url.searchParams.set('randomStatuses', '1');
   }
@@ -2028,6 +2099,24 @@ function setOpacity(value) {
   for (const window of companionWindows.keys()) {
     if (!window.isDestroyed()) window.setOpacity(opacity);
   }
+  rebuildMenus();
+}
+
+async function setLowEnergyMode(enabled) {
+  const config = readConfig();
+  const lowEnergyMode = Boolean(enabled);
+  writeConfig({ ...config, lowEnergyMode });
+  settingsWindow?.webContents.send('settings:low-energy-mode', lowEnergyMode);
+  updateRuntimePowerSuspension();
+  for (const [targetWindow, metadata] of companionWindows.entries()) {
+    if (targetWindow.isDestroyed()) continue;
+    try {
+      await targetWindow.loadURL(companionUrl(activeBaseUrl, readConfig(), metadata?.agentId || ''));
+    } catch (error) {
+      console.warn(`Could not apply Low Energy Mode: ${error.message}`);
+    }
+  }
+  scheduleAgentSnapshotPolling();
   rebuildMenus();
 }
 
@@ -2447,6 +2536,7 @@ function showCompanionContextMenu(targetWindow = officeWindow) {
     { label: 'Open Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
     { label: 'Open Rank Board…', enabled: Boolean(activeBaseUrl), click: showRankBoardWindow },
     { label: 'Reload', click: () => targetWindow.reload() },
+    { label: 'Low Energy Mode', type: 'checkbox', checked: isLowEnergyModeEnabled(config), click: (item) => { void setLowEnergyMode(item.checked); } },
     { label: 'Always on Top', type: 'checkbox', checked: isAlwaysOnTopEnabled(config), click: (item) => setAlwaysOnTop(item.checked) },
     updaterMenuItem(targetWindow),
     { type: 'separator' },
@@ -2501,6 +2591,10 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
       backgroundThrottling: true,
       devTools: !app.isPackaged
     }
+  });
+
+  targetWindow.webContents.on('did-finish-load', () => {
+    if (runtimePowerSuspended) targetWindow.webContents.send('office:power-suspended', true);
   });
 
   // Electron can promote the application when constructing an NSWindow even
@@ -2615,6 +2709,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   let config = readConfig();
   const ses = session.fromPartition(PARTITION, { cache: true });
   if (!authenticated) await authenticate(normalizedUrl, credentials, ses);
+  if (runtimePowerSuspended) void publishBackgroundPollingSuspended(true);
   startRuntimeAdapters();
   availableAgents = await fetchAvailableAgents(normalizedUrl, ses);
   // A connector may still be publishing its first snapshot. Give it one short
@@ -2682,6 +2777,7 @@ function menuTemplate() {
         { type: 'separator' },
         ...viewMenuItems(config),
         { type: 'separator' },
+        { label: 'Low Energy Mode', type: 'checkbox', checked: isLowEnergyModeEnabled(config), click: (item) => { void setLowEnergyMode(item.checked); } },
         { label: 'Always on Top', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
         ...(process.platform === 'darwin'
           ? [{ label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, click: (item) => setHideDockIcon(!item.checked) }]
@@ -2711,6 +2807,7 @@ function rebuildMenus() {
     { type: 'separator' },
     ...viewMenuItems(config),
     { type: 'separator' },
+    { label: 'Low Energy Mode', type: 'checkbox', checked: isLowEnergyModeEnabled(config), click: (item) => { void setLowEnergyMode(item.checked); } },
     { label: 'Always on Top', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
     ...(process.platform === 'darwin'
       ? [{ label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, click: (item) => setHideDockIcon(!item.checked) }]
@@ -2789,6 +2886,7 @@ ipcMain.handle('settings:load', () => {
       || credentials.password
     ),
     alwaysOnTop: isAlwaysOnTopEnabled(config),
+    lowEnergyMode: isLowEnergyModeEnabled(config),
     showOnAllDesktopsSupported: process.platform === 'darwin',
     showOnAllDesktops: isShowOnAllDesktopsEnabled(config),
     dockIconSupported: process.platform === 'darwin',
@@ -3094,6 +3192,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     ...config,
     connectionMode: mode,
     alwaysOnTop: Boolean(input.alwaysOnTop),
+    lowEnergyMode: Boolean(input.lowEnergyMode),
     showOnAllDesktops: process.platform === 'darwin' && Boolean(input.showOnAllDesktops),
     hideDockIcon: process.platform === 'darwin' && Boolean(input.hideDockIcon),
     displayMode: ['avatar', 'random'].includes(input.displayMode) ? input.displayMode : 'office',
@@ -3143,6 +3242,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
 
   if (mode === 'local') {
     writeConfig(nextConfig);
+    updateRuntimePowerSuspension();
     applyDockVisibility(nextConfig);
     const local = await startLocalServer();
     runtimeCredentials = local.credentials;
@@ -3164,6 +3264,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
   const ses = session.fromPartition(PARTITION, { cache: true });
   await authenticate(url, credentials, ses);
   writeConfig(nextConfig);
+  updateRuntimePowerSuspension();
   applyDockVisibility(nextConfig);
   await createOfficeWindow(url, credentials, true);
   stopLocalServer();
@@ -3172,8 +3273,24 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
 });
 
 app.whenReady().then(async () => {
-  powerMonitor.on('resume', restartRuntimeAdaptersAfterWake);
-  powerMonitor.on('unlock-screen', restartRuntimeAdaptersAfterWake);
+  powerMonitor.on('suspend', () => {
+    systemSuspended = true;
+    updateRuntimePowerSuspension();
+  });
+  powerMonitor.on('resume', () => {
+    systemSuspended = false;
+    updateRuntimePowerSuspension();
+    if (!isLowEnergyModeEnabled()) restartRuntimeAdaptersAfterWake();
+  });
+  powerMonitor.on('lock-screen', () => {
+    sessionLocked = true;
+    updateRuntimePowerSuspension();
+  });
+  powerMonitor.on('unlock-screen', () => {
+    sessionLocked = false;
+    updateRuntimePowerSuspension();
+    if (!isLowEnergyModeEnabled()) restartRuntimeAdaptersAfterWake();
+  });
   setInterval(checkForSystemSleepGap, 5_000).unref();
   initializeAutoUpdater();
   scheduleAutomaticUpdateChecks();

@@ -3,6 +3,8 @@ const pageParams = new URLSearchParams(window.location.search);
 const companionMode = pageParams.get('companion') === '1';
 const companionView = companionMode && pageParams.get('companionView') === 'avatar' ? 'avatar' : 'office';
 const randomStatusMode = companionMode && pageParams.get('randomStatuses') === '1';
+const lowEnergyMode = companionMode && pageParams.get('lowEnergy') === '1';
+document.documentElement.classList.toggle('low-energy-mode', lowEnergyMode);
 const companionAgentId = pageParams.get('agent') || '';
 const MOST_RECENT_AGENT_ID = '__latest__';
 const themeOptions = ['system', 'light', 'dark'];

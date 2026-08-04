@@ -16,6 +16,7 @@ const resetAvatarSizeButton = document.querySelector('#resetAvatarSize');
 const opacityInput = document.querySelector('#opacity');
 const opacityValue = document.querySelector('#opacityValue');
 const alwaysOnTopInput = document.querySelector('#alwaysOnTop');
+const lowEnergyModeInput = document.querySelector('#lowEnergyMode');
 const showOnAllDesktopsField = document.querySelector('#showOnAllDesktopsField');
 const showOnAllDesktopsInput = document.querySelector('#showOnAllDesktops');
 const hideDockIconField = document.querySelector('#hideDockIconField');
@@ -249,6 +250,7 @@ async function initialize() {
   connectionModeInput.value = settings.connectionMode === 'remote' ? 'remote' : 'local';
   urlInput.value = settings.url || 'http://127.0.0.1:3000';
   alwaysOnTopInput.checked = settings.alwaysOnTop;
+  lowEnergyModeInput.checked = Boolean(settings.lowEnergyMode);
   showOnAllDesktopsField.classList.toggle('hidden', !settings.showOnAllDesktopsSupported);
   showOnAllDesktopsInput.checked = Boolean(settings.showOnAllDesktops);
   hideDockIconField.classList.toggle('hidden', !settings.dockIconSupported);
@@ -336,6 +338,9 @@ async function initialize() {
 window.clawOffice.onError(showError);
 window.clawOffice.onDockVisibilityChanged((hidden) => {
   hideDockIconInput.checked = Boolean(hidden);
+});
+window.clawOffice.onLowEnergyModeChanged((enabled) => {
+  lowEnergyModeInput.checked = Boolean(enabled);
 });
 connectionModeInput.addEventListener('change', updateConnectionFields);
 displayModeInput.addEventListener('change', updateDisplayFields);
@@ -459,6 +464,7 @@ form.addEventListener('submit', async (event) => {
       token: tokenInput.value,
       password: passwordInput.value,
       alwaysOnTop: alwaysOnTopInput.checked,
+      lowEnergyMode: lowEnergyModeInput.checked,
       showOnAllDesktops: showOnAllDesktopsInput.checked,
       hideDockIcon: hideDockIconInput.checked,
       displayMode: displayModeInput.value,

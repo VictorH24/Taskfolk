@@ -18,6 +18,10 @@ ipcRenderer.on('office:system-resume', () => {
   window.dispatchEvent(new Event('taskfolk:system-resume'));
 });
 
+ipcRenderer.on('office:power-suspended', (_event, suspended) => {
+  window.dispatchEvent(new CustomEvent('taskfolk:power-suspended', { detail: Boolean(suspended) }));
+});
+
 function publishRendererVisibility() {
   ipcRenderer.send('office-window:visibility', !document.hidden);
 }

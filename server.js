@@ -2011,7 +2011,9 @@ async function achievementTrackingAgents() {
 }
 
 let achievementSamplerInFlight = false;
+let backgroundPollingSuspended = false;
 async function sampleAchievementsInBackground() {
+  if (backgroundPollingSuspended) return;
   if (achievementSamplerInFlight) return;
   achievementSamplerInFlight = true;
   try {
@@ -2400,6 +2402,11 @@ app.post('/api/runtime-agents', (req, res) => {
     runtimeAgentSources.delete(sourceId);
   }
   return res.json({ ok: true, provider, accepted: agents.length, ttlMs: RUNTIME_AGENT_TTL_MS });
+});
+
+app.post('/api/background-polling', (req, res) => {
+  backgroundPollingSuspended = Boolean(req.body?.suspended);
+  res.json({ ok: true, suspended: backgroundPollingSuspended });
 });
 
 app.delete('/api/runtime-agents/:agentId', (req, res) => {

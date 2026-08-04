@@ -14,6 +14,9 @@
     walking: 'walking.gif',
     meeting: 'working.gif'
   };
+  const LOW_ENERGY_ANIMATED_POSES = new Set(['working', 'meeting', 'approval', 'blocked']);
+  const lowEnergyMode = typeof window === 'object'
+    && /(?:^|[?&])lowEnergy=1(?:&|$)/.test(String(window.location?.search || ''));
 
   const workingImagesByVariant = new Map();
   const workingAnimationByAgent = new Map();
@@ -43,6 +46,16 @@
       `./avatar-scenes/variants/${encodedVariant}/${gifImage.replace(/\.gif$/i, '.webp')}${revision}`,
       `./avatar-scenes/variants/${encodedVariant}/${gifImage}${revision}`,
       `./avatar-scenes/variants/${encodedVariant}/${gifImage.replace(/\.gif$/i, '.png')}`
+    ];
+  }
+
+  function variantStaticPaths(variant, image) {
+    const variantId = variantKey(variant);
+    const encodedVariant = encodeURIComponent(variantId);
+    const pngImage = image.replace(/\.(?:gif|webp)$/i, '.png');
+    return [
+      `./avatar-scenes/variants/${encodedVariant}/${pngImage}`,
+      ...variantImagePaths(variantId, image)
     ];
   }
 
@@ -463,6 +476,7 @@
   }
 
   function artMarkup({ poseClass, roleClass, paths, animation, animationKey, variant, title }) {
+    const lowEnergyAnimation = LOW_ENERGY_ANIMATED_POSES.has(poseClass) ? 'animate' : 'static';
     return `<img
           class="sceneArt sceneArt--${poseClass} role-${roleClass}"
           src="${paths[0]}"
@@ -471,12 +485,14 @@
           data-animation="${esc(animation.image.replace(/\.(?:gif|webp)$/i, ''))}"
           data-animation-key="${esc(animationKey)}"
           data-avatar-variant="${esc(variantKey(variant))}"
+          ${lowEnergyMode ? `data-low-energy-animation="${lowEnergyAnimation}"` : ''}
           alt="${title}"
           draggable="false"
         />`;
   }
 
   function sceneMarkup({ pose, role, label, variant = 'v0', animationKey = '', showLabel = true }) {
+    const defaultImage = POSE_TO_IMAGE[pose] || POSE_TO_IMAGE.working;
     const animation = animationForPose(pose, variant, animationKey);
     const variantId = animatedVariantId(variant);
     const usesWorkingAnimation = pose === 'working' || pose === 'meeting';
@@ -485,7 +501,13 @@
     const isLayered = usesWorkingAnimation && animation.kind === 'shared' && workingLayoutsByVariant.has(variantId);
     const isGamingLayered = usesGamingAnimation && animation.kind === 'shared' && gamingLayoutsByVariant.has(variantId);
     const isTVLayered = usesTVAnimation && animation.kind === 'shared' && tvLayoutsByVariant.has(variantId);
-    const paths = isLayered
+    const useStaticPose = lowEnergyMode
+      && !LOW_ENERGY_ANIMATED_POSES.has(pose)
+      && !usesGamingAnimation
+      && !usesTVAnimation;
+    const paths = useStaticPose
+      ? variantStaticPaths(variantId, defaultImage)
+      : isLayered
       ? layeredPaths(variantId)
       : isGamingLayered
         ? gamingLayeredPaths(variantId)
@@ -509,7 +531,7 @@
           data-avatar-variant="${esc(variantKey(variant))}"
           style="${isLayered ? layoutStyle(variantId) : ''}"
         >
-          <img class="sceneWorkingScreen"${isLayered ? ` src="${esc(workingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(workingScreenPaths))}" data-fallback-index="0"` : ' hidden'} alt="" draggable="false" />
+          <img class="sceneWorkingScreen"${isLayered ? ` src="${esc(workingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(workingScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyMode ? ' data-low-energy-animation="animate"' : ''} alt="" draggable="false" />
           ${art.replace('draggable="false"', `data-canonical-src="${esc(variantImagePaths(variantId, 'working.gif')[0])}" draggable="false"`)}
         </span>`
       : usesGamingAnimation && variantId
@@ -520,7 +542,7 @@
           data-avatar-variant="${esc(variantKey(variant))}"
           style="${isGamingLayered ? layoutStyle(variantId, 'gaming') : ''}"
         >
-          <img class="sceneGamingScreen"${isGamingLayered ? ` src="${esc(gamingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(gamingScreenPaths))}" data-fallback-index="0"` : ' hidden'} alt="" draggable="false" />
+          <img class="sceneGamingScreen"${isGamingLayered ? ` src="${esc(gamingScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(gamingScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyMode ? ' data-low-energy-animation="static"' : ''} alt="" draggable="false" />
           ${art.replace('draggable="false"', `data-canonical-src="${esc(variantImagePaths(variantId, 'gaming.gif')[0])}" draggable="false"`)}
         </span>`
         : usesTVAnimation && variantId
@@ -531,7 +553,7 @@
           data-avatar-variant="${esc(variantKey(variant))}"
           style="${isTVLayered ? layoutStyle(variantId, 'tv') : ''}"
         >
-          <img class="sceneTVScreen"${isTVLayered ? ` src="${esc(tvScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(tvScreenPaths))}" data-fallback-index="0"` : ' hidden'} alt="" draggable="false" />
+          <img class="sceneTVScreen"${isTVLayered ? ` src="${esc(tvScreenPaths[0])}" data-fallback-srcs="${esc(fallbackSources(tvScreenPaths))}" data-fallback-index="0"` : ' hidden'}${lowEnergyMode ? ' data-low-energy-animation="static"' : ''} alt="" draggable="false" />
           ${art.replace('draggable="false"', `data-canonical-src="${esc(tvLayeredPaths(variantId)[0])}" draggable="false"`)}
         </span>`
         : art;

@@ -4,6 +4,11 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.27 (August 3, 2026)
+
+- Add a persistent desktop Low Energy Mode to Setup and native menus, using static idle poses, approximately 5 FPS active and attention animations, and no live avatar drop shadow
+- Pause desktop integration refreshes, companion snapshots, and achievement sampling while the computer is asleep or the session is locked when Low Energy Mode is enabled
+
 ## Version 1.0.26 (August 1, 2026)
 - Add a configurable refresh speed for every integration, from one second to five minutes
 - Fix Buzz managed agents skipping the Working pose by sampling privacy-safe local process activity
