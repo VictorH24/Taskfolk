@@ -22,6 +22,10 @@ ipcRenderer.on('office:power-suspended', (_event, suspended) => {
   window.dispatchEvent(new CustomEvent('taskfolk:power-suspended', { detail: Boolean(suspended) }));
 });
 
+ipcRenderer.on('office:provider-checks-paused', (_event, paused) => {
+  document.documentElement.classList.toggle('provider-checks-paused', Boolean(paused));
+});
+
 function publishRendererVisibility() {
   ipcRenderer.send('office-window:visibility', !document.hidden);
 }

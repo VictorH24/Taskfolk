@@ -305,6 +305,10 @@ function isLowEnergyModeEnabled(config = readConfig()) {
   return Boolean(config.lowEnergyMode);
 }
 
+function areProviderChecksPaused(config = readConfig()) {
+  return Boolean(config.providerChecksPaused);
+}
+
 function integrationForAgentId(agentId) {
   const id = String(agentId || '');
   const knownAgent = availableAgents.find((agent) => agent.id === id);
@@ -323,6 +327,7 @@ function visibleIntegrationKeys(config = readConfig()) {
 }
 
 function providerPollingAllowed(config, integration) {
+  if (areProviderChecksPaused(config)) return false;
   return providerPollingAllowedForVisibleSet(config, integration, visibleIntegrationKeys(config));
 }
 
@@ -957,6 +962,14 @@ function broadcastAgentSnapshot(snapshot) {
   }
 }
 
+function broadcastProviderChecksPaused(paused = areProviderChecksPaused()) {
+  for (const targetWindow of companionWindows.keys()) {
+    if (!targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('office:provider-checks-paused', Boolean(paused));
+    }
+  }
+}
+
 function stopAgentSnapshotPolling() {
   clearTimeout(agentSnapshotTimer);
   agentSnapshotTimer = null;
@@ -970,7 +983,7 @@ function scheduleAgentSnapshotPolling() {
     && !targetWindow.isMinimized()
     && metadata?.rendererVisible !== false
   ));
-  if (quitting || runtimePowerSuspended || !activeBaseUrl || !hasVisibleCompanion) return;
+  if (quitting || runtimePowerSuspended || areProviderChecksPaused() || !activeBaseUrl || !hasVisibleCompanion) return;
   agentSnapshotTimer = setTimeout(async () => {
     await refreshAgentSnapshot();
     scheduleAgentSnapshotPolling();
@@ -979,6 +992,7 @@ function scheduleAgentSnapshotPolling() {
 }
 
 function refreshAgentSnapshotForVisibleCompanions() {
+  if (areProviderChecksPaused() && agentSnapshot) return stopAgentSnapshotPolling();
   if (!activeBaseUrl) return scheduleAgentSnapshotPolling();
   void refreshAgentSnapshot().finally(scheduleAgentSnapshotPolling);
 }
@@ -994,6 +1008,7 @@ function resetAgentSnapshotCoordinator() {
 
 async function refreshAgentSnapshot({ broadcast = true } = {}) {
   if (agentSnapshotRequest) return agentSnapshotRequest;
+  if (areProviderChecksPaused() && agentSnapshot) return agentSnapshot;
   if (!activeBaseUrl) throw new Error('No active Taskfolk server.');
 
   const requestedBaseUrl = activeBaseUrl;
@@ -1993,7 +2008,7 @@ function startOpenClawAdapter() {
 }
 
 function startRuntimeAdapters() {
-  if (runtimePowerSuspended) return;
+  if (runtimePowerSuspended || areProviderChecksPaused()) return;
   startOpenCodeAdapter();
   startVsCodeCopilotAdapter();
   startCursorAdapter();
@@ -2051,8 +2066,8 @@ function stopRuntimeAdapters() {
   openClawSyncInFlight = false;
 }
 
-function restartRuntimeAdaptersAfterWake() {
-  if (!activeBaseUrl || runtimePowerSuspended) return;
+function restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately = true } = {}) {
+  if (!activeBaseUrl || runtimePowerSuspended || areProviderChecksPaused()) return;
   runtimeSyncGeneration += 1;
   openCodeSyncInFlight = false;
   vsCodeCopilotSyncInFlight = false;
@@ -2080,9 +2095,13 @@ function restartRuntimeAdaptersAfterWake() {
   startOpenClawAdapter();
   const interruptedSnapshotRequest = agentSnapshotRequest;
   agentSnapshotController?.abort();
-  void Promise.resolve(interruptedSnapshotRequest)
-    .finally(() => refreshAgentSnapshot())
-    .finally(scheduleAgentSnapshotPolling);
+  if (refreshSnapshotImmediately) {
+    void Promise.resolve(interruptedSnapshotRequest)
+      .finally(() => refreshAgentSnapshot())
+      .finally(scheduleAgentSnapshotPolling);
+  } else {
+    scheduleAgentSnapshotPolling();
+  }
   for (const window of companionWindows.keys()) {
     if (!window.isDestroyed()) window.webContents.send('office:system-resume');
   }
@@ -2179,6 +2198,21 @@ async function setLowEnergyMode(enabled) {
     }
   }
   scheduleAgentSnapshotPolling();
+  rebuildMenus();
+}
+
+function setProviderChecksPaused(enabled) {
+  const config = readConfig();
+  const providerChecksPaused = Boolean(enabled);
+  writeConfig({ ...config, providerChecksPaused });
+  broadcastProviderChecksPaused(providerChecksPaused);
+  if (providerChecksPaused) {
+    stopRuntimeAdapters();
+    stopAgentSnapshotPolling();
+    agentSnapshotController?.abort();
+  } else {
+    restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately: false });
+  }
   rebuildMenus();
 }
 
@@ -2601,6 +2635,7 @@ function showCompanionContextMenu(targetWindow = officeWindow) {
     { label: 'Open Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
     { label: 'Open Rank Board…', enabled: Boolean(activeBaseUrl), click: showRankBoardWindow },
     { label: 'Reload', click: () => targetWindow.reload() },
+    { label: 'Pause Provider Checks', type: 'checkbox', checked: areProviderChecksPaused(config), click: (item) => setProviderChecksPaused(item.checked) },
     { label: 'Low Energy Mode', type: 'checkbox', checked: isLowEnergyModeEnabled(config), click: (item) => { void setLowEnergyMode(item.checked); } },
     { label: 'Always on Top', type: 'checkbox', checked: isAlwaysOnTopEnabled(config), click: (item) => setAlwaysOnTop(item.checked) },
     updaterMenuItem(targetWindow),
@@ -2660,6 +2695,7 @@ function createCompanionBrowserWindow(bounds, config = readConfig()) {
 
   targetWindow.webContents.on('did-finish-load', () => {
     if (runtimePowerSuspended) targetWindow.webContents.send('office:power-suspended', true);
+    targetWindow.webContents.send('office:provider-checks-paused', areProviderChecksPaused());
   });
 
   // Electron can promote the application when constructing an NSWindow even
@@ -2842,6 +2878,7 @@ function menuTemplate() {
         { type: 'separator' },
         ...viewMenuItems(config),
         { type: 'separator' },
+        { label: 'Pause Provider Checks', type: 'checkbox', checked: areProviderChecksPaused(config), click: (item) => setProviderChecksPaused(item.checked) },
         { label: 'Low Energy Mode', type: 'checkbox', checked: isLowEnergyModeEnabled(config), click: (item) => { void setLowEnergyMode(item.checked); } },
         { label: 'Always on Top', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
         ...(process.platform === 'darwin'
@@ -2872,6 +2909,7 @@ function rebuildMenus() {
     { type: 'separator' },
     ...viewMenuItems(config),
     { type: 'separator' },
+    { label: 'Pause Provider Checks', type: 'checkbox', checked: areProviderChecksPaused(config), click: (item) => setProviderChecksPaused(item.checked) },
     { label: 'Low Energy Mode', type: 'checkbox', checked: isLowEnergyModeEnabled(config), click: (item) => { void setLowEnergyMode(item.checked); } },
     { label: 'Always on Top', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
     ...(process.platform === 'darwin'

@@ -258,6 +258,16 @@ html.low-energy-mode *::after {
   animation-play-state: paused !important;
 }
 
+html.provider-checks-paused .sceneFigure {
+  filter: grayscale(1);
+}
+html.provider-checks-paused .sceneFigure,
+html.provider-checks-paused .sceneFigure *,
+html.provider-checks-paused .sceneFigure *::before,
+html.provider-checks-paused .sceneFigure *::after {
+  animation-play-state: paused !important;
+}
+
 .lowEnergyAnimationSource {
   display: none !important;
 }

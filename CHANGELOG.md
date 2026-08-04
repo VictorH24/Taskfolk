@@ -4,6 +4,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.29 (August 4, 2026)
+
+- Add a persistent **Pause Provider Checks** option to every native menu; pausing freezes the current folk in grayscale and stops provider timers, file watchers, and snapshot refreshes, while resuming checks providers immediately
+
 ## Version 1.0.28 (August 4, 2026)
 
 - Expand Low Energy Mode Setup with an optional global provider refresh override and visible-provider-only polling, enabled by default
