@@ -4,10 +4,15 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.31 (August 4, 2026)
+
+- Fix blank macOS Dock artwork in installed builds by loading the external bundled application icon whenever the Dock entry is created or restored
+- Show update-download percentages live beside the menu-bar icon and on the Dock progress overlay, avoiding the macOS limitation that prevents an already-open native menu from repainting its label
+
 ## Version 1.0.30 (August 4, 2026)
 
-- Improve macOS app access with reliable Dock visibility and artwork in installed builds, independent Dock and menu-bar icon settings, a safeguard that keeps at least one icon available, and a full right-click menu on the Dock icon
-- Refresh update-download percentages live in open application, Dock, and menu-bar menus without rebuilding the menus for every progress event
+- Improve macOS app access with independent Dock and menu-bar icon settings, a safeguard that keeps at least one icon available, and a full right-click menu on the Dock icon
+- Keep update-download menu labels current without rebuilding every native menu for each progress event
 
 ## Version 1.0.29 (August 4, 2026)
 

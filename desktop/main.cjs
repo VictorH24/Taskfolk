@@ -727,7 +727,11 @@ function ensureDockHidden(retriesRemaining = 2) {
 
 function applyMacDockIcon() {
   if (process.platform !== 'darwin' || !app.dock) return;
-  if (!macDockIcon) macDockIcon = nativeImage.createFromPath(APP_ICON_PATH);
+  if (!macDockIcon) {
+    const packagedIconPath = path.join(process.resourcesPath, 'icon.icns');
+    macDockIcon = nativeImage.createFromPath(app.isPackaged ? packagedIconPath : APP_ICON_PATH);
+    if (macDockIcon.isEmpty() && app.isPackaged) macDockIcon = nativeImage.createFromPath(APP_ICON_PATH);
+  }
   if (!macDockIcon.isEmpty()) app.dock.setIcon(macDockIcon);
 }
 
@@ -2502,6 +2506,19 @@ function refreshLiveUpdaterMenuItems() {
   }
 }
 
+function applyUpdateProgressIndicators() {
+  const downloading = updateStatus === 'downloading';
+  const fraction = downloading ? Math.max(0, Math.min(1, updateDownloadPercent / 100)) : -1;
+  if (process.platform === 'darwin' && tray && !tray.isDestroyed()) {
+    tray.setTitle(downloading && updateDownloadPercent > 0 ? `${updateDownloadPercent}%` : '');
+  }
+  const progressWindow = updateDialogWindow()
+    || (officeWindow && !officeWindow.isDestroyed() ? officeWindow : null)
+    || (settingsWindow && !settingsWindow.isDestroyed() ? settingsWindow : null)
+    || BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+  progressWindow?.setProgressBar(fraction);
+}
+
 async function showUpdateError(error) {
   updateStatus = 'idle';
   updateDownloadPercent = 0;
@@ -2646,6 +2663,7 @@ function initializeAutoUpdater() {
     if (nextPercent === updateDownloadPercent) return;
     updateDownloadPercent = nextPercent;
     refreshLiveUpdaterMenuItems();
+    applyUpdateProgressIndicators();
   });
   autoUpdater.on('update-downloaded', async (info) => {
     availableUpdateVersion = String(info?.version || availableUpdateVersion).trim();
@@ -2990,8 +3008,8 @@ function rebuildMenus() {
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setMenu(registerLiveUpdaterMenuItem(Menu.buildFromTemplate(quickAccessTemplate)));
   }
-  if (!tray) return;
-  tray.setContextMenu(registerLiveUpdaterMenuItem(Menu.buildFromTemplate(quickAccessTemplate)));
+  if (tray) tray.setContextMenu(registerLiveUpdaterMenuItem(Menu.buildFromTemplate(quickAccessTemplate)));
+  applyUpdateProgressIndicators();
 }
 
 function isOfficeVisible() {
