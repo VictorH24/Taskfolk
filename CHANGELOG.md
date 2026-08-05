@@ -4,11 +4,14 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.30 (August 4, 2026)
+
+- Improve macOS app access with reliable Dock visibility and artwork in installed builds, independent Dock and menu-bar icon settings, a safeguard that keeps at least one icon available, and a full right-click menu on the Dock icon
+- Refresh update-download percentages live in open application, Dock, and menu-bar menus without rebuilding the menus for every progress event
+
 ## Version 1.0.29 (August 4, 2026)
 
 - Add a session-only **Pause Provider Checks** option to every native menu; pausing freezes the current folk in grayscale and stops provider timers, file watchers, and snapshot refreshes, while resuming checks providers immediately or restarting Taskfolk clears Pause
-- Improve macOS app access with reliable Dock visibility, independent Dock and menu-bar icon settings, a safeguard that keeps at least one icon available, and a full right-click menu on the Dock icon
-- Refresh update-download percentages live in open application, Dock, and menu-bar menus without rebuilding the menus for every progress event
 
 ## Version 1.0.28 (August 4, 2026)
 

@@ -126,6 +126,7 @@ let updatePromptWindow = null;
 let updateErrorWasShown = false;
 let automaticUpdateCheckTimer = null;
 const liveUpdaterMenuItems = new Set();
+let macDockIcon = null;
 let dockHideRetryTimer = null;
 let dockShowRetryTimer = null;
 let boundsTimer = null;
@@ -724,6 +725,12 @@ function ensureDockHidden(retriesRemaining = 2) {
   }, 1_100);
 }
 
+function applyMacDockIcon() {
+  if (process.platform !== 'darwin' || !app.dock) return;
+  if (!macDockIcon) macDockIcon = nativeImage.createFromPath(APP_ICON_PATH);
+  if (!macDockIcon.isEmpty()) app.dock.setIcon(macDockIcon);
+}
+
 function ensureDockVisible(retriesRemaining = 4) {
   if (process.platform !== 'darwin' || !app.dock) return;
   // A window may finish opening with a stale config snapshot after the user
@@ -736,6 +743,9 @@ function ensureDockVisible(retriesRemaining = 4) {
   // before it has finished registering the application with the Dock.
   for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(false);
   app.setActivationPolicy('regular');
+  // Explicitly reapply the PNG when entering regular mode. Some installed
+  // builds otherwise get a Dock entry and running dot with blank artwork.
+  applyMacDockIcon();
 
   const verifyVisible = () => {
     if (readConfig().hideDockIcon) {
