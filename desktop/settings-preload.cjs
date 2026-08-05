@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('clawOffice', {
   testOpenClaw: (settings) => ipcRenderer.invoke('settings:openclaw-test', settings),
   onError: (callback) => ipcRenderer.on('settings:error', (_event, message) => callback(message)),
   onDockVisibilityChanged: (callback) => ipcRenderer.on('settings:dock-visibility', (_event, hidden) => callback(hidden)),
+  onMenuBarVisibilityChanged: (callback) => ipcRenderer.on('settings:menu-bar-visibility', (_event, visible) => callback(visible)),
   onLowEnergyModeChanged: (callback) => ipcRenderer.on('settings:low-energy-mode', (_event, enabled) => callback(enabled))
 });

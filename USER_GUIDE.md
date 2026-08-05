@@ -37,7 +37,9 @@ Taskfolk opens the **Setup** window on first launch. The simplest configuration 
 5. Choose whether to enable:
    - **Keep above other windows**
    - **Show folk on all Desktops and full-screen Spaces**
-   - **Show Taskfolk in the menu bar only (hide the Dock icon)**
+   - **Hide Taskfolk from the Dock**
+   - **Show Taskfolk in the menu bar**
+   - Taskfolk keeps at least one of the Dock or menu-bar icons visible so the app remains reachable.
 6. Enable the integrations you want to track. See [Configure integrations](#4-configure-integrations).
 7. Click **Run and open office**.
 

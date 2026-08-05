@@ -53,10 +53,7 @@
       ],
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
-      "notarize": true,
-      "extendInfo": {
-        "LSUIElement": true
-      }
+      "notarize": true
     },
     "win": {
       "target": "nsis"

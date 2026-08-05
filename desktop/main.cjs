@@ -125,10 +125,7 @@ let updateRequestIsManual = false;
 let updatePromptWindow = null;
 let updateErrorWasShown = false;
 let automaticUpdateCheckTimer = null;
-// Packaged macOS builds declare LSUIElement, so they begin in accessory mode
-// before Electron creates any windows. Development builds still need the
-// runtime transition because they use Electron's own bundle metadata.
-let macDockMode = process.platform === 'darwin' && app.isPackaged ? 'accessory' : null;
+const liveUpdaterMenuItems = new Set();
 let dockHideRetryTimer = null;
 let dockShowRetryTimer = null;
 let boundsTimer = null;
@@ -203,6 +200,7 @@ let quitting = false;
 let systemSuspended = false;
 let sessionLocked = false;
 let runtimePowerSuspended = false;
+let providerChecksPaused = false;
 let agentSnapshot = null;
 let agentSnapshotVersion = 0;
 let agentSnapshotTimer = null;
@@ -305,8 +303,8 @@ function isLowEnergyModeEnabled(config = readConfig()) {
   return Boolean(config.lowEnergyMode);
 }
 
-function areProviderChecksPaused(config = readConfig()) {
-  return Boolean(config.providerChecksPaused);
+function areProviderChecksPaused() {
+  return providerChecksPaused;
 }
 
 function integrationForAgentId(agentId) {
@@ -337,6 +335,19 @@ function isShowOnAllDesktopsEnabled(config = readConfig()) {
 
 function shouldSkipTaskbar(config = readConfig()) {
   return process.platform === 'darwin' && Boolean(config.hideDockIcon);
+}
+
+function isMenuBarIconEnabled(config = readConfig()) {
+  if (process.platform !== 'darwin') return true;
+  // A hidden Dock icon must always leave the menu-bar icon available, even if
+  // an older or imported configuration contains conflicting values.
+  if (config.hideDockIcon) return true;
+  // Before this was a separate preference, menu-bar visibility was implied by
+  // hideDockIcon. Preserve that behavior for existing installations.
+  if (Object.prototype.hasOwnProperty.call(config, 'showMenuBarIcon')) {
+    return Boolean(config.showMenuBarIcon);
+  }
+  return Boolean(config.hideDockIcon);
 }
 
 function normalizedOpacity(value) {
@@ -703,13 +714,12 @@ function ensureDockHidden(retriesRemaining = 2) {
   // currently hidden, then keep checking after the window has been shown.
   for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(true);
   app.setActivationPolicy('accessory');
-  macDockMode = 'accessory';
   if (app.dock.isVisible()) app.dock.hide();
   // Keep the existing retry schedule instead of creating overlapping timers.
   if (dockHideRetryTimer || retriesRemaining <= 0) return;
   dockHideRetryTimer = setTimeout(() => {
     dockHideRetryTimer = null;
-    if (!readConfig().hideDockIcon || !tray || tray.isDestroyed()) return;
+    if (!readConfig().hideDockIcon) return;
     ensureDockHidden(retriesRemaining - 1);
   }, 1_100);
 }
@@ -719,29 +729,22 @@ function ensureDockVisible(retriesRemaining = 4) {
   // A window may finish opening with a stale config snapshot after the user
   // has enabled menu-bar-only mode. Never let that late caller show the Dock.
   if (readConfig().hideDockIcon) {
-    if (tray && !tray.isDestroyed()) ensureDockHidden();
+    ensureDockHidden();
     return;
   }
-  // LSUIElement makes packaged builds start as accessory apps. Reassert the
-  // regular policy on every attempt: macOS can accept the launch-time request
+  // Reassert the regular policy on every attempt: macOS can accept the request
   // before it has finished registering the application with the Dock.
   for (const window of BrowserWindow.getAllWindows()) window.setSkipTaskbar(false);
   app.setActivationPolicy('regular');
-  macDockMode = 'regular';
 
   const verifyVisible = () => {
     if (readConfig().hideDockIcon) {
-      if (tray && !tray.isDestroyed()) ensureDockHidden();
+      ensureDockHidden();
       return;
     }
     if (app.dock.isVisible()) {
       clearTimeout(dockShowRetryTimer);
       dockShowRetryTimer = null;
-      if (tray && !tray.isDestroyed()) {
-        tray.destroy();
-        tray = null;
-        rebuildMenus();
-      }
       return;
     }
     if (dockShowRetryTimer || retriesRemaining <= 0) return;
@@ -765,17 +768,9 @@ function applyDockVisibility() {
   if (config.hideDockIcon) {
     clearTimeout(dockShowRetryTimer);
     dockShowRetryTimer = null;
-    if (!tray || tray.isDestroyed()) {
-      tray = null;
-      createTray();
-    }
-    // Never remove the Dock entry unless the menu-bar fallback was created.
-    // This keeps Setup and Quit reachable if macOS rejects the status image.
-    if (tray) {
-      // Accessory activation policy is the authoritative menu-bar-only mode;
-      // hide() remains as a compatibility fallback.
-      ensureDockHidden();
-    } else app.dock.show().catch(() => {});
+    // Accessory activation policy is authoritative; hide() remains as a
+    // compatibility fallback. Menu-bar visibility is managed independently.
+    ensureDockHidden();
     return;
   }
 
@@ -791,9 +786,39 @@ function applyDockVisibility() {
 function setHideDockIcon(enabled) {
   const config = readConfig();
   const hideDockIcon = Boolean(enabled);
-  writeConfig({ ...config, hideDockIcon });
+  const showMenuBarIcon = isMenuBarIconEnabled(config);
+  if (hideDockIcon && !showMenuBarIcon) {
+    settingsWindow?.webContents.send('settings:dock-visibility', false);
+    rebuildMenus();
+    return;
+  }
+  writeConfig({ ...config, hideDockIcon, showMenuBarIcon });
   applyDockVisibility({ ...config, hideDockIcon });
   settingsWindow?.webContents.send('settings:dock-visibility', hideDockIcon);
+  rebuildMenus();
+}
+
+function applyMenuBarVisibility() {
+  if (process.platform !== 'darwin' || isMenuBarIconEnabled()) {
+    createTray();
+    return;
+  }
+  if (tray && !tray.isDestroyed()) tray.destroy();
+  tray = null;
+  rebuildMenus();
+}
+
+function setShowMenuBarIcon(enabled) {
+  const config = readConfig();
+  const showMenuBarIcon = Boolean(enabled);
+  if (!showMenuBarIcon && config.hideDockIcon) {
+    settingsWindow?.webContents.send('settings:menu-bar-visibility', true);
+    rebuildMenus();
+    return;
+  }
+  writeConfig({ ...config, showMenuBarIcon });
+  applyMenuBarVisibility();
+  settingsWindow?.webContents.send('settings:menu-bar-visibility', showMenuBarIcon);
   rebuildMenus();
 }
 
@@ -2202,9 +2227,7 @@ async function setLowEnergyMode(enabled) {
 }
 
 function setProviderChecksPaused(enabled) {
-  const config = readConfig();
-  const providerChecksPaused = Boolean(enabled);
-  writeConfig({ ...config, providerChecksPaused });
+  providerChecksPaused = Boolean(enabled);
   broadcastProviderChecksPaused(providerChecksPaused);
   if (providerChecksPaused) {
     stopRuntimeAdapters();
@@ -2428,28 +2451,45 @@ function showUpdateMessage(options) {
 
 function updaterMenuItem(targetWindow = officeWindow) {
   if (updateStatus === 'checking') {
-    return { label: 'Checking for Updates…', enabled: false };
+    return { id: 'taskfolk-update', label: 'Checking for Updates…', enabled: false };
   }
   if (updateStatus === 'downloading') {
     const progress = updateDownloadPercent > 0 ? ` (${updateDownloadPercent}%)` : '';
-    return { label: `Downloading Taskfolk ${availableUpdateVersion || 'Update'}…${progress}`, enabled: false };
+    return { id: 'taskfolk-update', label: `Downloading Taskfolk ${availableUpdateVersion || 'Update'}…${progress}`, enabled: false };
   }
   if (updateStatus === 'downloaded') {
     return {
+      id: 'taskfolk-update',
       label: `Restart to Update to Taskfolk ${availableUpdateVersion}…`,
       click: () => confirmInstallUpdate(targetWindow)
     };
   }
   if (updateStatus === 'available') {
     return {
+      id: 'taskfolk-update',
       label: `Download Taskfolk ${availableUpdateVersion}…`,
       click: () => downloadAvailableUpdate(targetWindow)
     };
   }
   return {
+    id: 'taskfolk-update',
     label: 'Check for Updates…',
     click: () => checkForTaskfolkUpdates(targetWindow)
   };
+}
+
+function registerLiveUpdaterMenuItem(menu) {
+  const item = menu?.getMenuItemById('taskfolk-update');
+  if (item) liveUpdaterMenuItems.add(item);
+  return menu;
+}
+
+function refreshLiveUpdaterMenuItems() {
+  const state = updaterMenuItem();
+  for (const item of liveUpdaterMenuItems) {
+    item.label = state.label;
+    item.enabled = state.enabled !== false;
+  }
 }
 
 async function showUpdateError(error) {
@@ -2592,8 +2632,10 @@ function initializeAutoUpdater() {
   });
   autoUpdater.on('download-progress', (progress) => {
     updateStatus = 'downloading';
-    updateDownloadPercent = Math.max(0, Math.min(100, Math.round(Number(progress?.percent) || 0)));
-    rebuildMenus();
+    const nextPercent = Math.max(0, Math.min(100, Math.round(Number(progress?.percent) || 0)));
+    if (nextPercent === updateDownloadPercent) return;
+    updateDownloadPercent = nextPercent;
+    refreshLiveUpdaterMenuItems();
   });
   autoUpdater.on('update-downloaded', async (info) => {
     availableUpdateVersion = String(info?.version || availableUpdateVersion).trim();
@@ -2882,7 +2924,10 @@ function menuTemplate() {
         { label: 'Low Energy Mode', type: 'checkbox', checked: isLowEnergyModeEnabled(config), click: (item) => { void setLowEnergyMode(item.checked); } },
         { label: 'Always on Top', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
         ...(process.platform === 'darwin'
-          ? [{ label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, click: (item) => setHideDockIcon(!item.checked) }]
+          ? [
+              { label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, enabled: isMenuBarIconEnabled(config), click: (item) => setHideDockIcon(!item.checked) },
+              { label: 'Show in Menu Bar', type: 'checkbox', checked: isMenuBarIconEnabled(config), enabled: !config.hideDockIcon, click: (item) => setShowMenuBarIcon(item.checked) }
+            ]
           : []),
         updaterMenuItem(officeWindow),
         { type: 'separator' },
@@ -2894,16 +2939,9 @@ function menuTemplate() {
   ];
 }
 
-function rebuildMenus() {
-  const config = readConfig();
-  const menuBarOnly = process.platform === 'darwin' && Boolean(config.hideDockIcon);
-  // Installing a macOS application menu promotes an accessory app back to a
-  // regular app. In menu-bar-only mode the Tray context menu is the complete
-  // application menu, so keep the native application menu disabled.
-  Menu.setApplicationMenu(menuBarOnly ? null : Menu.buildFromTemplate(menuTemplate()));
-  if (!tray) return;
+function quickAccessMenuTemplate(config = readConfig()) {
   const alwaysOnTop = isAlwaysOnTopEnabled(config);
-  tray.setContextMenu(Menu.buildFromTemplate([
+  return [
     { label: isOfficeVisible() ? 'Hide Office' : 'Show Office', click: toggleOffice },
     { label: 'Reload', enabled: Boolean(officeWindow), click: () => officeWindow?.reload() },
     { type: 'separator' },
@@ -2913,7 +2951,10 @@ function rebuildMenus() {
     { label: 'Low Energy Mode', type: 'checkbox', checked: isLowEnergyModeEnabled(config), click: (item) => { void setLowEnergyMode(item.checked); } },
     { label: 'Always on Top', type: 'checkbox', checked: alwaysOnTop, click: (item) => setAlwaysOnTop(item.checked) },
     ...(process.platform === 'darwin'
-      ? [{ label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, click: (item) => setHideDockIcon(!item.checked) }]
+      ? [
+          { label: 'Show in Dock', type: 'checkbox', checked: !config.hideDockIcon, enabled: isMenuBarIconEnabled(config), click: (item) => setHideDockIcon(!item.checked) },
+          { label: 'Show in Menu Bar', type: 'checkbox', checked: isMenuBarIconEnabled(config), enabled: !config.hideDockIcon, click: (item) => setShowMenuBarIcon(item.checked) }
+        ]
       : []),
     { label: 'Setup…', click: () => openSettingsWindow() },
     { label: 'Config…', enabled: Boolean(activeBaseUrl), click: showConfigWindow },
@@ -2921,7 +2962,26 @@ function rebuildMenus() {
     updaterMenuItem(officeWindow),
     { type: 'separator' },
     { role: 'quit' }
-  ]));
+  ];
+}
+
+function rebuildMenus() {
+  const config = readConfig();
+  const menuBarOnly = process.platform === 'darwin' && Boolean(config.hideDockIcon);
+  // Installing a macOS application menu promotes an accessory app back to a
+  // regular app. In menu-bar-only mode the Tray context menu is the complete
+  // application menu, so keep the native application menu disabled.
+  liveUpdaterMenuItems.clear();
+  const applicationMenu = menuBarOnly
+    ? null
+    : registerLiveUpdaterMenuItem(Menu.buildFromTemplate(menuTemplate()));
+  Menu.setApplicationMenu(applicationMenu);
+  const quickAccessTemplate = quickAccessMenuTemplate(config);
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setMenu(registerLiveUpdaterMenuItem(Menu.buildFromTemplate(quickAccessTemplate)));
+  }
+  if (!tray) return;
+  tray.setContextMenu(registerLiveUpdaterMenuItem(Menu.buildFromTemplate(quickAccessTemplate)));
 }
 
 function isOfficeVisible() {
@@ -2999,6 +3059,8 @@ ipcMain.handle('settings:load', () => {
     showOnAllDesktops: isShowOnAllDesktopsEnabled(config),
     dockIconSupported: process.platform === 'darwin',
     hideDockIcon: Boolean(config.hideDockIcon),
+    menuBarIconSupported: process.platform === 'darwin',
+    showMenuBarIcon: isMenuBarIconEnabled(config),
     displayMode: displayMode(config),
     selectedAgent: config.selectedAgent || '',
     opacity: normalizedOpacity(config.opacity),
@@ -3123,6 +3185,7 @@ ipcMain.handle('settings:import-config', async (event) => {
     writePrivateJsonFile(path.join(localConfigDir, fileName), value);
   }
   writeConfig(importedConfig);
+  applyMenuBarVisibility();
   applyDockVisibility(importedConfig);
   runtimeCredentials = savedCredentials(importedConfig);
   runtimeOpenCodeCredentials = savedOpenCodeCredentials(importedConfig);
@@ -3210,6 +3273,7 @@ ipcMain.handle('settings:reset-config', async (event) => {
     if (error.code !== 'ENOENT') throw error;
   }
   await session.fromPartition(PARTITION, { cache: true }).clearStorageData();
+  applyMenuBarVisibility();
   applyDockVisibility({});
   rebuildMenus();
   return { canceled: false };
@@ -3307,7 +3371,8 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     lowEnergyStaticAllPoses: Boolean(input.lowEnergyStaticAllPoses),
     lowEnergyStaticIdlePoses: Boolean(input.lowEnergyStaticIdlePoses),
     showOnAllDesktops: process.platform === 'darwin' && Boolean(input.showOnAllDesktops),
-    hideDockIcon: process.platform === 'darwin' && Boolean(input.hideDockIcon),
+    hideDockIcon: process.platform === 'darwin' && Boolean(input.hideDockIcon) && Boolean(input.showMenuBarIcon),
+    showMenuBarIcon: process.platform === 'darwin' && Boolean(input.showMenuBarIcon),
     displayMode: ['avatar', 'random'].includes(input.displayMode) ? input.displayMode : 'office',
     selectedAgent: String(input.selectedAgent || config.selectedAgent || ''),
     opacity: normalizedOpacity(input.opacity),
@@ -3356,6 +3421,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
   if (mode === 'local') {
     writeConfig(nextConfig);
     updateRuntimePowerSuspension();
+    applyMenuBarVisibility();
     applyDockVisibility(nextConfig);
     const local = await startLocalServer();
     runtimeCredentials = local.credentials;
@@ -3378,6 +3444,7 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
   await authenticate(url, credentials, ses);
   writeConfig(nextConfig);
   updateRuntimePowerSuspension();
+  applyMenuBarVisibility();
   applyDockVisibility(nextConfig);
   await createOfficeWindow(url, credentials, true);
   stopLocalServer();
@@ -3412,8 +3479,8 @@ app.whenReady().then(async () => {
     config = { ...config, displayMode: 'office' };
     writeConfig(config);
   }
+  applyMenuBarVisibility();
   if (process.platform === 'darwin') applyDockVisibility(config);
-  else createTray();
   rebuildMenus();
   const environmentUrl = String(process.env.TASKFOLK_URL || '').trim();
   const environmentCredentials = environmentUrl ? {

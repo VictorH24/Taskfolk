@@ -29,6 +29,8 @@ const showOnAllDesktopsField = document.querySelector('#showOnAllDesktopsField')
 const showOnAllDesktopsInput = document.querySelector('#showOnAllDesktops');
 const hideDockIconField = document.querySelector('#hideDockIconField');
 const hideDockIconInput = document.querySelector('#hideDockIcon');
+const showMenuBarIconField = document.querySelector('#showMenuBarIconField');
+const showMenuBarIconInput = document.querySelector('#showMenuBarIcon');
 const openCodeEnabledInput = document.querySelector('#openCodeEnabled');
 const openCodeGroupingField = document.querySelector('#openCodeGroupingField');
 const openCodeGroupingInput = document.querySelector('#openCodeGrouping');
@@ -184,6 +186,15 @@ function updateLowEnergyFields() {
   lowEnergyStaticIdleField.classList.toggle('optionDisabled', staticAllPoses);
 }
 
+function updateAppPresenceFields() {
+  if (hideDockIconInput.checked) showMenuBarIconInput.checked = true;
+  if (!showMenuBarIconInput.checked) hideDockIconInput.checked = false;
+  hideDockIconInput.disabled = !showMenuBarIconInput.checked;
+  showMenuBarIconInput.disabled = hideDockIconInput.checked;
+  hideDockIconField.classList.toggle('optionDisabled', hideDockIconInput.disabled);
+  showMenuBarIconField.classList.toggle('optionDisabled', showMenuBarIconInput.disabled);
+}
+
 function updateOpenCodeFields() {
   openCodeGroupingField.classList.toggle('hidden', !openCodeEnabledInput.checked);
   openCodeUrlField.classList.toggle('hidden', !openCodeEnabledInput.checked);
@@ -279,6 +290,8 @@ async function initialize() {
   showOnAllDesktopsInput.checked = Boolean(settings.showOnAllDesktops);
   hideDockIconField.classList.toggle('hidden', !settings.dockIconSupported);
   hideDockIconInput.checked = Boolean(settings.hideDockIcon);
+  showMenuBarIconField.classList.toggle('hidden', !settings.menuBarIconSupported);
+  showMenuBarIconInput.checked = Boolean(settings.showMenuBarIcon);
   displayModeInput.value = settings.displayMode || 'office';
   opacityInput.value = String(Math.round((settings.opacity || 1) * 100));
   avatarWidthInput.value = String(settings.avatarWidth || 300);
@@ -340,6 +353,7 @@ async function initialize() {
   updateDisplayFields();
   updateOpacityLabel();
   updateLowEnergyFields();
+  updateAppPresenceFields();
   updateOpenCodeFields();
   updateOpenClawFields();
   updateVsCodeCopilotFields();
@@ -363,6 +377,11 @@ async function initialize() {
 window.clawOffice.onError(showError);
 window.clawOffice.onDockVisibilityChanged((hidden) => {
   hideDockIconInput.checked = Boolean(hidden);
+  updateAppPresenceFields();
+});
+window.clawOffice.onMenuBarVisibilityChanged((visible) => {
+  showMenuBarIconInput.checked = Boolean(visible);
+  updateAppPresenceFields();
 });
 window.clawOffice.onLowEnergyModeChanged((enabled) => {
   lowEnergyModeInput.checked = Boolean(enabled);
@@ -374,6 +393,8 @@ opacityInput.addEventListener('input', updateOpacityLabel);
 lowEnergyModeInput.addEventListener('change', updateLowEnergyFields);
 lowEnergyRefreshOverrideEnabledInput.addEventListener('change', updateLowEnergyFields);
 lowEnergyStaticAllPosesInput.addEventListener('change', updateLowEnergyFields);
+hideDockIconInput.addEventListener('change', updateAppPresenceFields);
+showMenuBarIconInput.addEventListener('change', updateAppPresenceFields);
 openCodeEnabledInput.addEventListener('change', updateOpenCodeFields);
 openClawEnabledInput.addEventListener('change', updateOpenClawFields);
 vsCodeCopilotEnabledInput.addEventListener('change', updateVsCodeCopilotFields);
@@ -501,6 +522,7 @@ form.addEventListener('submit', async (event) => {
       lowEnergyStaticIdlePoses: lowEnergyStaticIdlePosesInput.checked,
       showOnAllDesktops: showOnAllDesktopsInput.checked,
       hideDockIcon: hideDockIconInput.checked,
+      showMenuBarIcon: showMenuBarIconInput.checked,
       displayMode: displayModeInput.value,
       selectedAgent: selectedAgentInput.value,
       opacity: Number(opacityInput.value) / 100,
