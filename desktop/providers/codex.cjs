@@ -11,9 +11,13 @@ const CODEX_GROUPING_PROJECT = 'project';
 const CODEX_GROUPING_SINGLE = 'single';
 const ROLLOUT_TAIL_BYTES = 256 * 1024;
 const ACP_SNAPSHOT_TTL_MS = 15_000;
+const ROLLOUT_INDEX_TTL_MS = 15_000;
 const MAX_ROLLOUT_FILES_SCANNED = 500;
+const MAX_ROLLOUT_ACTIVITY_CACHE_ENTRIES = 2_000;
 let acpSnapshotCache = null;
 let acpSnapshotPromise = null;
+const rolloutIndexCache = new Map();
+const rolloutActivityCache = new Map();
 
 function normalizeCodexGrouping(value) {
   return value === CODEX_GROUPING_PROJECT ? CODEX_GROUPING_PROJECT : CODEX_GROUPING_SINGLE;
@@ -46,7 +50,7 @@ function defaultCodexSessionsRoot(options = {}) {
   return path.join(codexHome(options), 'sessions');
 }
 
-function rolloutFiles(sessionsRoot, maxFiles = MAX_ROLLOUT_FILES_SCANNED) {
+function scanRolloutFiles(sessionsRoot, maxFiles = MAX_ROLLOUT_FILES_SCANNED) {
   const candidates = [];
   const pending = [sessionsRoot];
   while (pending.length) {
@@ -66,6 +70,16 @@ function rolloutFiles(sessionsRoot, maxFiles = MAX_ROLLOUT_FILES_SCANNED) {
   return candidates
     .sort((left, right) => right.mtimeMs - left.mtimeMs)
     .slice(0, Math.max(1, Number(maxFiles) || MAX_ROLLOUT_FILES_SCANNED));
+}
+
+function rolloutFiles(sessionsRoot, maxFiles = MAX_ROLLOUT_FILES_SCANNED, nowMs = Date.now()) {
+  const limit = Math.max(1, Number(maxFiles) || MAX_ROLLOUT_FILES_SCANNED);
+  const key = `${path.resolve(sessionsRoot)}\0${limit}`;
+  const cached = rolloutIndexCache.get(key);
+  if (cached && nowMs - cached.at < ROLLOUT_INDEX_TTL_MS) return cached.files;
+  const files = scanRolloutFiles(sessionsRoot, limit);
+  rolloutIndexCache.set(key, { at: nowMs, files });
+  return files;
 }
 
 function rowsFromAcpSessions(sessions, sessionsRoot) {
@@ -149,12 +163,39 @@ function numericTimestampMs(...values) {
   return 0;
 }
 
+function cacheRolloutActivity(rolloutPath, fingerprint, value) {
+  rolloutActivityCache.delete(rolloutPath);
+  rolloutActivityCache.set(rolloutPath, { ...fingerprint, value });
+  while (rolloutActivityCache.size > MAX_ROLLOUT_ACTIVITY_CACHE_ENTRIES) {
+    rolloutActivityCache.delete(rolloutActivityCache.keys().next().value);
+  }
+  return value;
+}
+
 function readRolloutActivity(rolloutPath) {
   let handle;
   try {
     handle = fs.openSync(rolloutPath, 'r');
-    const size = fs.fstatSync(handle).size;
-    if (!size) return null;
+    const stat = fs.fstatSync(handle);
+    const fingerprint = {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      ino: stat.ino
+    };
+    const cached = rolloutActivityCache.get(rolloutPath);
+    if (cached
+      && cached.size === fingerprint.size
+      && cached.mtimeMs === fingerprint.mtimeMs
+      && cached.ctimeMs === fingerprint.ctimeMs
+      && cached.ino === fingerprint.ino) {
+      // Refresh insertion order so frequently used sessions remain in the LRU.
+      rolloutActivityCache.delete(rolloutPath);
+      rolloutActivityCache.set(rolloutPath, cached);
+      return cached.value;
+    }
+    const size = stat.size;
+    if (!size) return cacheRolloutActivity(rolloutPath, fingerprint, null);
     let length = Math.min(size, ROLLOUT_TAIL_BYTES);
     while (length > 0) {
       const buffer = Buffer.alloc(length);
@@ -192,7 +233,11 @@ function readRolloutActivity(rolloutPath) {
         }
       }
       if (latestSignal || pendingApprovalCalls.size || length === size) {
-        return { latestMs, latestSignal, awaitingApproval: pendingApprovalCalls.size > 0 };
+        return cacheRolloutActivity(rolloutPath, fingerprint, {
+          latestMs,
+          latestSignal,
+          awaitingApproval: pendingApprovalCalls.size > 0
+        });
       }
       length = Math.min(size, length * 2);
     }
@@ -202,6 +247,13 @@ function readRolloutActivity(rolloutPath) {
   } finally {
     if (handle !== undefined) fs.closeSync(handle);
   }
+}
+
+function clearCodexProviderCaches() {
+  acpSnapshotCache = null;
+  acpSnapshotPromise = null;
+  rolloutIndexCache.clear();
+  rolloutActivityCache.clear();
 }
 
 function projectIdentity(cwd) {
@@ -334,9 +386,12 @@ async function fetchCodexAgents({
 
 module.exports = {
   ACTIVE_ACTIVITY_MS,
+  ACP_SNAPSHOT_TTL_MS,
   CODEX_GROUPING_PROJECT,
   CODEX_GROUPING_SINGLE,
+  ROLLOUT_INDEX_TTL_MS,
   agentsFromRows,
+  clearCodexProviderCaches,
   codexHome,
   defaultCodexDbPath,
   defaultCodexSessionsRoot,

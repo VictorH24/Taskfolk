@@ -21,6 +21,8 @@ const CHAT_INDEX_KEY = 'chat.ChatSessionStore.index';
 const SESSION_TAIL_BYTES = 256 * 1024;
 const AGENT_HOST_LOG_TAIL_BYTES = 512 * 1024;
 const COPILOT_CHAT_LOG_TAIL_BYTES = 256 * 1024;
+const MAX_SESSION_RUNTIME_CACHE_ENTRIES = 2_000;
+const sessionRuntimeCache = new Map();
 
 function defaultVsCodeWorkspaceStorageRoots({
   platform = process.platform,
@@ -310,6 +312,15 @@ function responseIsStillThinking(response) {
   return false;
 }
 
+function cacheSessionRuntimeState(sessionPath, fingerprint, value) {
+  sessionRuntimeCache.delete(sessionPath);
+  sessionRuntimeCache.set(sessionPath, { ...fingerprint, value });
+  while (sessionRuntimeCache.size > MAX_SESSION_RUNTIME_CACHE_ENTRIES) {
+    sessionRuntimeCache.delete(sessionRuntimeCache.keys().next().value);
+  }
+  return value;
+}
+
 function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
   let sessionPath = '';
   for (const extension of ['jsonl', 'json']) {
@@ -324,9 +335,26 @@ function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
   let handle;
   try {
     handle = fs.openSync(sessionPath, 'r');
-    const size = fs.fstatSync(handle).size;
+    const stat = fs.fstatSync(handle);
+    const fingerprint = {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      ino: stat.ino
+    };
+    const cached = sessionRuntimeCache.get(sessionPath);
+    if (cached
+      && cached.size === fingerprint.size
+      && cached.mtimeMs === fingerprint.mtimeMs
+      && cached.ctimeMs === fingerprint.ctimeMs
+      && cached.ino === fingerprint.ino) {
+      sessionRuntimeCache.delete(sessionPath);
+      sessionRuntimeCache.set(sessionPath, cached);
+      return cached.value;
+    }
+    const size = stat.size;
     const length = Math.min(size, SESSION_TAIL_BYTES);
-    if (!length) return null;
+    if (!length) return cacheSessionRuntimeState(sessionPath, fingerprint, null);
     const buffer = Buffer.alloc(length);
     fs.readSync(handle, buffer, 0, length, size - length);
     const lines = buffer.toString('utf8').split(/\r?\n/);
@@ -392,17 +420,21 @@ function latestSessionRuntimeState(workspaceStoragePath, sessionId) {
         }
       }
     }
-    return {
+    return cacheSessionRuntimeState(sessionPath, fingerprint, {
       modelState: latestState,
       awaitingApproval: responseNeedsApproval(latestResponse),
       failed: Number(latestState?.value) === 3 || Boolean(latestResult?.errorDetails),
       stillThinking: responseIsStillThinking(latestResponse)
-    };
+    });
   } catch {
     return null;
   } finally {
     if (handle !== undefined) fs.closeSync(handle);
   }
+}
+
+function clearVsCodeCopilotCaches() {
+  sessionRuntimeCache.clear();
 }
 
 function latestSessionModelState(workspaceStoragePath, sessionId) {
@@ -767,6 +799,7 @@ module.exports = {
   COPILOT_CHAT_LOG_TAIL_BYTES,
   VSCODE_COPILOT_GROUPING_PROJECT,
   VSCODE_COPILOT_GROUPING_SINGLE,
+  clearVsCodeCopilotCaches,
   defaultVsCodeWorkspaceStorageRoots,
   agentsFromAhpSessions,
   ahpInputDisplay,

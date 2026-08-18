@@ -12,6 +12,8 @@ const {
 
 const APPROVAL_LOG_TAIL_BYTES = 256 * 1024;
 const APPROVAL_MAX_AGE_MS = 12 * 60 * 60_000;
+const MAX_APPROVAL_LOG_CACHE_ENTRIES = 8;
+const approvalLogCache = new Map();
 
 function defaultOpenCodeDbPath({ platform = process.platform, env = process.env, home = os.homedir() } = {}) {
   if (env.OPENCODE_DB && env.OPENCODE_DB !== ':memory:') return path.resolve(env.OPENCODE_DB);
@@ -124,6 +126,21 @@ function rowStatus(row, nowMs, awaitingApproval = false) {
   return 'idle';
 }
 
+function cacheApprovalLog(logPath, fingerprint, pending) {
+  approvalLogCache.delete(logPath);
+  approvalLogCache.set(logPath, { ...fingerprint, pending });
+  while (approvalLogCache.size > MAX_APPROVAL_LOG_CACHE_ENTRIES) {
+    approvalLogCache.delete(approvalLogCache.keys().next().value);
+  }
+  return pending;
+}
+
+function currentApprovalSessions(pending, nowMs, maxAgeMs) {
+  return new Set([...pending]
+    .filter(([, askedAt]) => nowMs - askedAt >= 0 && nowMs - askedAt <= maxAgeMs)
+    .map(([sessionId]) => sessionId));
+}
+
 function readOpenCodeApprovalSessions(
   logPath = defaultOpenCodeLogPath(),
   nowMs = Date.now(),
@@ -132,8 +149,29 @@ function readOpenCodeApprovalSessions(
   let handle;
   try {
     handle = fs.openSync(logPath, 'r');
-    const size = fs.fstatSync(handle).size;
-    if (!size) return new Set();
+    const stat = fs.fstatSync(handle);
+    const fingerprint = {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      ino: stat.ino
+    };
+    const cached = approvalLogCache.get(logPath);
+    if (cached
+      && cached.size === fingerprint.size
+      && cached.mtimeMs === fingerprint.mtimeMs
+      && cached.ctimeMs === fingerprint.ctimeMs
+      && cached.ino === fingerprint.ino) {
+      approvalLogCache.delete(logPath);
+      approvalLogCache.set(logPath, cached);
+      return currentApprovalSessions(cached.pending, nowMs, maxAgeMs);
+    }
+    const size = stat.size;
+    if (!size) return currentApprovalSessions(
+      cacheApprovalLog(logPath, fingerprint, new Map()),
+      nowMs,
+      maxAgeMs
+    );
     const length = Math.min(size, APPROVAL_LOG_TAIL_BYTES);
     const buffer = Buffer.alloc(length);
     fs.readSync(handle, buffer, 0, length, size - length);
@@ -160,14 +198,17 @@ function readOpenCodeApprovalSessions(
         pending.set(currentSessionId, timestampMs);
       }
     }
-    return new Set([...pending]
-      .filter(([, askedAt]) => nowMs - askedAt >= 0 && nowMs - askedAt <= maxAgeMs)
-      .map(([sessionId]) => sessionId));
+    cacheApprovalLog(logPath, fingerprint, pending);
+    return currentApprovalSessions(pending, nowMs, maxAgeMs);
   } catch {
     return new Set();
   } finally {
     if (handle !== undefined) fs.closeSync(handle);
   }
+}
+
+function clearOpenCodeDesktopCaches() {
+  approvalLogCache.clear();
 }
 
 function modelFromRow(row) {
@@ -260,6 +301,7 @@ async function fetchOpenCodeDesktopAgents({
 
 module.exports = {
   agentsFromRows,
+  clearOpenCodeDesktopCaches,
   defaultOpenCodeDbPath,
   defaultOpenCodeLogPath,
   fetchOpenCodeDesktopAgents,

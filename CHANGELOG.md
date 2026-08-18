@@ -4,6 +4,13 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.32 (August 17, 2026)
+
+- Reduce Codex polling work by caching session-file discovery and unchanged rollout lifecycle parsing
+- Reduce OpenCode polling work by caching unchanged approval-log parsing while preserving time-based approval expiry
+- Reduce VS Code Copilot Chat polling work by caching privacy-safe lifecycle state for unchanged session files while retaining immediate file-watcher refreshes
+- Publish changed Codex, OpenCode, and VS Code Copilot states immediately while replacing unchanged five-second status posts with 60-second heartbeats
+
 ## Version 1.0.31 (August 4, 2026)
 
 - Fix blank macOS Dock artwork in installed builds by loading the external bundled application icon whenever the Dock entry is created or restored

@@ -11,6 +11,8 @@ services:
       - ~/.openclaw/workspace-researcher:/shared/workspace-researcher
       - ~/.openclaw/workspace-legal:/shared/workspace-legal
       - ~/.openclaw/workspace-rogueworker:/shared/workspace-rogueworker
+      - ~/.openclaw/workspace-chef:/shared/workspace-chef
+      - ~/.openclaw/workspace-mail-reader:/shared/workspace-mail-reader
       # Additional shared folders. Change the host paths to the folders you want to expose.
       - ~/DEV:/shared/workspace/DEV
       - ~/DEV:/shared/workspace-coder/DEV

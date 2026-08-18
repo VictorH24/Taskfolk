@@ -183,6 +183,16 @@ function preferOpenCodeAgent(left, right) {
   return agentActivityMs(right) > agentActivityMs(left) ? right : left;
 }
 
+function openCodeRuntimeSignature(agents) {
+  return JSON.stringify((Array.isArray(agents) ? agents : []).map((agent) => ({
+    ...agent,
+    // OpenCode reports active sessions with a poll-time lastSeen value. It is
+    // transport freshness, not a meaningful state change; the heartbeat keeps
+    // the server-side runtime source alive.
+    ...(agent?.status === 'active' ? { lastSeen: null } : {})
+  })));
+}
+
 async function fetchOpenCodeAgents({
   baseUrl = DEFAULT_OPENCODE_URL,
   username = 'opencode',
@@ -261,6 +271,7 @@ module.exports = {
   normalizeOpenCodeUrl,
   normalizeProjectDirectory,
   normalizedStatus,
+  openCodeRuntimeSignature,
   preferOpenCodeAgent,
   projectIdentity,
   singleOpenCodeAgent,

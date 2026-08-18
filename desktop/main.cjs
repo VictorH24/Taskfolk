@@ -9,6 +9,7 @@ const {
   fetchOpenCodeAgents,
   normalizeOpenCodeGrouping,
   normalizeOpenCodeUrl,
+  openCodeRuntimeSignature,
   preferOpenCodeAgent
 } = require('./providers/opencode.cjs');
 const { fetchOpenCodeDesktopAgents } = require('./providers/opencode-desktop.cjs');
@@ -80,6 +81,10 @@ const {
   lowEnergyVisibleProvidersOnly,
   providerPollingAllowedForVisibleSet
 } = require('./low-energy-options.cjs');
+const {
+  DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS,
+  runtimePublishDue
+} = require('./runtime-publish-policy.cjs');
 
 const DEFAULT_BOUNDS = { width: 720, height: 500 };
 const DEFAULT_AVATAR_BOUNDS = { width: 300, height: 380 };
@@ -138,6 +143,7 @@ let openCodeTimer = null;
 let openCodeSyncInFlight = false;
 let openCodePublished = false;
 let openCodeLastError = '';
+let openCodePublishState = null;
 let runtimeOpenCodeCredentials = null;
 let openClawTimer = null;
 let openClawSyncInFlight = false;
@@ -155,6 +161,7 @@ let vsCodeCopilotSyncInFlight = false;
 let vsCodeCopilotPublished = false;
 let vsCodeCopilotLastError = '';
 let vsCodeCopilotSnapshotSignature = '';
+let vsCodeCopilotPublishState = null;
 let vsCodeCopilotWatchDebounceTimer = null;
 const vsCodeCopilotWatchers = new Map();
 let cursorTimer = null;
@@ -165,6 +172,7 @@ let codexTimer = null;
 let codexSyncInFlight = false;
 let codexPublished = false;
 let codexLastError = '';
+let codexPublishState = null;
 let gooseTimer = null;
 let gooseSyncInFlight = false;
 let goosePublished = false;
@@ -1200,6 +1208,42 @@ async function publishRuntimeAgents(provider, agents, config = readConfig()) {
   }
 }
 
+async function publishCodexRuntimeAgents(agents, config = readConfig()) {
+  const nowMs = Date.now();
+  const signature = JSON.stringify({
+    baseUrl: activeBaseUrl,
+    sourceId: ensureRuntimeSourceId(config),
+    agents
+  });
+  if (!runtimePublishDue(
+    codexPublishState,
+    signature,
+    nowMs,
+    DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS
+  )) return false;
+  await publishRuntimeAgents('codex', agents, config);
+  codexPublishState = { signature, publishedAtMs: nowMs };
+  return true;
+}
+
+async function publishOpenCodeRuntimeAgents(agents, config = readConfig()) {
+  const nowMs = Date.now();
+  const signature = JSON.stringify({
+    baseUrl: activeBaseUrl,
+    sourceId: ensureRuntimeSourceId(config),
+    agents: openCodeRuntimeSignature(agents)
+  });
+  if (!runtimePublishDue(
+    openCodePublishState,
+    signature,
+    nowMs,
+    DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS
+  )) return false;
+  await publishRuntimeAgents('opencode', agents, config);
+  openCodePublishState = { signature, publishedAtMs: nowMs };
+  return true;
+}
+
 function scheduleOpenCodeSync() {
   clearTimeout(openCodeTimer);
   openCodeTimer = null;
@@ -1218,7 +1262,7 @@ async function syncOpenCodeAdapter() {
   try {
     const config = readConfig();
     if (!config.openCodeEnabled) {
-      if (openCodePublished) await publishRuntimeAgents('opencode', [], config);
+      if (openCodePublished) await publishOpenCodeRuntimeAgents([], config);
       openCodePublished = false;
       openCodeLastError = '';
       return;
@@ -1270,7 +1314,7 @@ async function syncOpenCodeAdapter() {
     }
     if (!agents.length && serverError && !desktopAgents.length) throw serverError;
     if (syncGeneration !== runtimeSyncGeneration) return;
-    await publishRuntimeAgents('opencode', agents, config);
+    await publishOpenCodeRuntimeAgents(agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
     openCodePublished = agents.length > 0;
     openCodeLastError = '';
@@ -1280,7 +1324,7 @@ async function syncOpenCodeAdapter() {
     if (message !== openCodeLastError) console.warn(`OpenCode adapter: ${message}`);
     openCodeLastError = message;
     if (openCodePublished) {
-      try { await publishRuntimeAgents('opencode', []); } catch {}
+      try { await publishOpenCodeRuntimeAgents([]); } catch {}
       openCodePublished = false;
     }
   } finally {
@@ -1383,6 +1427,24 @@ function vsCodeCopilotStatusSignature(agents) {
   })));
 }
 
+async function publishVsCodeCopilotRuntimeAgents(agents, config = readConfig()) {
+  const nowMs = Date.now();
+  const signature = JSON.stringify({
+    baseUrl: activeBaseUrl,
+    sourceId: ensureRuntimeSourceId(config),
+    agents
+  });
+  if (!runtimePublishDue(
+    vsCodeCopilotPublishState,
+    signature,
+    nowMs,
+    DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS
+  )) return false;
+  await publishRuntimeAgents('vscode-copilot', agents, config);
+  vsCodeCopilotPublishState = { signature, publishedAtMs: nowMs };
+  return true;
+}
+
 function refreshAgentSnapshotAfterRuntimePublish() {
   const pending = agentSnapshotRequest;
   void Promise.resolve(pending)
@@ -1400,7 +1462,7 @@ async function syncVsCodeCopilotAdapter() {
   try {
     const config = readConfig();
     if (!config.vsCodeCopilotEnabled) {
-      if (vsCodeCopilotPublished) await publishRuntimeAgents('vscode-copilot', [], config);
+      if (vsCodeCopilotPublished) await publishVsCodeCopilotRuntimeAgents([], config);
       vsCodeCopilotPublished = false;
       vsCodeCopilotLastError = '';
       if (vsCodeCopilotSnapshotSignature) {
@@ -1414,7 +1476,7 @@ async function syncVsCodeCopilotAdapter() {
       grouping: normalizeVsCodeCopilotGrouping(config.vsCodeCopilotGrouping)
     });
     if (syncGeneration !== runtimeSyncGeneration) return;
-    await publishRuntimeAgents('vscode-copilot', agents, config);
+    await publishVsCodeCopilotRuntimeAgents(agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
     const snapshotSignature = vsCodeCopilotStatusSignature(agents);
     if (snapshotSignature !== vsCodeCopilotSnapshotSignature) {
@@ -1429,7 +1491,7 @@ async function syncVsCodeCopilotAdapter() {
     if (message !== vsCodeCopilotLastError) console.warn(`VS Code Copilot adapter: ${message}`);
     vsCodeCopilotLastError = message;
     if (vsCodeCopilotPublished) {
-      try { await publishRuntimeAgents('vscode-copilot', []); } catch {}
+      try { await publishVsCodeCopilotRuntimeAgents([]); } catch {}
       vsCodeCopilotPublished = false;
       if (vsCodeCopilotSnapshotSignature) {
         vsCodeCopilotSnapshotSignature = '';
@@ -1524,7 +1586,7 @@ async function syncCodexAdapter() {
     const config = readConfig();
     const grouping = normalizeCodexGrouping(config.codexGrouping);
     if (!config.codexEnabled) {
-      if (codexPublished) await publishRuntimeAgents('codex', [], config);
+      if (codexPublished) await publishCodexRuntimeAgents([], config);
       codexPublished = false;
       codexLastError = '';
       return;
@@ -1532,7 +1594,7 @@ async function syncCodexAdapter() {
     if (!providerPollingAllowed(config, 'codex')) return;
     const agents = await fetchCodexAgents({ grouping });
     if (syncGeneration !== runtimeSyncGeneration) return;
-    await publishRuntimeAgents('codex', agents, config);
+    await publishCodexRuntimeAgents(agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
     codexPublished = agents.length > 0;
     codexLastError = '';
@@ -1542,7 +1604,7 @@ async function syncCodexAdapter() {
     if (message !== codexLastError) console.warn(`Codex adapter: ${message}`);
     codexLastError = message;
     if (codexPublished) {
-      try { await publishRuntimeAgents('codex', []); } catch {}
+      try { await publishCodexRuntimeAgents([]); } catch {}
       codexPublished = false;
     }
   } finally {
@@ -2864,9 +2926,12 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
     rankBoardWindow?.destroy();
     runtimeAgentMenuSignatures.clear();
     openCodePublished = false;
+    openCodePublishState = null;
     vsCodeCopilotPublished = false;
+    vsCodeCopilotPublishState = null;
     cursorPublished = false;
     codexPublished = false;
+    codexPublishState = null;
     goosePublished = false;
     buzzPublished = false;
     claudePublished = false;
