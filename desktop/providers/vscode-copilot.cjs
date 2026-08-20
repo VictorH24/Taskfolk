@@ -7,6 +7,10 @@ const {
   defaultVsCodeAgentHostMetadataPaths,
   fetchVsCodeAhpSessions
 } = require('./vscode-ahp.cjs');
+const {
+  defaultCodexDbPath,
+  readRolloutActivity
+} = require('./codex.cjs');
 
 const ACTIVE_ACTIVITY_MS = 30_000;
 // VS Code persists the request completion marker before its chat UI has
@@ -242,32 +246,84 @@ function readCopilotAgentHostStates(logRoots) {
     for (const line of readFileTail(filePath, AGENT_HOST_LOG_TAIL_BYTES).split(/\r?\n/)) {
       // Intentionally stop matching before any prompt or error body. TaskFolk
       // retains only the timestamp, opaque session id, and lifecycle marker.
-      const match = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[\w+\] \[Copilot:([^\]]+)\] (sendMessage called:|Session error:|Session idle\b)/.exec(line);
+      const match = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[\w+\] \[(Copilot|Codex):([^\]]+)\] (sendMessage called:|Tool started:|Session error:|Session idle\b)/.exec(line);
       if (!match) continue;
       const timestamp = Date.parse(match[1].replace(' ', 'T'));
       if (!Number.isFinite(timestamp)) continue;
-      const sessionId = match[2];
-      const state = events.get(sessionId) || { activeAt: 0, errorAt: 0, idleAt: 0 };
-      if (match[3] === 'sendMessage called:') state.activeAt = Math.max(state.activeAt, timestamp);
-      else if (match[3] === 'Session error:') state.errorAt = Math.max(state.errorAt, timestamp);
+      const provider = match[2].toLowerCase();
+      const sessionId = match[3];
+      const state = events.get(sessionId) || { provider, activeAt: 0, errorAt: 0, idleAt: 0 };
+      if (match[4] === 'sendMessage called:' || match[4] === 'Tool started:') {
+        state.activeAt = Math.max(state.activeAt, timestamp);
+      } else if (match[4] === 'Session error:') state.errorAt = Math.max(state.errorAt, timestamp);
       else state.idleAt = Math.max(state.idleAt, timestamp);
       events.set(sessionId, state);
     }
   }
 
   const states = new Map();
+  const providerStates = new Map();
   for (const [sessionId, event] of events) {
     const updatedAt = Math.max(event.activeAt, event.errorAt, event.idleAt);
     const status = event.errorAt > event.activeAt
       ? 'blocked'
       : (event.activeAt > event.idleAt ? 'active' : 'idle');
-    states.set(sessionId, { status, updatedAt });
+    const state = { status, updatedAt };
+    states.set(sessionId, state);
+    const providerKey = `provider:${event.provider}`;
+    if (updatedAt > Number(providerStates.get(providerKey)?.updatedAt || 0)) {
+      providerStates.set(providerKey, state);
+    }
+  }
+  for (const [key, state] of providerStates) states.set(key, state);
+  return states;
+}
+
+function readVsCodeCodexThreadStates(logRoots, dbPath = defaultCodexDbPath()) {
+  const threadPrefixes = new Map();
+  for (const filePath of agentHostLogFiles(logRoots)) {
+    for (const line of readFileTail(filePath, AGENT_HOST_LOG_TAIL_BYTES).split(/\r?\n/)) {
+      // VS Code replaces its placeholder thread with a fresh Codex thread.
+      // Both UUIDv7 values retain the same timestamp prefix, which lets us
+      // locate the real rollout without reading prompt or response content.
+      const match = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \[\w+\] \[Codex:([^\]]+)\] replacing thread ([\da-f]{8})-[\da-f-]+ with a fresh openai thread/i.exec(line);
+      if (match) threadPrefixes.set(match[1], match[2].toLowerCase());
+    }
+  }
+  if (!threadPrefixes.size || !fs.existsSync(dbPath)) return new Map();
+
+  let db;
+  const states = new Map();
+  try {
+    db = openReadOnlyDatabase(dbPath);
+    const findThread = db.prepare(`
+      SELECT id, rollout_path
+      FROM threads
+      WHERE id LIKE ?
+      ORDER BY COALESCE(NULLIF(recency_at_ms, 0), NULLIF(updated_at_ms, 0), updated_at * 1000) DESC
+      LIMIT 1
+    `);
+    for (const [sessionId, prefix] of threadPrefixes) {
+      const row = findThread.get(`${prefix}-%`);
+      const activity = readRolloutActivity(String(row?.rollout_path || ''));
+      const signal = String(activity?.latestSignal || '');
+      if (!signal && !activity?.awaitingApproval) continue;
+      const status = activity?.awaitingApproval
+        || ['stream_error', 'error'].includes(signal)
+        ? 'blocked'
+        : signal === 'task_started' ? 'active' : 'idle';
+      states.set(sessionId, { status, updatedAt: Number(activity?.latestMs || 0) });
+    }
+  } catch {
+    return new Map();
+  } finally {
+    try { db?.close(); } catch {}
   }
   return states;
 }
 
 function copilotAgentHostSessionKey(sessionId) {
-  const match = /^(?:agent-host-)?copilotcli:\/(.+)$/.exec(String(sessionId || ''));
+  const match = /^(?:agent-host-)?(?:(?:github-?)?copilot(?:cli)?|(?:openai-?)?codex):\/(.+)$/i.exec(String(sessionId || ''));
   return match?.[1] || '';
 }
 
@@ -481,6 +537,17 @@ function projectIdentity(reference) {
   };
 }
 
+function vsCodeAgentKind(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (/^(?:agent-host-)?(?:openai-?)?codex(?::\/|$)/.test(raw)) {
+    return { id: 'codex', label: 'Codex' };
+  }
+  if (/^(?:(?:agent-host-)?(?:github-?)?copilot(?:cli)?(?::\/|$))/.test(raw)) {
+    return { id: 'copilot', label: 'Copilot' };
+  }
+  return null;
+}
+
 function normalizeSession(
   entry,
   reference,
@@ -493,7 +560,14 @@ function normalizeSession(
   if (!sessionId || !reference || entry?.isEmpty === true) return null;
   const lastMessageMs = Number(entry?.lastMessageDate) || 0;
   const fileMtimeMs = sessionFileMtime(workspaceStoragePath, sessionId);
-  const agentHostState = agentHostStates.get(copilotAgentHostSessionKey(sessionId));
+  const sessionKey = copilotAgentHostSessionKey(sessionId);
+  const agentKind = vsCodeAgentKind(sessionId) || { id: 'copilot', label: 'Copilot' };
+  const isAgentHostSession = /^agent-host-/i.test(sessionId);
+  // The Agents view can use one public session id for the chat and a separate
+  // provider-internal id for model/tool execution. Fall back to the latest
+  // lifecycle event for that provider only for agent-host sessions.
+  const agentHostState = agentHostStates.get(sessionKey)
+    || (isAgentHostSession ? agentHostStates.get(`provider:${agentKind.id}`) : null);
   const lifecycleState = [agentHostState, copilotChatState].reduce((selected, state) => {
     if (!state) return selected;
     return !selected || state.updatedAt > selected.updatedAt ? state : selected;
@@ -528,10 +602,10 @@ function normalizeSession(
   const title = String(entry?.title || '').trim();
   return {
     id: project.id,
-    name: `Copilot · ${workspace.name}`,
-    role: 'VS Code · GitHub Copilot',
+    name: `${agentKind.label} · ${workspace.name}`,
+    role: agentKind.id === 'codex' ? 'VS Code · Codex' : 'VS Code · GitHub Copilot',
     status,
-    task: (title && title !== 'New Chat' ? title : `Copilot chat in ${workspace.name}`).slice(0, 240),
+    task: (title && title !== 'New Chat' ? title : `${agentKind.label} chat in ${workspace.name}`).slice(0, 240),
     lastSeen: new Date(statusUpdatedAt || nowMs).toISOString(),
     workspacePath: workspace.workspacePath,
     source: 'vscode-copilot',
@@ -547,7 +621,7 @@ function normalizeSession(
         : (status === 'blocked' ? 'error' : (status === 'active' ? 'busy' : 'idle')),
       derivedStatus: status,
       updatedAt: statusUpdatedAt || nowMs,
-      sessionLabel: title && title !== 'New Chat' ? title.slice(0, 120) : 'Copilot chat',
+      sessionLabel: title && title !== 'New Chat' ? title.slice(0, 120) : `${agentKind.label} chat`,
       sessionKeyShort: sessionId,
       client: 'vscode'
     }
@@ -564,8 +638,30 @@ function singleVsCodeCopilotAgent(agent) {
   };
 }
 
+function agentActivityUpdatedAt(agent) {
+  return Number(agent?.activity?.updatedAt || 0);
+}
+
+function preferredAgent(left, right) {
+  if (!left) return right;
+  if (!right) return left;
+  const leftActive = left.status === 'active';
+  const rightActive = right.status === 'active';
+  if (leftActive !== rightActive) return rightActive ? right : left;
+  return agentActivityUpdatedAt(right) > agentActivityUpdatedAt(left) ? right : left;
+}
+
+function preferredLifecycleAgent(left, right) {
+  if (!left) return right;
+  if (!right) return left;
+  const rank = (agent) => agent.status === 'blocked' ? 2 : agent.status === 'active' ? 1 : 0;
+  const rankDelta = rank(right) - rank(left);
+  if (rankDelta) return rankDelta > 0 ? right : left;
+  return preferredAgent(left, right);
+}
+
 function isCopilotAhpProvider(value) {
-  return /^(?:github-?)?copilot(?:cli)?$/i.test(String(value || '').trim());
+  return vsCodeAgentKind(value) !== null;
 }
 
 function ahpSessionReference(session) {
@@ -584,6 +680,7 @@ function ahpInputDisplay(inputKinds) {
 
 function normalizeAhpSession(session, nowMs = Date.now()) {
   if (!isCopilotAhpProvider(session?.provider)) return null;
+  const agentKind = vsCodeAgentKind(session.provider);
   const rawStatus = Number(session?.status) || 0;
   if ((rawStatus & 64) !== 0) return null;
   const needsInput = (rawStatus & 16) !== 0;
@@ -601,10 +698,10 @@ function normalizeAhpSession(session, nowMs = Date.now()) {
     : failed ? 'Blocked' : active ? 'Working' : 'Idle';
   return {
     id: identity.id,
-    name: `Copilot · ${workspace.name}`,
-    role: 'VS Code · GitHub Copilot',
+    name: `${agentKind.label} · ${workspace.name}`,
+    role: agentKind.id === 'codex' ? 'VS Code · Codex' : 'VS Code · GitHub Copilot',
     status,
-    task: (title || `Copilot chat in ${workspace.name}`).slice(0, 240),
+    task: (title || `${agentKind.label} chat in ${workspace.name}`).slice(0, 240),
     lastSeen: new Date(modifiedAt).toISOString(),
     workspacePath: workspace.workspacePath,
     source: 'vscode-copilot',
@@ -616,7 +713,7 @@ function normalizeAhpSession(session, nowMs = Date.now()) {
       status: needsInput ? input.activityStatus : failed ? 'error' : active ? 'busy' : 'idle',
       derivedStatus: status,
       updatedAt: modifiedAt,
-      sessionLabel: title ? title.slice(0, 120) : 'Copilot chat',
+      sessionLabel: title ? title.slice(0, 120) : `${agentKind.label} chat`,
       sessionKeyShort: String(session?.resource || ''),
       client: 'vscode',
       transport: 'ahp'
@@ -630,9 +727,7 @@ function agentsFromAhpSessions(sessions, nowMs, maxAgents, grouping) {
     const agent = normalizeAhpSession(session, nowMs);
     if (!agent) continue;
     const current = byProject.get(agent.id);
-    if (!current || Number(agent.activity.updatedAt) > Number(current.activity.updatedAt)) {
-      byProject.set(agent.id, agent);
-    }
+    byProject.set(agent.id, preferredAgent(current, agent));
   }
   const agents = [...byProject.values()].sort((left, right) => {
     const priority = (agent) => agent.status === 'blocked' ? 2 : Number(agent.status === 'active');
@@ -640,11 +735,8 @@ function agentsFromAhpSessions(sessions, nowMs, maxAgents, grouping) {
     return statusDelta || Number(right.activity.updatedAt) - Number(left.activity.updatedAt);
   });
   if (normalizeVsCodeCopilotGrouping(grouping) === VSCODE_COPILOT_GROUPING_SINGLE) {
-    const latest = agents.reduce((selected, agent) => {
-      if (!selected) return agent;
-      return Number(agent.activity.updatedAt) > Number(selected.activity.updatedAt) ? agent : selected;
-    }, null);
-    return latest ? [singleVsCodeCopilotAgent(latest)] : [];
+    const representative = agents.reduce(preferredAgent, null);
+    return representative ? [singleVsCodeCopilotAgent(representative)] : [];
   }
   const limit = Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, 24));
   return agents.slice(0, limit);
@@ -663,21 +755,26 @@ function mergeVsCodeCopilotAgents(ahpAgents, localAgents, maxAgents, grouping) {
     const key = copilotSessionIdentity(agent?.activity?.sessionKeyShort) || `local:${agent.id}`;
     bySession.set(key, agent);
   }
-  // AHP owns lifecycle state for sessions visible through both sources.
+  // Prefer the strongest live lifecycle evidence. AHP owns equal-status ties,
+  // but an idle summary must not hide a running local tool lifecycle signal.
   for (const agent of ahpAgents) {
     const key = copilotSessionIdentity(agent?.activity?.sessionKeyShort) || `ahp:${agent.id}`;
-    bySession.set(key, agent);
+    const current = bySession.get(key);
+    const selected = preferredLifecycleAgent(current, agent);
+    bySession.set(key, selected === current && current?.status === agent.status ? agent : selected);
   }
 
   const byProject = new Map();
   for (const agent of bySession.values()) {
     const current = byProject.get(agent.id);
-    const currentUpdatedAt = Number(current?.activity?.updatedAt || 0);
-    const updatedAt = Number(agent?.activity?.updatedAt || 0);
-    if (!current || updatedAt > currentUpdatedAt
-      || (updatedAt === currentUpdatedAt && agent?.activity?.transport === 'ahp')) {
-      byProject.set(agent.id, agent);
-    }
+    const selected = preferredAgent(current, agent);
+    const tied = current
+      && agentActivityUpdatedAt(agent) === agentActivityUpdatedAt(current)
+      && agent.status === current.status;
+    byProject.set(
+      agent.id,
+      tied && agent?.activity?.transport === 'ahp' ? agent : selected
+    );
   }
   const merged = [...byProject.values()].sort((left, right) => {
     const priority = (agent) => agent.status === 'blocked' ? 2 : Number(agent.status === 'active');
@@ -685,13 +782,8 @@ function mergeVsCodeCopilotAgents(ahpAgents, localAgents, maxAgents, grouping) {
     return statusDelta || Number(right.activity?.updatedAt || 0) - Number(left.activity?.updatedAt || 0);
   });
   if (normalizeVsCodeCopilotGrouping(grouping) === VSCODE_COPILOT_GROUPING_SINGLE) {
-    const latest = merged.reduce((selected, agent) => {
-      if (!selected) return agent;
-      return Number(agent.activity?.updatedAt || 0) > Number(selected.activity?.updatedAt || 0)
-        ? agent
-        : selected;
-    }, null);
-    return latest ? [singleVsCodeCopilotAgent(latest)] : [];
+    const representative = merged.reduce(preferredAgent, null);
+    return representative ? [singleVsCodeCopilotAgent(representative)] : [];
   }
   const limit = Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, 24));
   return merged.slice(0, limit);
@@ -714,6 +806,7 @@ async function fetchVsCodeCopilotAgents({
   agentHostLogRoots = defaultVsCodeAgentHostLogRoots(workspaceStorageRoots),
   agentHostMetadataPaths = defaultVsCodeAgentHostMetadataPaths(workspaceStorageRoots),
   ahpSessionFetcher = fetchVsCodeAhpSessions,
+  codexDbPath = defaultCodexDbPath(),
   DatabaseSyncImpl,
   processRunning,
   maxAgents = DEFAULT_MAX_AGENTS,
@@ -731,6 +824,10 @@ async function fetchVsCodeCopilotAgents({
       : [];
   } catch {}
   const agentHostStates = readCopilotAgentHostStates(agentHostLogRoots);
+  for (const [sessionId, state] of readVsCodeCodexThreadStates(agentHostLogRoots, codexDbPath)) {
+    const current = agentHostStates.get(sessionId);
+    if (!current || state.updatedAt >= current.updatedAt) agentHostStates.set(sessionId, state);
+  }
   const copilotChatWindowStates = readCopilotChatWindowStates(agentHostLogRoots);
   const agents = [];
   for (const workspaceStoragePath of workspaceStorageDirectories(workspaceStorageRoots)) {
@@ -817,6 +914,7 @@ module.exports = {
   normalizeVsCodeCopilotGrouping,
   projectIdentity,
   readCopilotChatWindowStates,
+  readVsCodeCodexThreadStates,
   sessionCompletionStatus,
   sessionNeedsApproval,
   singleVsCodeCopilotAgent,

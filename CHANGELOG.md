@@ -4,6 +4,11 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.33 (August 19, 2026)
+
+- Add VS Code Agents view support for Codex sessions, including distinct Codex labels and live rollout lifecycle states
+- Keep active Copilot and Codex tools visible while they run instead of allowing newer idle session summaries to hide their Working state
+
 ## Version 1.0.32 (August 17, 2026)
 
 - Reduce Codex polling work by caching session-file discovery and unchanged rollout lifecycle parsing
