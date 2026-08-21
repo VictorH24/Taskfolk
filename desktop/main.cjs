@@ -39,7 +39,11 @@ const {
   normalizeGooseGrouping
 } = require('./providers/goose.cjs');
 const {
+  DEFAULT_HERMES_GATEWAY_URL,
   fetchHermesAgents,
+  fetchHermesRemoteAgents,
+  normalizeHermesConnectionMode,
+  normalizeHermesGatewayUrl,
   normalizeHermesGrouping
 } = require('./providers/hermes.cjs');
 const {
@@ -185,6 +189,9 @@ let hermesTimer = null;
 let hermesSyncInFlight = false;
 let hermesPublished = false;
 let hermesLastError = '';
+let runtimeHermesGatewayUrl = '';
+let runtimeHermesGatewayToken = '';
+let runtimeHermesCredentialsUrl = '';
 let buzzTimer = null;
 let buzzSyncInFlight = false;
 let buzzPublished = false;
@@ -453,6 +460,14 @@ function savedLmStudioToken(config = readConfig(), baseUrl = '') {
   const credentialsMatch = !normalizedUrl || !credentialsUrl
     || normalizeLmStudioUrl(credentialsUrl) === normalizedUrl;
   return credentialsMatch ? decrypt(config.encryptedLmStudioApiToken) : '';
+}
+
+function savedHermesGatewayToken(config = readConfig(), baseUrl = '') {
+  const normalizedUrl = baseUrl ? normalizeHermesGatewayUrl(baseUrl) : '';
+  const credentialsUrl = config.hermesCredentialsUrl || config.hermesGatewayUrl || '';
+  const credentialsMatch = !normalizedUrl || !credentialsUrl
+    || normalizeHermesGatewayUrl(credentialsUrl) === normalizedUrl;
+  return credentialsMatch ? decrypt(config.encryptedHermesGatewayToken) : '';
 }
 
 function savedOpenClawCredentials(config = readConfig(), baseUrl = '') {
@@ -1704,7 +1719,17 @@ async function syncHermesAdapter() {
       return;
     }
     if (!providerPollingAllowed(config, 'hermes')) return;
-    const agents = await fetchHermesAgents({ grouping: normalizeHermesGrouping(config.hermesGrouping) });
+    const hermesMode = process.env.HERMES_GATEWAY_URL
+      ? 'remote'
+      : normalizeHermesConnectionMode(config.hermesConnectionMode);
+    const agents = hermesMode === 'remote'
+      ? await fetchHermesRemoteAgents({
+          baseUrl: runtimeHermesGatewayUrl || config.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL,
+          token: runtimeHermesGatewayToken
+            || savedHermesGatewayToken(config, runtimeHermesGatewayUrl || config.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL),
+          grouping: normalizeHermesGrouping(config.hermesGrouping)
+        })
+      : await fetchHermesAgents({ grouping: normalizeHermesGrouping(config.hermesGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('hermes', agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
@@ -3242,6 +3267,13 @@ ipcMain.handle('settings:load', () => {
     gooseGrouping: normalizeGooseGrouping(config.gooseGrouping),
     hermesEnabled: Boolean(config.hermesEnabled),
     hermesGrouping: normalizeHermesGrouping(config.hermesGrouping),
+    hermesConnectionMode: normalizeHermesConnectionMode(config.hermesConnectionMode),
+    hermesGatewayUrl: runtimeHermesGatewayUrl || config.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL,
+    hermesCredentialsStored: Boolean(
+      (runtimeHermesCredentialsUrl === (runtimeHermesGatewayUrl || config.hermesGatewayUrl)
+        && runtimeHermesGatewayToken)
+      || savedHermesGatewayToken(config, runtimeHermesGatewayUrl || config.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL)
+    ),
     buzzEnabled: Boolean(config.buzzEnabled),
     buzzGrouping: normalizeBuzzGrouping(config.buzzGrouping),
     claudeEnabled: Boolean(config.claudeEnabled),
@@ -3318,6 +3350,7 @@ ipcMain.handle('settings:import-config', async (event) => {
 
   let importedOpenClawUrl;
   let importedLmStudioUrl;
+  let importedHermesUrl;
   try {
     importedOpenClawUrl = normalizeOpenClawUrl(importedConfig.openClawUrl || DEFAULT_OPENCLAW_URL);
   } catch (error) {
@@ -3327,6 +3360,11 @@ ipcMain.handle('settings:import-config', async (event) => {
     importedLmStudioUrl = normalizeLmStudioUrl(importedConfig.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
   } catch (error) {
     throw new Error(`The configuration has an invalid LM Studio URL: ${error.message}`);
+  }
+  try {
+    importedHermesUrl = normalizeHermesGatewayUrl(importedConfig.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL);
+  } catch (error) {
+    throw new Error(`The configuration has an invalid Hermes gateway URL: ${error.message}`);
   }
 
   const importedLocalData = {};
@@ -3353,6 +3391,9 @@ ipcMain.handle('settings:import-config', async (event) => {
   runtimeOpenCodeCredentials = savedOpenCodeCredentials(importedConfig);
   runtimeLmStudioCredentialsUrl = importedLmStudioUrl;
   runtimeLmStudioToken = savedLmStudioToken(importedConfig, runtimeLmStudioCredentialsUrl);
+  runtimeHermesGatewayUrl = importedHermesUrl;
+  runtimeHermesCredentialsUrl = importedHermesUrl;
+  runtimeHermesGatewayToken = savedHermesGatewayToken(importedConfig, importedHermesUrl);
   runtimeOpenClawUrl = '';
   runtimeOpenClawCredentialsUrl = importedOpenClawUrl;
   runtimeOpenClawCredentials = savedOpenClawCredentials(importedConfig, runtimeOpenClawCredentialsUrl);
@@ -3423,6 +3464,9 @@ ipcMain.handle('settings:reset-config', async (event) => {
   runtimeOpenCodeCredentials = null;
   runtimeLmStudioCredentialsUrl = '';
   runtimeLmStudioToken = '';
+  runtimeHermesGatewayUrl = '';
+  runtimeHermesCredentialsUrl = '';
+  runtimeHermesGatewayToken = '';
   runtimeOpenClawUrl = '';
   runtimeOpenClawCredentialsUrl = '';
   runtimeOpenClawCredentials = null;
@@ -3492,6 +3536,40 @@ ipcMain.handle('settings:openclaw-test', async (_event, input = {}) => {
   }
 });
 
+ipcMain.handle('settings:hermes-test', async (_event, input = {}) => {
+  const config = readConfig();
+  let baseUrl;
+  try {
+    baseUrl = normalizeHermesGatewayUrl(input.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL);
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+  const enteredToken = String(input.hermesGatewayToken || '').trim();
+  const token = enteredToken
+    || (runtimeHermesCredentialsUrl === baseUrl ? runtimeHermesGatewayToken : '')
+    || savedHermesGatewayToken(config, baseUrl);
+  try {
+    const agents = await fetchHermesRemoteAgents({
+      baseUrl,
+      token,
+      grouping: 'project'
+    });
+    if (enteredToken) {
+      runtimeHermesGatewayUrl = baseUrl;
+      runtimeHermesCredentialsUrl = baseUrl;
+      runtimeHermesGatewayToken = enteredToken;
+    }
+    return {
+      ok: true,
+      gatewayUrl: baseUrl,
+      agentCount: agents.length,
+      message: `Connected to Hermes and found ${agents.length} profile${agents.length === 1 ? '' : 's'}.`
+    };
+  } catch (error) {
+    return { ok: false, gatewayUrl: baseUrl, message: error.message || 'Could not connect to Hermes.' };
+  }
+});
+
 ipcMain.handle('settings:connect', async (_event, input = {}) => {
   const config = readConfig();
   const mode = input.connectionMode === 'remote' ? 'remote' : 'local';
@@ -3522,6 +3600,14 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     : (runtimeOpenClawCredentialsUrl === openClawUrl ? runtimeOpenClawCredentials : null) || savedOpenClaw;
   runtimeOpenClawCredentialsUrl = openClawUrl;
   const openClawDeviceIdentity = ensureOpenClawDeviceIdentity(config);
+  const hermesConnectionMode = normalizeHermesConnectionMode(input.hermesConnectionMode);
+  const hermesGatewayUrl = normalizeHermesGatewayUrl(input.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL);
+  const enteredHermesToken = String(input.hermesGatewayToken || '').trim();
+  runtimeHermesGatewayToken = enteredHermesToken
+    || (runtimeHermesCredentialsUrl === hermesGatewayUrl ? runtimeHermesGatewayToken : '')
+    || savedHermesGatewayToken(config, hermesGatewayUrl);
+  runtimeHermesGatewayUrl = hermesGatewayUrl;
+  runtimeHermesCredentialsUrl = hermesGatewayUrl;
   const nextConfig = {
     ...config,
     connectionMode: mode,
@@ -3556,6 +3642,10 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     gooseGrouping: normalizeGooseGrouping(input.gooseGrouping),
     hermesEnabled: Boolean(input.hermesEnabled),
     hermesGrouping: normalizeHermesGrouping(input.hermesGrouping),
+    hermesConnectionMode,
+    hermesGatewayUrl,
+    hermesCredentialsUrl: hermesGatewayUrl,
+    encryptedHermesGatewayToken: encrypt(runtimeHermesGatewayToken),
     buzzEnabled: Boolean(input.buzzEnabled),
     buzzGrouping: normalizeBuzzGrouping(input.buzzGrouping),
     claudeEnabled: Boolean(input.claudeEnabled),
@@ -3662,6 +3752,12 @@ app.whenReady().then(async () => {
   runtimeLmStudioCredentialsUrl = normalizeLmStudioUrl(config.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
   runtimeLmStudioToken = String(process.env.LM_STUDIO_API_TOKEN || process.env.LM_API_TOKEN || '')
     || savedLmStudioToken(config, runtimeLmStudioCredentialsUrl);
+  runtimeHermesGatewayUrl = normalizeHermesGatewayUrl(
+    process.env.HERMES_GATEWAY_URL || config.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL
+  );
+  runtimeHermesCredentialsUrl = runtimeHermesGatewayUrl;
+  runtimeHermesGatewayToken = String(process.env.HERMES_GATEWAY_TOKEN || '')
+    || savedHermesGatewayToken(config, runtimeHermesGatewayUrl);
   runtimeOpenClawCredentials = process.env.OPENCLAW_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_PASSWORD
     ? {
         token: String(process.env.OPENCLAW_GATEWAY_TOKEN || ''),

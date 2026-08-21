@@ -8,9 +8,67 @@ const ACTIVE_ACTIVITY_MS = 90_000;
 const DEFAULT_MAX_AGENTS = 24;
 const HERMES_GROUPING_PROJECT = 'project';
 const HERMES_GROUPING_SINGLE = 'single';
+const HERMES_CONNECTION_LOCAL = 'local';
+const HERMES_CONNECTION_REMOTE = 'remote';
+const DEFAULT_HERMES_GATEWAY_URL = 'http://127.0.0.1:9119';
+const HERMES_GATEWAY_TIMEOUT_MS = 8_000;
 
 function normalizeHermesGrouping(value) {
   return value === HERMES_GROUPING_PROJECT ? HERMES_GROUPING_PROJECT : HERMES_GROUPING_SINGLE;
+}
+
+function normalizeHermesConnectionMode(value) {
+  return value === HERMES_CONNECTION_REMOTE ? HERMES_CONNECTION_REMOTE : HERMES_CONNECTION_LOCAL;
+}
+
+function isLoopbackHost(hostname) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host === '::1') return true;
+  const octets = host.split('.').map(Number);
+  return octets.length === 4 && octets[0] === 127
+    && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255);
+}
+
+function isTailscaleHost(hostname) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  const octets = host.split('.').map(Number);
+  return (octets.length === 4 && octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127
+      && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255))
+    || host.startsWith('fd7a:115c:a1e0:');
+}
+
+function normalizeHermesGatewayUrl(value = DEFAULT_HERMES_GATEWAY_URL) {
+  const input = String(value || DEFAULT_HERMES_GATEWAY_URL).trim();
+  let url;
+  try {
+    url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(input) ? input : `http://${input}`);
+  } catch (error) {
+    throw new Error(`The Hermes gateway URL is not valid: ${error.message}`);
+  }
+  if (url.protocol === 'ws:') url.protocol = 'http:';
+  if (url.protocol === 'wss:') url.protocol = 'https:';
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('The Hermes gateway URL must use http://, https://, ws://, or wss://.');
+  }
+  const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (url.protocol === 'http:' && !isLoopbackHost(hostname) && hostname !== 'host.docker.internal' && !isTailscaleHost(hostname)) {
+    throw new Error('Remote Hermes gateways must use https://. Plain HTTP is allowed only for loopback, host.docker.internal, and Tailscale addresses.');
+  }
+  url.username = '';
+  url.password = '';
+  url.hash = '';
+  url.search = '';
+  url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+  return url.toString().replace(/\/$/, '');
+}
+
+function hermesGatewayWebSocketUrl(baseUrl, token = '') {
+  const url = new URL(normalizeHermesGatewayUrl(baseUrl));
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/api/ws`;
+  url.search = '';
+  if (token) url.searchParams.set('token', String(token));
+  return url.toString();
 }
 
 function hermesRoot({ env = process.env, home = os.homedir() } = {}) {
@@ -232,6 +290,188 @@ function agentsFromRows(rows, nowMs, maxAgents = DEFAULT_MAX_AGENTS, grouping = 
   return agents.slice(0, Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, DEFAULT_MAX_AGENTS)));
 }
 
+function socketData(event) {
+  const value = event?.data ?? event;
+  if (typeof value === 'string') return value;
+  if (Buffer.isBuffer(value)) return value.toString('utf8');
+  if (value instanceof ArrayBuffer) return Buffer.from(value).toString('utf8');
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('utf8');
+  return String(value || '');
+}
+
+function gatewayError(frame, method) {
+  const message = cleanText(frame?.error?.message, 300) || `Hermes rejected ${method}.`;
+  return new Error(`Hermes gateway: ${message}`);
+}
+
+async function requestHermesGateway({
+  baseUrl = DEFAULT_HERMES_GATEWAY_URL,
+  token = '',
+  requests,
+  WebSocketImpl = globalThis.WebSocket,
+  timeoutMs = HERMES_GATEWAY_TIMEOUT_MS
+} = {}) {
+  if (typeof WebSocketImpl !== 'function') throw new Error('A WebSocket implementation is required.');
+  const list = Array.isArray(requests) && requests.length
+    ? requests
+    : [{ key: 'profiles', method: 'profiles.list', params: { include_sessions: true } }];
+  const url = hermesGatewayWebSocketUrl(baseUrl, token);
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocketImpl(url);
+    const pending = new Map();
+    const results = new Map();
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error('Hermes gateway request timed out.')), Math.max(250, Number(timeoutMs) || HERMES_GATEWAY_TIMEOUT_MS));
+
+    function finish(error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch {}
+      if (error) reject(error);
+      else resolve(Object.fromEntries(results));
+    }
+
+    function sendRequests() {
+      for (const request of list) {
+        const key = String(request?.key || request?.method || 'request');
+        const id = `${key}:${crypto.randomUUID()}`;
+        pending.set(id, { key, method: String(request?.method || ''), optional: Boolean(request?.optional) });
+        socket.send(JSON.stringify({
+          jsonrpc: '2.0', id, method: request.method, params: request.params || {}
+        }));
+      }
+    }
+
+    socket.addEventListener('open', sendRequests);
+    socket.addEventListener('message', (event) => {
+      let frame;
+      try { frame = JSON.parse(socketData(event)); } catch { return; }
+      if (!pending.has(frame?.id)) return;
+      const request = pending.get(frame.id);
+      pending.delete(frame.id);
+      if (frame.error && !request.optional) return finish(gatewayError(frame, request.method));
+      if (frame.error) results.set(request.key, null);
+      else results.set(request.key, frame.result);
+      if (results.size === list.length) finish();
+    });
+    socket.addEventListener('error', () => finish(new Error('Could not connect to the Hermes gateway.')));
+    socket.addEventListener('close', () => {
+      if (!settled) finish(new Error('The Hermes gateway closed the connection.'));
+    });
+  });
+}
+
+function remoteProfileIdentity(baseUrl, profileName) {
+  const server = normalizeHermesGatewayUrl(baseUrl);
+  const profile = cleanText(profileName, 120).toLowerCase() || 'default';
+  const digest = crypto.createHash('sha256').update(`${server}\n${profile}`).digest('hex').slice(0, 20);
+  return { id: `hermes-remote:${digest}`, assignmentKey: `runtime:hermes-remote:${digest}` };
+}
+
+function remoteStatus(value) {
+  const status = cleanText(value, 80).toLowerCase();
+  if (/approval|permission|confirm|blocked|waiting/.test(status)) {
+    return { status: 'blocked', displayState: 'Needs approval', pose: 'approval', activityStatus: 'approval' };
+  }
+  if (/running|working|active|busy|stream|tool|thinking/.test(status)) {
+    return { status: 'active', displayState: 'Working', pose: 'working', activityStatus: 'busy' };
+  }
+  return { status: 'idle', displayState: 'Idle', pose: null, activityStatus: 'idle' };
+}
+
+function normalizeHermesRemoteAgents(profilesPayload, activePayload, {
+  baseUrl = DEFAULT_HERMES_GATEWAY_URL,
+  grouping = HERMES_GROUPING_PROJECT,
+  maxAgents = DEFAULT_MAX_AGENTS,
+  now = Date.now
+} = {}) {
+  const nowMs = typeof now === 'function' ? now() : Number(now) || Date.now();
+  const profiles = Array.isArray(profilesPayload?.profiles) ? profilesPayload.profiles : [];
+  const activeSessions = Array.isArray(activePayload?.sessions) ? activePayload.sessions : [];
+  const activeByStoredId = new Map();
+  for (const session of activeSessions) {
+    const key = cleanText(session?.session_key || session?.stored_session_id || session?.id, 160);
+    if (key) activeByStoredId.set(key, session);
+  }
+  const host = new URL(normalizeHermesGatewayUrl(baseUrl)).host;
+  const agents = profiles.map((profile, index) => {
+    const profileName = cleanText(profile?.name, 120) || (profile?.is_default ? 'default' : `profile-${index + 1}`);
+    const label = cleanText(profile?.display_name, 120) || (profileName === 'default' ? 'Default' : profileName);
+    const last = profile?.last_session && typeof profile.last_session === 'object' ? profile.last_session : null;
+    const worker = profile?.worker_session && typeof profile.worker_session === 'object' ? profile.worker_session : null;
+    const live = activeByStoredId.get(cleanText(last?.resolved_id || last?.id, 160));
+    const latest = [last, worker, live].filter(Boolean).sort((left, right) =>
+      timestampMs(right?.last_active, right?.started_at) - timestampMs(left?.last_active, left?.started_at))[0] || null;
+    const updatedAt = timestampMs(live?.last_active, latest?.last_active, latest?.started_at);
+    const recentMetadata = latest && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS;
+    const lifecycle = live
+      ? remoteStatus(live.status)
+      : recentMetadata ? remoteStatus('active') : remoteStatus('idle');
+    const model = cleanText(live?.model || profile?.model, 120);
+    const provider = cleanText(profile?.provider, 80) || modelProvider({ model });
+    const sessionId = cleanText(live?.session_key || live?.id || last?.resolved_id || last?.id || worker?.id, 160);
+    const title = cleanText(live?.title || latest?.title, 240)
+      || (profile?.description ? cleanText(profile.description, 240) : `Hermes profile ${label}`);
+    const identity = remoteProfileIdentity(baseUrl, profileName);
+    return {
+      id: identity.id,
+      name: `Hermes · ${label}`.slice(0, 180),
+      role: ['Hermes Agent', profileName !== 'default' ? profileName : '', provider, model, host]
+        .filter(Boolean).join(' · '),
+      status: lifecycle.status,
+      task: title,
+      lastSeen: new Date(updatedAt).toISOString(),
+      workspacePath: null,
+      source: 'hermes',
+      avatarAssignmentKey: identity.assignmentKey,
+      displayState: lifecycle.displayState,
+      pose: lifecycle.pose,
+      activity: {
+        provider: 'hermes', status: lifecycle.activityStatus, derivedStatus: lifecycle.status,
+        updatedAt, sessionLabel: title.slice(0, 120), sessionKeyShort: sessionId || null,
+        client: 'gateway', model: model || null, modelProvider: provider || null,
+        profile: profileName, remoteHost: host
+      }
+    };
+  }).sort((left, right) => {
+    const rank = (agent) => agent.pose === 'approval' ? 2 : Number(agent.status === 'active');
+    return rank(right) - rank(left) || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
+  });
+  if (normalizeHermesGrouping(grouping) === HERMES_GROUPING_SINGLE) {
+    return agents[0] ? [{
+      ...agents[0],
+      id: `hermes-remote:${crypto.createHash('sha256').update(normalizeHermesGatewayUrl(baseUrl)).digest('hex').slice(0, 20)}`,
+      name: 'Hermes',
+      avatarAssignmentKey: `runtime:hermes-remote:${crypto.createHash('sha256').update(normalizeHermesGatewayUrl(baseUrl)).digest('hex').slice(0, 20)}`
+    }] : [];
+  }
+  return agents.slice(0, Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, DEFAULT_MAX_AGENTS)));
+}
+
+async function fetchHermesRemoteAgents({
+  baseUrl = DEFAULT_HERMES_GATEWAY_URL,
+  token = '',
+  WebSocketImpl = globalThis.WebSocket,
+  timeoutMs = HERMES_GATEWAY_TIMEOUT_MS,
+  maxAgents = DEFAULT_MAX_AGENTS,
+  grouping = HERMES_GROUPING_PROJECT,
+  now = Date.now
+} = {}) {
+  const payloads = await requestHermesGateway({
+    baseUrl, token, WebSocketImpl, timeoutMs,
+    requests: [
+      // Hermes currently couples lifecycle summaries and previews in this RPC.
+      // Taskfolk discards preview fields immediately and never publishes them.
+      { key: 'profiles', method: 'profiles.list', params: { include_sessions: true } },
+      { key: 'active', method: 'session.active_list', params: {}, optional: true }
+    ]
+  });
+  return normalizeHermesRemoteAgents(payloads.profiles, payloads.active, {
+    baseUrl, grouping, maxAgents, now
+  });
+}
+
 async function fetchHermesAgents({
   dbPaths,
   DatabaseSyncImpl,
@@ -264,20 +504,30 @@ async function fetchHermesAgents({
 
 module.exports = {
   ACTIVE_ACTIVITY_MS,
+  DEFAULT_HERMES_GATEWAY_URL,
+  HERMES_CONNECTION_LOCAL,
+  HERMES_CONNECTION_REMOTE,
   HERMES_GROUPING_PROJECT,
   HERMES_GROUPING_SINGLE,
   agentFromRow,
   agentsFromRows,
   databaseProfileName,
   fetchHermesAgents,
+  fetchHermesRemoteAgents,
+  hermesGatewayWebSocketUrl,
   hermesDatabaseCandidates,
   hermesLifecycle,
   hermesRoot,
   isHermesRunning,
   modelProvider,
+  normalizeHermesConnectionMode,
+  normalizeHermesGatewayUrl,
   normalizeHermesGrouping,
+  normalizeHermesRemoteAgents,
   profileIdentity,
   projectIdentity,
+  remoteProfileIdentity,
+  requestHermesGateway,
   sessionRows,
   timestampMs
 };

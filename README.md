@@ -26,7 +26,7 @@ npm run desktop
 
 On first launch, choose how the companion gets its data:
 
-- **Run in this app** starts a private Taskfolk server automatically. No separate server is required. This mode supports local or remote OpenClaw gateways plus OpenCode, Cursor, Codex, Goose, Hermes, Buzz, Claude, Gemini CLI, Gemini Code Assist Agent mode, and Visual Studio Code Copilot activity.
+- **Run in this app** starts a private Taskfolk server automatically. No separate server is required. This mode supports local or remote OpenClaw and Hermes gateways plus OpenCode, Cursor, Codex, Goose, Buzz, Claude, Gemini CLI, Gemini Code Assist Agent mode, and Visual Studio Code Copilot activity.
 - **Connect to a remote server** connects the companion to an existing Taskfolk instance using its URL and gateway credentials.
 
 The companion can display the complete office or one live avatar on a transparent background. Drag it anywhere, resize it, adjust its opacity, keep it above other windows, or leave it running from the tray or menu bar. Window settings are remembered between launches.
@@ -56,7 +56,7 @@ These avatars animate in the companion as their live state changes:
 - **Cursor agents** — detects local Cursor project activity, models, generation state, queued work, and approval or plan-review requests from Cursor's local read-only metadata.
 - **Codex Desktop and CLI tasks** — discovers Codex sessions over local ACP and combines them with lifecycle event metadata, without an API token.
 - **Goose Desktop and CLI sessions** — discovers active Goose projects from its local read-only session index, including safe provider, model, title, and timestamp metadata.
-- **Hermes Desktop and CLI sessions** — discovers active Hermes projects from its local read-only state database, including title, workspace, model/provider, and lifecycle metadata.
+- **Local or remote Hermes agents** — discovers profiles and lifecycle metadata from local read-only state databases or an authenticated Hermes gateway.
 - **Buzz managed agents** — discovers live local Buzz ACP harnesses from the Desktop managed-agent roster and process sidecars, using lifecycle markers plus privacy-safe process-tree activity sampling for the Working state.
 - **Gemini CLI and Gemini Code Assist Agent mode** — detects Gemini CLI projects from local session metadata and Code Assist Agent-mode workspaces from its local VS Code agent process.
 - **OpenClaw gateway** — connects to a local or remote OpenClaw instance and reads configured agents plus safe session metadata over the gateway's read-only RPCs.
@@ -72,7 +72,7 @@ The packaged desktop app uses the universal digital-agent icon at `desktop/icon.
 
 Choose one of two office sources:
 
-- **Run in this app** starts a private Taskfolk server on a loopback port selected during the first launch and saved for reuse on later launches. It requires no separately running Taskfolk server and offers local OpenClaw, OpenCode, Cursor, Codex, Goose, Hermes, Buzz, Claude, Gemini, Antigravity, Ollama, LM Studio, and VS Code Copilot agents. The folder-view module is disabled by default in this mode. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
+- **Run in this app** starts a private Taskfolk server on a loopback port selected during the first launch and saved for reuse on later launches. It requires no separately running Taskfolk server and offers local or remote OpenClaw and Hermes agents plus OpenCode, Cursor, Codex, Goose, Buzz, Claude, Gemini, Antigravity, Ollama, LM Studio, and VS Code Copilot agents. The folder-view module is disabled by default in this mode. Local server data is kept in the desktop app's user-data directory, and a new private gateway token is generated for every app launch.
 - **Connect to a remote server** uses a running Taskfolk URL (for example `http://127.0.0.1:3000`), its gateway token, and optional gateway password. The companion exchanges those credentials for the normal Taskfolk session cookie.
 
 Remote credentials are never placed in the URL and are encrypted with Electron `safeStorage` when operating-system encryption is available. You can switch office sources later from **Setup**.
@@ -155,6 +155,8 @@ Goose sessions appear only while the Goose Desktop app, CLI, ACP server, or `goo
 In **Setup**, enable **Track Hermes Desktop and CLI sessions**, then choose **One agent per project** or **One agent for all projects**. Taskfolk opens Hermes' `state.db` databases read-only and selects only session ID, source, title, workspace, model/provider, lifecycle timestamps, and the short activity-state label. It never queries the `messages` table or selects prompts, responses, tool calls, system prompts, routing records, or credentials.
 
 Hermes sessions appear only while Hermes Desktop or the Hermes CLI is running. Recent open-session activity drives Working and approval poses; ended or older sessions remain idle. Desktop sessions without a workspace use their Hermes profile as a stable agent identity. Profile- and Bot-owned sessions remain eligible even when Hermes hides them from its global Sessions sidebar; archived sessions and internal tool/kanban runs stay excluded. Taskfolk honors `HERMES_HOME` and discovers isolated databases under its `profiles` directory.
+
+For a Hermes installation on another computer, choose **Remote gateway**, enter its HTTP(S) dashboard URL and session token, then use **Test Hermes gateway**. Taskfolk connects to `/api/ws`, discovers the complete profile roster with `profiles.list`, and overlays live gateway sessions. Internet-facing gateways must use HTTPS; plain HTTP is accepted only for loopback, Docker, and Tailscale addresses. The token is encrypted with Electron `safeStorage`. Current Hermes gateways couple lifecycle summaries with short message previews; Taskfolk discards those preview fields immediately and publishes only profile/session metadata. Managed launches may supply `HERMES_GATEWAY_URL` and `HERMES_GATEWAY_TOKEN`.
 
 ### Track Buzz managed agents
 

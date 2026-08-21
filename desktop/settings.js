@@ -62,6 +62,14 @@ const gooseGroupingInput = document.querySelector('#gooseGrouping');
 const hermesEnabledInput = document.querySelector('#hermesEnabled');
 const hermesGroupingField = document.querySelector('#hermesGroupingField');
 const hermesGroupingInput = document.querySelector('#hermesGrouping');
+const hermesConnectionModeField = document.querySelector('#hermesConnectionModeField');
+const hermesConnectionModeInput = document.querySelector('#hermesConnectionMode');
+const hermesGatewayUrlField = document.querySelector('#hermesGatewayUrlField');
+const hermesGatewayUrlInput = document.querySelector('#hermesGatewayUrl');
+const hermesGatewayTokenField = document.querySelector('#hermesGatewayTokenField');
+const hermesGatewayTokenInput = document.querySelector('#hermesGatewayToken');
+const testHermesButton = document.querySelector('#testHermesButton');
+const hermesTestStatus = document.querySelector('#hermesTestStatus');
 const buzzEnabledInput = document.querySelector('#buzzEnabled');
 const buzzGroupingField = document.querySelector('#buzzGroupingField');
 const buzzGroupingInput = document.querySelector('#buzzGrouping');
@@ -223,7 +231,20 @@ function updateGooseFields() {
 }
 
 function updateHermesFields() {
-  hermesGroupingField.classList.toggle('hidden', !hermesEnabledInput.checked);
+  const enabled = hermesEnabledInput.checked;
+  const remote = enabled && hermesConnectionModeInput.value === 'remote';
+  hermesGroupingField.classList.toggle('hidden', !enabled);
+  hermesConnectionModeField.classList.toggle('hidden', !enabled);
+  hermesGatewayUrlField.classList.toggle('hidden', !remote);
+  hermesGatewayTokenField.classList.toggle('hidden', !remote);
+  testHermesButton.classList.toggle('hidden', !remote);
+  hermesTestStatus.classList.toggle('hidden', !remote);
+  hermesGatewayUrlInput.required = remote;
+}
+
+function showHermesTestStatus(kind = '', value = '') {
+  hermesTestStatus.textContent = value;
+  hermesTestStatus.className = `integrationStatus${value ? ` visible ${kind}` : ''}`;
 }
 
 function updateBuzzFields() {
@@ -333,6 +354,11 @@ async function initialize() {
   gooseGroupingInput.value = settings.gooseGrouping === 'single' ? 'single' : 'project';
   hermesEnabledInput.checked = Boolean(settings.hermesEnabled);
   hermesGroupingInput.value = settings.hermesGrouping === 'single' ? 'single' : 'project';
+  hermesConnectionModeInput.value = settings.hermesConnectionMode === 'remote' ? 'remote' : 'local';
+  hermesGatewayUrlInput.value = settings.hermesGatewayUrl || 'http://127.0.0.1:9119';
+  hermesGatewayTokenInput.placeholder = settings.hermesCredentialsStored
+    ? 'Saved securely — enter to replace'
+    : 'Hermes gateway session token';
   buzzEnabledInput.checked = Boolean(settings.buzzEnabled);
   buzzGroupingInput.value = settings.buzzGrouping === 'agent' ? 'agent' : 'single';
   claudeEnabledInput.checked = Boolean(settings.claudeEnabled);
@@ -413,6 +439,7 @@ cursorEnabledInput.addEventListener('change', updateCursorFields);
 codexEnabledInput.addEventListener('change', updateCodexFields);
 gooseEnabledInput.addEventListener('change', updateGooseFields);
 hermesEnabledInput.addEventListener('change', updateHermesFields);
+hermesConnectionModeInput.addEventListener('change', updateHermesFields);
 buzzEnabledInput.addEventListener('change', updateBuzzFields);
 claudeEnabledInput.addEventListener('change', updateClaudeFields);
 geminiEnabledInput.addEventListener('change', updateGeminiFields);
@@ -514,6 +541,30 @@ testOpenClawButton.addEventListener('click', async () => {
   }
 });
 
+testHermesButton.addEventListener('click', async () => {
+  if (!hermesGatewayUrlInput.reportValidity()) return;
+  showHermesTestStatus('pending', 'Connecting to the Hermes gateway…');
+  testHermesButton.disabled = true;
+  const previousLabel = testHermesButton.textContent;
+  testHermesButton.textContent = 'Testing…';
+  try {
+    const result = await window.clawOffice.testHermes({
+      hermesGatewayUrl: hermesGatewayUrlInput.value,
+      hermesGatewayToken: hermesGatewayTokenInput.value,
+      hermesGrouping: hermesGroupingInput.value
+    });
+    showHermesTestStatus(
+      result.ok ? 'success' : 'error',
+      `${result.message}${result.gatewayUrl ? `\nGateway: ${result.gatewayUrl}` : ''}`
+    );
+  } catch (error) {
+    showHermesTestStatus('error', error.message || 'Could not test the Hermes gateway.');
+  } finally {
+    testHermesButton.disabled = false;
+    testHermesButton.textContent = previousLabel;
+  }
+});
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   showError('');
@@ -563,6 +614,9 @@ form.addEventListener('submit', async (event) => {
       gooseGrouping: gooseGroupingInput.value,
       hermesEnabled: hermesEnabledInput.checked,
       hermesGrouping: hermesGroupingInput.value,
+      hermesConnectionMode: hermesConnectionModeInput.value,
+      hermesGatewayUrl: hermesGatewayUrlInput.value,
+      hermesGatewayToken: hermesGatewayTokenInput.value,
       buzzEnabled: buzzEnabledInput.checked,
       buzzGrouping: buzzGroupingInput.value,
       claudeEnabled: claudeEnabledInput.checked,

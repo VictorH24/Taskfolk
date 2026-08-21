@@ -243,7 +243,7 @@
       <section class="integrationField">
         <label class="checkRow">
           <input id="hermesEnabled" name="hermesEnabled" type="checkbox" />
-          <span class="integrationLabel"><img class="integrationIcon" src="./assets/hermes.png" alt="" />Track Hermes Desktop and CLI sessions</span>
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/hermes.png" alt="" />Track local or remote Hermes agents</span>
         </label>
         <label id="hermesGroupingField">
           <span>Hermes agents</span>
@@ -251,8 +251,26 @@
             <option value="single">One agent for all projects</option>
             <option value="project">One agent per project</option>
           </select>
-          <small>Reads Hermes session IDs, titles, project paths, model/provider names, and lifecycle timestamps only. Messages, prompts, tool calls, system prompts, and credentials stay private.</small>
+          <small>Publishes only Hermes profile names, session IDs/titles, project paths, model/provider names, and lifecycle timestamps. Message previews returned by current remote gateways are discarded immediately.</small>
         </label>
+        <label id="hermesConnectionModeField">
+          <span>Hermes connection</span>
+          <select id="hermesConnectionMode" name="hermesConnectionMode">
+            <option value="local">Local Desktop and CLI</option>
+            <option value="remote">Remote gateway</option>
+          </select>
+        </label>
+        <label id="hermesGatewayUrlField" class="hidden">
+          <span>Hermes gateway URL</span>
+          <input id="hermesGatewayUrl" name="hermesGatewayUrl" type="url" value="http://127.0.0.1:9119" />
+          <small>Use https:// over the internet. Plain HTTP is limited to loopback, Docker, and Tailscale addresses.</small>
+        </label>
+        <label id="hermesGatewayTokenField" class="hidden">
+          <span>Gateway session token <small>optional for insecure gateways</small></span>
+          <input id="hermesGatewayToken" name="hermesGatewayToken" type="password" autocomplete="off" />
+        </label>
+        <button id="testHermesButton" class="secondaryButton integrationButton hidden" type="button">Test Hermes gateway</button>
+        <p id="hermesTestStatus" class="integrationStatus" role="status"></p>
       </section>
       <section class="integrationField">
         <label class="checkRow">

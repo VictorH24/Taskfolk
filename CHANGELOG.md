@@ -4,6 +4,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.36 (August 21, 2026)
+
+- Add authenticated remote Hermes gateway connections with profile discovery, live-session status, secure URL validation, encrypted token storage, and a Setup connection test
+
 ## Version 1.0.35 (August 20, 2026)
 
 - Add first-class Hermes Desktop and CLI session tracking with project and combined grouping, profile discovery, read-only metadata access, and approval/working lifecycle states

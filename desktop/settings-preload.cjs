@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('clawOffice', {
   resetConfig: () => ipcRenderer.invoke('settings:reset-config'),
   connect: (settings) => ipcRenderer.invoke('settings:connect', settings),
   testOpenClaw: (settings) => ipcRenderer.invoke('settings:openclaw-test', settings),
+  testHermes: (settings) => ipcRenderer.invoke('settings:hermes-test', settings),
   onError: (callback) => ipcRenderer.on('settings:error', (_event, message) => callback(message)),
   onDockVisibilityChanged: (callback) => ipcRenderer.on('settings:dock-visibility', (_event, hidden) => callback(hidden)),
   onMenuBarVisibilityChanged: (callback) => ipcRenderer.on('settings:menu-bar-visibility', (_event, visible) => callback(visible)),
