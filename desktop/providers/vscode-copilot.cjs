@@ -245,16 +245,45 @@ function readCopilotAgentHostStates(logRoots) {
   for (const filePath of agentHostLogFiles(logRoots)) {
     for (const line of readFileTail(filePath, AGENT_HOST_LOG_TAIL_BYTES).split(/\r?\n/)) {
       // Intentionally stop matching before any prompt or error body. TaskFolk
-      // retains only the timestamp, opaque session id, and lifecycle marker.
-      const match = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[\w+\] \[(Copilot|Codex):([^\]]+)\] (sendMessage called:|Tool started:|Session error:|Session idle\b)/.exec(line);
+      // retains only timestamps, opaque session/tool ids, and lifecycle markers.
+      const match = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[\w+\] \[(Copilot|Codex):([^\]]+)\] (sendMessage called:|Tool started:|Tool completed:|Requesting confirmation for tool call:|Permission response:|Session error:|Session idle\b)/.exec(line);
       if (!match) continue;
       const timestamp = Date.parse(match[1].replace(' ', 'T'));
       if (!Number.isFinite(timestamp)) continue;
       const provider = match[2].toLowerCase();
       const sessionId = match[3];
-      const state = events.get(sessionId) || { provider, activeAt: 0, errorAt: 0, idleAt: 0 };
-      if (match[4] === 'sendMessage called:' || match[4] === 'Tool started:') {
+      const state = events.get(sessionId) || {
+        provider,
+        activeAt: 0,
+        errorAt: 0,
+        idleAt: 0,
+        approvalEventAt: 0,
+        approvalRequests: new Map(),
+        approvalResponses: new Map()
+      };
+      if (['sendMessage called:', 'Tool started:', 'Tool completed:'].includes(match[4])) {
         state.activeAt = Math.max(state.activeAt, timestamp);
+      } else if (match[4] === 'Requesting confirmation for tool call:') {
+        const toolCallId = /^\s*([\w-]+)/.exec(line.slice(match[0].length))?.[1];
+        if (toolCallId) {
+          state.approvalRequests.set(
+            toolCallId,
+            Math.max(Number(state.approvalRequests.get(toolCallId) || 0), timestamp)
+          );
+          state.approvalEventAt = Math.max(state.approvalEventAt, timestamp);
+        }
+      } else if (match[4] === 'Permission response:') {
+        const toolCallId = /^\s*toolCallId=([\w-]+)/.exec(line.slice(match[0].length))?.[1];
+        if (toolCallId) {
+          state.approvalResponses.set(
+            toolCallId,
+            Math.max(Number(state.approvalResponses.get(toolCallId) || 0), timestamp)
+          );
+          state.approvalEventAt = Math.max(state.approvalEventAt, timestamp);
+          // Once the user responds, Copilot resumes work even if the next tool
+          // lifecycle marker has not reached the log yet.
+          state.activeAt = Math.max(state.activeAt, timestamp);
+        }
       } else if (match[4] === 'Session error:') state.errorAt = Math.max(state.errorAt, timestamp);
       else state.idleAt = Math.max(state.idleAt, timestamp);
       events.set(sessionId, state);
@@ -264,11 +293,23 @@ function readCopilotAgentHostStates(logRoots) {
   const states = new Map();
   const providerStates = new Map();
   for (const [sessionId, event] of events) {
-    const updatedAt = Math.max(event.activeAt, event.errorAt, event.idleAt);
-    const status = event.errorAt > event.activeAt
+    let pendingApprovalAt = 0;
+    for (const [toolCallId, requestedAt] of event.approvalRequests) {
+      if (requestedAt > Number(event.approvalResponses.get(toolCallId) || 0)) {
+        pendingApprovalAt = Math.max(pendingApprovalAt, requestedAt);
+      }
+    }
+    const awaitingApproval = pendingApprovalAt > Math.max(event.idleAt, event.errorAt);
+    const updatedAt = Math.max(
+      event.activeAt,
+      event.errorAt,
+      event.idleAt,
+      event.approvalEventAt
+    );
+    const status = event.errorAt > event.activeAt && !awaitingApproval
       ? 'blocked'
       : (event.activeAt > event.idleAt ? 'active' : 'idle');
-    const state = { status, updatedAt };
+    const state = { status, updatedAt, awaitingApproval };
     states.set(sessionId, state);
     const providerKey = `provider:${event.provider}`;
     if (updatedAt > Number(providerStates.get(providerKey)?.updatedAt || 0)) {
@@ -582,7 +623,8 @@ function normalizeSession(
   // Its log timestamp is the authoritative lifecycle time when available.
   const statusUpdatedAt = lifecycleState?.updatedAt || updatedAt;
   const runtimeState = latestSessionRuntimeState(workspaceStoragePath, sessionId);
-  const awaitingApproval = runtimeState?.awaitingApproval === true;
+  const awaitingApproval = runtimeState?.awaitingApproval === true
+    || lifecycleState?.awaitingApproval === true;
   const stillThinking = runtimeState?.stillThinking
     && (!runtimeState?.modelState?.completedAt
       || (fileMtimeMs > 0 && nowMs - fileMtimeMs <= ACTIVE_ACTIVITY_MS));

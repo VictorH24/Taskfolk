@@ -4,6 +4,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.34 (August 20, 2026)
+
+- Detect pending VS Code Copilot Agent Host tool confirmations as approval state until every permission response arrives
+
 ## Version 1.0.33 (August 19, 2026)
 
 - Add VS Code Agents view support for Codex sessions, including distinct Codex labels and live rollout lifecycle states
