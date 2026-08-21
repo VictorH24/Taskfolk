@@ -8,6 +8,7 @@ const INTEGRATION_REFRESH_DEFAULTS = Object.freeze({
   cursor: 5_000,
   codex: 5_000,
   goose: 5_000,
+  hermes: 5_000,
   buzz: 5_000,
   claude: 5_000,
   gemini: 5_000,

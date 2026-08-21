@@ -39,6 +39,10 @@ const {
   normalizeGooseGrouping
 } = require('./providers/goose.cjs');
 const {
+  fetchHermesAgents,
+  normalizeHermesGrouping
+} = require('./providers/hermes.cjs');
+const {
   fetchBuzzAgents,
   normalizeBuzzGrouping
 } = require('./providers/buzz.cjs');
@@ -177,6 +181,10 @@ let gooseTimer = null;
 let gooseSyncInFlight = false;
 let goosePublished = false;
 let gooseLastError = '';
+let hermesTimer = null;
+let hermesSyncInFlight = false;
+let hermesPublished = false;
+let hermesLastError = '';
 let buzzTimer = null;
 let buzzSyncInFlight = false;
 let buzzPublished = false;
@@ -1672,6 +1680,58 @@ function startGooseAdapter() {
   void syncGooseAdapter();
 }
 
+function scheduleHermesSync() {
+  clearTimeout(hermesTimer);
+  hermesTimer = null;
+  if (readConfig().hermesEnabled || hermesPublished) {
+    hermesTimer = setTimeout(syncHermesAdapter, integrationPollingRefreshMs(readConfig(), 'hermes'));
+  }
+}
+
+async function syncHermesAdapter() {
+  if (hermesSyncInFlight) {
+    scheduleHermesSync();
+    return;
+  }
+  const syncGeneration = runtimeSyncGeneration;
+  hermesSyncInFlight = true;
+  try {
+    const config = readConfig();
+    if (!config.hermesEnabled) {
+      if (hermesPublished) await publishRuntimeAgents('hermes', [], config);
+      hermesPublished = false;
+      hermesLastError = '';
+      return;
+    }
+    if (!providerPollingAllowed(config, 'hermes')) return;
+    const agents = await fetchHermesAgents({ grouping: normalizeHermesGrouping(config.hermesGrouping) });
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    await publishRuntimeAgents('hermes', agents, config);
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    hermesPublished = agents.length > 0;
+    hermesLastError = '';
+  } catch (error) {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    const message = error?.message || 'Could not read Hermes activity.';
+    if (message !== hermesLastError) console.warn(`Hermes adapter: ${message}`);
+    hermesLastError = message;
+    if (hermesPublished) {
+      try { await publishRuntimeAgents('hermes', []); } catch {}
+      hermesPublished = false;
+    }
+  } finally {
+    if (syncGeneration !== runtimeSyncGeneration) return;
+    hermesSyncInFlight = false;
+    scheduleHermesSync();
+  }
+}
+
+function startHermesAdapter() {
+  clearTimeout(hermesTimer);
+  hermesTimer = null;
+  void syncHermesAdapter();
+}
+
 function scheduleBuzzSync() {
   clearTimeout(buzzTimer);
   buzzTimer = null;
@@ -2115,6 +2175,7 @@ function startRuntimeAdapters() {
   startCursorAdapter();
   startCodexAdapter();
   startGooseAdapter();
+  startHermesAdapter();
   startBuzzAdapter();
   startClaudeAdapter();
   startGeminiAdapter();
@@ -2132,6 +2193,7 @@ function stopRuntimeAdapters() {
     cursorTimer,
     codexTimer,
     gooseTimer,
+    hermesTimer,
     buzzTimer,
     claudeTimer,
     geminiTimer,
@@ -2146,6 +2208,7 @@ function stopRuntimeAdapters() {
   cursorTimer = null;
   codexTimer = null;
   gooseTimer = null;
+  hermesTimer = null;
   buzzTimer = null;
   claudeTimer = null;
   geminiTimer = null;
@@ -2158,6 +2221,7 @@ function stopRuntimeAdapters() {
   cursorSyncInFlight = false;
   codexSyncInFlight = false;
   gooseSyncInFlight = false;
+  hermesSyncInFlight = false;
   buzzSyncInFlight = false;
   claudeSyncInFlight = false;
   geminiSyncInFlight = false;
@@ -2175,6 +2239,7 @@ function restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately = true } =
   cursorSyncInFlight = false;
   codexSyncInFlight = false;
   gooseSyncInFlight = false;
+  hermesSyncInFlight = false;
   buzzSyncInFlight = false;
   claudeSyncInFlight = false;
   geminiSyncInFlight = false;
@@ -2187,6 +2252,7 @@ function restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately = true } =
   startCursorAdapter();
   startCodexAdapter();
   startGooseAdapter();
+  startHermesAdapter();
   startBuzzAdapter();
   startClaudeAdapter();
   startGeminiAdapter();
@@ -2933,6 +2999,7 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
     codexPublished = false;
     codexPublishState = null;
     goosePublished = false;
+    hermesPublished = false;
     buzzPublished = false;
     claudePublished = false;
     geminiPublished = false;
@@ -3173,6 +3240,8 @@ ipcMain.handle('settings:load', () => {
     codexGrouping: normalizeCodexGrouping(config.codexGrouping),
     gooseEnabled: Boolean(config.gooseEnabled),
     gooseGrouping: normalizeGooseGrouping(config.gooseGrouping),
+    hermesEnabled: Boolean(config.hermesEnabled),
+    hermesGrouping: normalizeHermesGrouping(config.hermesGrouping),
     buzzEnabled: Boolean(config.buzzEnabled),
     buzzGrouping: normalizeBuzzGrouping(config.buzzGrouping),
     claudeEnabled: Boolean(config.claudeEnabled),
@@ -3485,6 +3554,8 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     codexGrouping: normalizeCodexGrouping(input.codexGrouping),
     gooseEnabled: Boolean(input.gooseEnabled),
     gooseGrouping: normalizeGooseGrouping(input.gooseGrouping),
+    hermesEnabled: Boolean(input.hermesEnabled),
+    hermesGrouping: normalizeHermesGrouping(input.hermesGrouping),
     buzzEnabled: Boolean(input.buzzEnabled),
     buzzGrouping: normalizeBuzzGrouping(input.buzzGrouping),
     claudeEnabled: Boolean(input.claudeEnabled),

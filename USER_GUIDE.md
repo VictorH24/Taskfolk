@@ -110,6 +110,13 @@ No OpenAI API key or extra extension is required. Codex Desktop or the Codex CLI
 
 Goose Desktop, the Goose CLI, its ACP server, or `goosed` must be running for sessions to appear. Taskfolk opens Goose's local session index read-only and selects only the session name, project path, provider, model, session type, and timestamps. It does not read conversations, prompts, responses, tool data, extensions, or credentials. Custom Goose data roots set with `GOOSE_PATH_ROOT` are supported.
 
+### Hermes Desktop and CLI
+
+1. Enable **Track Hermes Desktop and CLI sessions**.
+2. Choose **One agent per project** or **One agent for all projects**.
+
+Hermes Desktop or the Hermes CLI must be running for sessions to appear. Taskfolk opens `~/.hermes/state.db` and profile databases read-only, selecting only session titles, project paths, model/provider names, sources, and lifecycle timestamps. It never queries session messages, prompts, responses, tool calls, system prompts, routing data, or credentials. Custom Hermes roots set with `HERMES_HOME` are supported.
+
 ### Buzz managed agents
 
 1. Enable **Track Buzz managed agents**.

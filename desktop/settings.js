@@ -59,6 +59,9 @@ const codexGroupingInput = document.querySelector('#codexGrouping');
 const gooseEnabledInput = document.querySelector('#gooseEnabled');
 const gooseGroupingField = document.querySelector('#gooseGroupingField');
 const gooseGroupingInput = document.querySelector('#gooseGrouping');
+const hermesEnabledInput = document.querySelector('#hermesEnabled');
+const hermesGroupingField = document.querySelector('#hermesGroupingField');
+const hermesGroupingInput = document.querySelector('#hermesGrouping');
 const buzzEnabledInput = document.querySelector('#buzzEnabled');
 const buzzGroupingField = document.querySelector('#buzzGroupingField');
 const buzzGroupingInput = document.querySelector('#buzzGrouping');
@@ -97,6 +100,7 @@ const integrationRefreshDefaults = Object.freeze({
   cursor: 5_000,
   codex: 5_000,
   goose: 5_000,
+  hermes: 5_000,
   buzz: 5_000,
   claude: 5_000,
   gemini: 5_000,
@@ -218,6 +222,10 @@ function updateGooseFields() {
   gooseGroupingField.classList.toggle('hidden', !gooseEnabledInput.checked);
 }
 
+function updateHermesFields() {
+  hermesGroupingField.classList.toggle('hidden', !hermesEnabledInput.checked);
+}
+
 function updateBuzzFields() {
   buzzGroupingField.classList.toggle('hidden', !buzzEnabledInput.checked);
 }
@@ -323,6 +331,8 @@ async function initialize() {
   codexGroupingInput.value = settings.codexGrouping === 'single' ? 'single' : 'project';
   gooseEnabledInput.checked = Boolean(settings.gooseEnabled);
   gooseGroupingInput.value = settings.gooseGrouping === 'single' ? 'single' : 'project';
+  hermesEnabledInput.checked = Boolean(settings.hermesEnabled);
+  hermesGroupingInput.value = settings.hermesGrouping === 'single' ? 'single' : 'project';
   buzzEnabledInput.checked = Boolean(settings.buzzEnabled);
   buzzGroupingInput.value = settings.buzzGrouping === 'agent' ? 'agent' : 'single';
   claudeEnabledInput.checked = Boolean(settings.claudeEnabled);
@@ -360,6 +370,7 @@ async function initialize() {
   updateCursorFields();
   updateCodexFields();
   updateGooseFields();
+  updateHermesFields();
   updateBuzzFields();
   updateClaudeFields();
   updateGeminiFields();
@@ -401,6 +412,7 @@ vsCodeCopilotEnabledInput.addEventListener('change', updateVsCodeCopilotFields);
 cursorEnabledInput.addEventListener('change', updateCursorFields);
 codexEnabledInput.addEventListener('change', updateCodexFields);
 gooseEnabledInput.addEventListener('change', updateGooseFields);
+hermesEnabledInput.addEventListener('change', updateHermesFields);
 buzzEnabledInput.addEventListener('change', updateBuzzFields);
 claudeEnabledInput.addEventListener('change', updateClaudeFields);
 geminiEnabledInput.addEventListener('change', updateGeminiFields);
@@ -549,6 +561,8 @@ form.addEventListener('submit', async (event) => {
       codexGrouping: codexGroupingInput.value,
       gooseEnabled: gooseEnabledInput.checked,
       gooseGrouping: gooseGroupingInput.value,
+      hermesEnabled: hermesEnabledInput.checked,
+      hermesGrouping: hermesGroupingInput.value,
       buzzEnabled: buzzEnabledInput.checked,
       buzzGrouping: buzzGroupingInput.value,
       claudeEnabled: claudeEnabledInput.checked,

@@ -4,6 +4,13 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.35 (August 20, 2026)
+
+- Add first-class Hermes Desktop and CLI session tracking with project and combined grouping, profile discovery, read-only metadata access, and approval/working lifecycle states
+- Show Hermes Desktop sessions that do not carry a workspace by using their Hermes profile as the stable agent identity
+- Include Hermes profile- and Bot-owned hidden sessions in activity tracking while continuing to exclude archived and internal tool/kanban sessions
+- Follow Hermes' durable activity-label lifecycle so profiles switch to Working during a turn and return to Idle as soon as Hermes clears the completed turn
+
 ## Version 1.0.34 (August 20, 2026)
 
 - Detect pending VS Code Copilot Agent Host tool confirmations as approval state until every permission response arrives

@@ -18,6 +18,7 @@ function integrationKeyForProvider(value) {
     cursor: 'cursor',
     codex: 'codex',
     goose: 'goose',
+    hermes: 'hermes',
     buzz: 'buzz',
     claude: 'claude',
     gemini: 'gemini',

@@ -25,7 +25,7 @@
           <option value="remote">Connect to a remote server</option>
         </select>
       </label>
-      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. Agents can come from local or remote OpenClaw, OpenCode, VS Code Copilot, Codex, Claude, Gemini, Antigravity, Ollama, and LM Studio.</p>
+      <p id="localModeNote" class="modeNote">Local mode runs a private Taskfolk server inside the desktop app. Agents can come from local or remote OpenClaw, OpenCode, VS Code Copilot, Codex, Goose, Hermes, Buzz, Claude, Gemini, Antigravity, Ollama, and LM Studio.</p>
       <div id="remoteConnectionFields" class="remoteConnectionFields">
         <label>
           <span>Taskfolk URL</span>
@@ -238,6 +238,20 @@
             <option value="project">One agent per project</option>
           </select>
           <small>Reads Goose's local session name, project path, provider, model, and timestamps only. Conversation content, tool output, and credentials stay private.</small>
+        </label>
+      </section>
+      <section class="integrationField">
+        <label class="checkRow">
+          <input id="hermesEnabled" name="hermesEnabled" type="checkbox" />
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/hermes.png" alt="" />Track Hermes Desktop and CLI sessions</span>
+        </label>
+        <label id="hermesGroupingField">
+          <span>Hermes agents</span>
+          <select id="hermesGrouping" name="hermesGrouping">
+            <option value="single">One agent for all projects</option>
+            <option value="project">One agent per project</option>
+          </select>
+          <small>Reads Hermes session IDs, titles, project paths, model/provider names, and lifecycle timestamps only. Messages, prompts, tool calls, system prompts, and credentials stay private.</small>
         </label>
       </section>
       <section class="integrationField">
