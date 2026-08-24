@@ -286,18 +286,43 @@ function agentsFromRows(rows, nowMs, maxAgents = DEFAULT_MAX_AGENTS, grouping = 
     return rank(right) - rank(left) || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
   });
   const normalizedGrouping = normalizeHermesGrouping(grouping);
-  const projectProfiles = normalizedGrouping === HERMES_GROUPING_PROJECT
-    ? new Set(candidates
-      .filter((agent) => agent.workspacePath)
-      .map((agent) => cleanText(agent.activity?.profile, 120).toLowerCase() || 'default'))
-    : new Set();
-  const projects = new Map();
+  const profileFallbacks = new Map();
+  if (normalizedGrouping === HERMES_GROUPING_PROJECT) {
+    for (const agent of candidates) {
+      if (agent.workspacePath) continue;
+      const profile = cleanText(agent.activity?.profile, 120).toLowerCase() || 'default';
+      if (!profileFallbacks.has(profile)) profileFallbacks.set(profile, agent);
+    }
+  }
+  const reconciled = [];
+  const reconciledProfiles = new Set();
   for (const agent of candidates) {
     const profile = cleanText(agent.activity?.profile, 120).toLowerCase() || 'default';
-    // A cwd-less Desktop session is a fallback representation of its Hermes
-    // profile. Once that profile has a project-backed session, publishing both
-    // would make one Hermes agent appear twice in per-project mode.
-    if (!agent.workspacePath && projectProfiles.has(profile)) continue;
+    const fallback = profileFallbacks.get(profile);
+    if (!fallback) {
+      reconciled.push(agent);
+      continue;
+    }
+    if (reconciledProfiles.has(profile)) continue;
+    reconciledProfiles.add(profile);
+    // Keep the stable Hermes profile identity, but let the strongest and most
+    // recent session for that profile drive its task and lifecycle. This folds
+    // project and cwd-less Desktop activity into one visible profile agent.
+    const profileName = cleanText(fallback.activity?.profile, 120) || 'default';
+    reconciled.push({
+      ...fallback,
+      role: ['Hermes Agent', profileName !== 'default' ? profileName : '',
+        agent.activity?.modelProvider, agent.activity?.model].filter(Boolean).join(' · '),
+      status: agent.status,
+      task: agent.task,
+      lastSeen: agent.lastSeen,
+      displayState: agent.displayState,
+      pose: agent.pose,
+      activity: { ...agent.activity, profile: profileName }
+    });
+  }
+  const projects = new Map();
+  for (const agent of reconciled) {
     if (!projects.has(agent.id)) projects.set(agent.id, agent);
   }
   const agents = [...projects.values()];

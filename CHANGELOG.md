@@ -4,6 +4,9 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.41 (August 24, 2026)
+
+- Fold Hermes project and workspace-less Desktop activity into one profile agent whenever Hermes exposes an existing profile identity
 
 ## Version 1.0.40 (August 24, 2026)
 
