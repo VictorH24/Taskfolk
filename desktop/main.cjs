@@ -117,7 +117,10 @@ const LM_STUDIO_REQUEST_TIMEOUT_MS = 2_500;
 const AGENT_SNAPSHOT_REFRESH_MS = 5_000;
 const AGENT_SNAPSHOT_REQUEST_TIMEOUT_MS = 12_000;
 const LOCAL_SERVER_START_TIMEOUT_MS = 12_000;
-const CONNECTOR_STARTUP_GRACE_MS = 1_500;
+// Codex ACP discovery can legitimately use its full four-second timeout before
+// falling back to the local task index. Keep saved folk restoration pending
+// long enough for that first connector snapshot to be published.
+const CONNECTOR_STARTUP_GRACE_MS = 4_250;
 const SYSTEM_SLEEP_GAP_MS = 20_000;
 const AUTO_UPDATE_INITIAL_DELAY_MS = 30_000;
 const AUTO_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1_000;
@@ -1195,6 +1198,16 @@ function savedAvatarAgentIsUnavailable(config, agents = availableAgents) {
   return displayMode(config) === 'avatar'
     && config.selectedAgent !== MOST_RECENT_AGENT_ID
     && !agents.some((agent) => agent.id === config.selectedAgent);
+}
+
+function savedAdditionalFolkIsUnavailable(config, agents = availableAgents) {
+  const availableIds = new Set(agents.map((agent) => agent.id));
+  return savedAdditionalFolks(config).some((folk) => !availableIds.has(folk.agentId));
+}
+
+function savedCompanionFolkIsUnavailable(config, agents = availableAgents) {
+  return savedAvatarAgentIsUnavailable(config, agents)
+    || savedAdditionalFolkIsUnavailable(config, agents);
 }
 
 async function refreshAvailableAgents() {
@@ -3117,9 +3130,9 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   if (runtimePowerSuspended) void publishBackgroundPollingSuspended(true);
   startRuntimeAdapters();
   availableAgents = await fetchAvailableAgents(normalizedUrl, ses);
-  // A connector may still be publishing its first snapshot. Give it one short
-  // retry before replacing the persisted single-avatar selection.
-  if (savedAvatarAgentIsUnavailable(config)) {
+  // A connector may still be publishing its first snapshot. Retry before
+  // replacing the primary selection or skipping any saved additional folk.
+  if (savedCompanionFolkIsUnavailable(config)) {
     await wait(CONNECTOR_STARTUP_GRACE_MS);
     availableAgents = await fetchAvailableAgents(normalizedUrl, ses);
   }

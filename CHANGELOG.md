@@ -5,6 +5,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 ## Unreleased
 
 
+## Version 1.0.39 (August 24, 2026)
+
+- Restore saved additional folk, including Codex folk, after their initial connector discovery completes during app relaunch
+
 ## Version 1.0.38 (August 24, 2026)
 
 - Preserve each folk's last rendered status across Low Energy sleep and restore cached provider rosters before the first post-wake screen refresh
