@@ -5,6 +5,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 ## Unreleased
 
 
+## Version 1.0.40 (August 24, 2026)
+
+- Show the Hermes Success state for quick turns that complete between polls, including local and remote gateway sessions, before returning the folk to Idle
+
 ## Version 1.0.39 (August 24, 2026)
 
 - Restore saved Codex folk after app relaunch and refresh the renderer as soon as initial Codex discovery completes, without requiring a manual reload

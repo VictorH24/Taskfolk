@@ -234,6 +234,12 @@ function hermesLifecycle(row, nowMs) {
     return { status: 'blocked', displayState: 'Needs approval', pose: 'approval', activityStatus: 'approval', updatedAt };
   }
   if (active) return { status: 'active', displayState: 'Working', pose: 'working', activityStatus: 'busy', updatedAt };
+  // A modern Hermes turn clears last_activity_description when its finally
+  // block completes. Report that fresh completion explicitly so short turns
+  // still produce a Success pulse even when polling never observed Working.
+  if (recent && ((!open) || (activityStateAvailable && !description))) {
+    return { status: 'success', displayState: 'Success', pose: 'success', activityStatus: 'completed', updatedAt };
+  }
   return { status: 'idle', displayState: 'Idle', pose: null, activityStatus: 'idle', updatedAt };
 }
 
@@ -399,6 +405,7 @@ function normalizeHermesRemoteAgents(profilesPayload, activePayload, {
 } = {}) {
   const nowMs = typeof now === 'function' ? now() : Number(now) || Date.now();
   const profiles = Array.isArray(profilesPayload?.profiles) ? profilesPayload.profiles : [];
+  const activeListAvailable = Array.isArray(activePayload?.sessions);
   const activeSessions = Array.isArray(activePayload?.sessions) ? activePayload.sessions : [];
   const activeByStoredId = new Map();
   for (const session of activeSessions) {
@@ -418,7 +425,9 @@ function normalizeHermesRemoteAgents(profilesPayload, activePayload, {
     const recentMetadata = latest && nowMs - updatedAt <= ACTIVE_ACTIVITY_MS;
     const lifecycle = live
       ? remoteStatus(live.status)
-      : recentMetadata ? remoteStatus('active') : remoteStatus('idle');
+      : activeListAvailable && recentMetadata
+        ? { status: 'success', displayState: 'Success', pose: 'success', activityStatus: 'completed' }
+        : recentMetadata ? remoteStatus('active') : remoteStatus('idle');
     const model = cleanText(live?.model || profile?.model, 120);
     const provider = cleanText(profile?.provider, 80) || modelProvider({ model });
     const sessionId = cleanText(live?.session_key || live?.id || last?.resolved_id || last?.id || worker?.id, 160);
