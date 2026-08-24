@@ -7,7 +7,7 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Version 1.0.39 (August 24, 2026)
 
-- Restore saved additional folk, including Codex folk, after their initial connector discovery completes during app relaunch
+- Restore saved Codex folk after app relaunch and refresh the renderer as soon as initial Codex discovery completes, without requiring a manual reload
 
 ## Version 1.0.38 (August 24, 2026)
 

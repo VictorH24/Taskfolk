@@ -1307,6 +1307,10 @@ async function publishCodexRuntimeAgents(agents, config = readConfig()) {
   )) return false;
   await publishRuntimeAgents('codex', agents, config);
   codexPublishState = { signature, publishedAtMs: nowMs };
+  // The renderer may have loaded its shared snapshot while the initial Codex
+  // ACP probe was still running. Refresh it after the server accepts the
+  // roster so the folk appears without requiring a manual reload.
+  refreshAgentSnapshotAfterRuntimePublish();
   return true;
 }
 
