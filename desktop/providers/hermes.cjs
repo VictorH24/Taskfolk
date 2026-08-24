@@ -279,12 +279,23 @@ function agentsFromRows(rows, nowMs, maxAgents = DEFAULT_MAX_AGENTS, grouping = 
     const rank = (agent) => agent.pose === 'approval' ? 2 : Number(agent.status === 'active');
     return rank(right) - rank(left) || Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
   });
+  const normalizedGrouping = normalizeHermesGrouping(grouping);
+  const projectProfiles = normalizedGrouping === HERMES_GROUPING_PROJECT
+    ? new Set(candidates
+      .filter((agent) => agent.workspacePath)
+      .map((agent) => cleanText(agent.activity?.profile, 120).toLowerCase() || 'default'))
+    : new Set();
   const projects = new Map();
   for (const agent of candidates) {
+    const profile = cleanText(agent.activity?.profile, 120).toLowerCase() || 'default';
+    // A cwd-less Desktop session is a fallback representation of its Hermes
+    // profile. Once that profile has a project-backed session, publishing both
+    // would make one Hermes agent appear twice in per-project mode.
+    if (!agent.workspacePath && projectProfiles.has(profile)) continue;
     if (!projects.has(agent.id)) projects.set(agent.id, agent);
   }
   const agents = [...projects.values()];
-  if (normalizeHermesGrouping(grouping) === HERMES_GROUPING_SINGLE) {
+  if (normalizedGrouping === HERMES_GROUPING_SINGLE) {
     return agents[0] ? [{ ...agents[0], id: 'hermes-all-projects', name: 'Hermes', avatarAssignmentKey: 'runtime:hermes-single' }] : [];
   }
   return agents.slice(0, Math.max(1, Math.min(Number(maxAgents) || DEFAULT_MAX_AGENTS, DEFAULT_MAX_AGENTS)));

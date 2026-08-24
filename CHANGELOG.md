@@ -4,6 +4,12 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+
+## Version 1.0.38 (August 24, 2026)
+
+- Preserve each folk's last rendered status across Low Energy sleep and restore cached provider rosters before the first post-wake screen refresh
+- Avoid showing a workspace-less Hermes profile fallback as a second agent when the same profile already has a project-backed agent
+
 ## Version 1.0.37 (August 23, 2026)
 
 - Keep last-known agents available in Low Energy Mode while visible-provider-only polling skips their providers, and immediately refresh a provider when its preserved folk is selected

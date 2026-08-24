@@ -2324,9 +2324,23 @@ function stopRuntimeAdapters() {
   openClawSyncInFlight = false;
 }
 
+async function restoreCachedRuntimeRostersAfterWake(config = readConfig(), expectedGeneration = runtimeSyncGeneration) {
+  for (const [provider, agents] of runtimeAgentRosters) {
+    if (expectedGeneration !== runtimeSyncGeneration || runtimePowerSuspended || areProviderChecksPaused()) return false;
+    if (!agents.length) continue;
+    try {
+      await publishRuntimeAgents(provider, agents, config);
+    } catch (error) {
+      console.warn(`Could not restore cached ${provider} agents after wake: ${error.message}`);
+    }
+  }
+  return expectedGeneration === runtimeSyncGeneration && !runtimePowerSuspended && !areProviderChecksPaused();
+}
+
 function restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately = true } = {}) {
   if (!activeBaseUrl || runtimePowerSuspended || areProviderChecksPaused()) return;
   runtimeSyncGeneration += 1;
+  const restartGeneration = runtimeSyncGeneration;
   openCodeSyncInFlight = false;
   vsCodeCopilotSyncInFlight = false;
   cursorSyncInFlight = false;
@@ -2340,31 +2354,20 @@ function restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately = true } =
   ollamaSyncInFlight = false;
   lmStudioSyncInFlight = false;
   openClawSyncInFlight = false;
-  startOpenCodeAdapter();
-  startVsCodeCopilotAdapter();
-  startCursorAdapter();
-  startCodexAdapter();
-  startGooseAdapter();
-  startHermesAdapter();
-  startBuzzAdapter();
-  startClaudeAdapter();
-  startGeminiAdapter();
-  startAntigravityAdapter();
-  startOllamaAdapter();
-  startLmStudioAdapter();
-  startOpenClawAdapter();
   const interruptedSnapshotRequest = agentSnapshotRequest;
   agentSnapshotController?.abort();
-  if (refreshSnapshotImmediately) {
-    void Promise.resolve(interruptedSnapshotRequest)
-      .finally(() => refreshAgentSnapshot())
-      .finally(scheduleAgentSnapshotPolling);
-  } else {
-    scheduleAgentSnapshotPolling();
-  }
   for (const window of companionWindows.keys()) {
     if (!window.isDestroyed()) window.webContents.send('office:system-resume');
   }
+  void (async () => {
+    const restored = await restoreCachedRuntimeRostersAfterWake(readConfig(), restartGeneration);
+    if (!restored) return;
+    startRuntimeAdapters();
+    await Promise.resolve(interruptedSnapshotRequest);
+    if (restartGeneration !== runtimeSyncGeneration || runtimePowerSuspended || areProviderChecksPaused()) return;
+    if (refreshSnapshotImmediately) await refreshAgentSnapshot();
+    scheduleAgentSnapshotPolling();
+  })();
 }
 
 function checkForSystemSleepGap() {
