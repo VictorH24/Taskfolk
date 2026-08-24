@@ -91,7 +91,9 @@ const {
 } = require('./low-energy-options.cjs');
 const {
   DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS,
-  runtimePublishDue
+  runtimePublishDue,
+  runtimeRosterMissingFromCache,
+  runtimeRosterRefreshMs
 } = require('./runtime-publish-policy.cjs');
 
 const DEFAULT_BOUNDS = { width: 720, height: 500 };
@@ -231,6 +233,8 @@ let agentSnapshotTimer = null;
 let agentSnapshotRequest = null;
 let agentSnapshotController = null;
 const runtimeAgentMenuSignatures = new Map();
+const runtimeAgentRosters = new Map();
+const runtimeAgentLastPublishedAt = new Map();
 const companionWindows = new Map();
 const windowDrags = new Map();
 const mouseIgnoringWindows = new Set();
@@ -351,6 +355,34 @@ function visibleIntegrationKeys(config = readConfig()) {
 function providerPollingAllowed(config, integration) {
   if (areProviderChecksPaused(config)) return false;
   return providerPollingAllowedForVisibleSet(config, integration, visibleIntegrationKeys(config));
+}
+
+function runtimeProviderForIntegration(integration) {
+  return ({
+    openCode: 'opencode',
+    openClaw: 'openclaw',
+    vsCodeCopilot: 'vscode-copilot',
+    cursor: 'cursor',
+    codex: 'codex',
+    goose: 'goose',
+    hermes: 'hermes',
+    buzz: 'buzz',
+    claude: 'claude',
+    gemini: 'gemini',
+    antigravity: 'antigravity',
+    ollama: 'ollama',
+    lmStudio: 'lmstudio'
+  })[integration] || '';
+}
+
+function runtimeAdapterRefreshMs(config, integration) {
+  const refreshMs = integrationPollingRefreshMs(config, integration);
+  const provider = runtimeProviderForIntegration(integration);
+  return runtimeRosterRefreshMs(
+    refreshMs,
+    providerPollingAllowed(config, integration),
+    Boolean(runtimeAgentRosters.get(provider)?.length)
+  );
 }
 
 function isShowOnAllDesktopsEnabled(config = readConfig()) {
@@ -1222,13 +1254,29 @@ async function publishRuntimeAgents(provider, agents, config = readConfig()) {
     } catch {}
     throw new Error(message);
   }
+  if (agents.length) runtimeAgentRosters.set(provider, agents);
+  else runtimeAgentRosters.delete(provider);
+  runtimeAgentLastPublishedAt.set(provider, Date.now());
   const nextSignature = agents.map((agent) => `${agent.id}:${agent.name}`).join('|');
-  if (nextSignature !== runtimeAgentMenuSignatures.get(provider)) {
+  const missingFromMenuCache = runtimeRosterMissingFromCache(availableAgents, agents);
+  if (nextSignature !== runtimeAgentMenuSignatures.get(provider) || missingFromMenuCache) {
     runtimeAgentMenuSignatures.set(provider, nextSignature);
     availableAgents = await fetchAvailableAgents(activeBaseUrl, ses);
     reconcileAdditionalCompanionWindows();
     rebuildMenus();
   }
+}
+
+async function preserveRuntimeAgentsForSkippedPolling(config, integration) {
+  if (providerPollingAllowed(config, integration)) return false;
+  const provider = runtimeProviderForIntegration(integration);
+  const agents = runtimeAgentRosters.get(provider);
+  if (!provider || !agents?.length) return true;
+  const lastPublishedAt = runtimeAgentLastPublishedAt.get(provider) || 0;
+  if (Date.now() - lastPublishedAt >= DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS) {
+    await publishRuntimeAgents(provider, agents, config);
+  }
+  return true;
 }
 
 async function publishCodexRuntimeAgents(agents, config = readConfig()) {
@@ -1271,7 +1319,7 @@ function scheduleOpenCodeSync() {
   clearTimeout(openCodeTimer);
   openCodeTimer = null;
   if (readConfig().openCodeEnabled || openCodePublished) {
-    openCodeTimer = setTimeout(syncOpenCodeAdapter, integrationPollingRefreshMs(readConfig(), 'openCode'));
+    openCodeTimer = setTimeout(syncOpenCodeAdapter, runtimeAdapterRefreshMs(readConfig(), 'openCode'));
   }
 }
 
@@ -1290,7 +1338,7 @@ async function syncOpenCodeAdapter() {
       openCodeLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'openCode')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'openCode')) return;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), OPENCODE_REQUEST_TIMEOUT_MS);
     let serverAgents = [];
@@ -1367,7 +1415,7 @@ function scheduleVsCodeCopilotSync() {
   clearTimeout(vsCodeCopilotTimer);
   vsCodeCopilotTimer = null;
   if (readConfig().vsCodeCopilotEnabled || vsCodeCopilotPublished) {
-    vsCodeCopilotTimer = setTimeout(syncVsCodeCopilotAdapter, integrationPollingRefreshMs(readConfig(), 'vsCodeCopilot'));
+    vsCodeCopilotTimer = setTimeout(syncVsCodeCopilotAdapter, runtimeAdapterRefreshMs(readConfig(), 'vsCodeCopilot'));
   }
 }
 
@@ -1494,7 +1542,7 @@ async function syncVsCodeCopilotAdapter() {
       }
       return;
     }
-    if (!providerPollingAllowed(config, 'vsCodeCopilot')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'vsCodeCopilot')) return;
     const agents = await fetchVsCodeCopilotAgents({
       grouping: normalizeVsCodeCopilotGrouping(config.vsCodeCopilotGrouping)
     });
@@ -1540,7 +1588,7 @@ function scheduleCursorSync() {
   clearTimeout(cursorTimer);
   cursorTimer = null;
   if (readConfig().cursorEnabled || cursorPublished) {
-    cursorTimer = setTimeout(syncCursorAdapter, integrationPollingRefreshMs(readConfig(), 'cursor'));
+    cursorTimer = setTimeout(syncCursorAdapter, runtimeAdapterRefreshMs(readConfig(), 'cursor'));
   }
 }
 
@@ -1559,7 +1607,7 @@ async function syncCursorAdapter() {
       cursorLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'cursor')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'cursor')) return;
     const agents = await fetchCursorAgents({
       grouping: normalizeCursorGrouping(config.cursorGrouping)
     });
@@ -1594,7 +1642,7 @@ function scheduleCodexSync() {
   clearTimeout(codexTimer);
   codexTimer = null;
   if (readConfig().codexEnabled || codexPublished) {
-    codexTimer = setTimeout(syncCodexAdapter, integrationPollingRefreshMs(readConfig(), 'codex'));
+    codexTimer = setTimeout(syncCodexAdapter, runtimeAdapterRefreshMs(readConfig(), 'codex'));
   }
 }
 
@@ -1614,7 +1662,7 @@ async function syncCodexAdapter() {
       codexLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'codex')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'codex')) return;
     const agents = await fetchCodexAgents({ grouping });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishCodexRuntimeAgents(agents, config);
@@ -1647,7 +1695,7 @@ function scheduleGooseSync() {
   clearTimeout(gooseTimer);
   gooseTimer = null;
   if (readConfig().gooseEnabled || goosePublished) {
-    gooseTimer = setTimeout(syncGooseAdapter, integrationPollingRefreshMs(readConfig(), 'goose'));
+    gooseTimer = setTimeout(syncGooseAdapter, runtimeAdapterRefreshMs(readConfig(), 'goose'));
   }
 }
 
@@ -1666,7 +1714,7 @@ async function syncGooseAdapter() {
       gooseLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'goose')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'goose')) return;
     const agents = await fetchGooseAgents({ grouping: normalizeGooseGrouping(config.gooseGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('goose', agents, config);
@@ -1699,7 +1747,7 @@ function scheduleHermesSync() {
   clearTimeout(hermesTimer);
   hermesTimer = null;
   if (readConfig().hermesEnabled || hermesPublished) {
-    hermesTimer = setTimeout(syncHermesAdapter, integrationPollingRefreshMs(readConfig(), 'hermes'));
+    hermesTimer = setTimeout(syncHermesAdapter, runtimeAdapterRefreshMs(readConfig(), 'hermes'));
   }
 }
 
@@ -1718,7 +1766,7 @@ async function syncHermesAdapter() {
       hermesLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'hermes')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'hermes')) return;
     const hermesMode = process.env.HERMES_GATEWAY_URL
       ? 'remote'
       : normalizeHermesConnectionMode(config.hermesConnectionMode);
@@ -1761,7 +1809,7 @@ function scheduleBuzzSync() {
   clearTimeout(buzzTimer);
   buzzTimer = null;
   if (readConfig().buzzEnabled || buzzPublished) {
-    buzzTimer = setTimeout(syncBuzzAdapter, integrationPollingRefreshMs(readConfig(), 'buzz'));
+    buzzTimer = setTimeout(syncBuzzAdapter, runtimeAdapterRefreshMs(readConfig(), 'buzz'));
   }
 }
 
@@ -1780,7 +1828,7 @@ async function syncBuzzAdapter() {
       buzzLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'buzz')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'buzz')) return;
     const agents = await fetchBuzzAgents({ grouping: normalizeBuzzGrouping(config.buzzGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('buzz', agents, config);
@@ -1813,7 +1861,7 @@ function scheduleClaudeSync() {
   clearTimeout(claudeTimer);
   claudeTimer = null;
   if (readConfig().claudeEnabled || claudePublished) {
-    claudeTimer = setTimeout(syncClaudeAdapter, integrationPollingRefreshMs(readConfig(), 'claude'));
+    claudeTimer = setTimeout(syncClaudeAdapter, runtimeAdapterRefreshMs(readConfig(), 'claude'));
   }
 }
 
@@ -1832,7 +1880,7 @@ async function syncClaudeAdapter() {
       claudeLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'claude')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'claude')) return;
     const agents = await fetchClaudeAgents({ grouping: normalizeClaudeGrouping(config.claudeGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('claude', agents, config);
@@ -1865,7 +1913,7 @@ function scheduleGeminiSync() {
   clearTimeout(geminiTimer);
   geminiTimer = null;
   if (readConfig().geminiEnabled || geminiPublished) {
-    geminiTimer = setTimeout(syncGeminiAdapter, integrationPollingRefreshMs(readConfig(), 'gemini'));
+    geminiTimer = setTimeout(syncGeminiAdapter, runtimeAdapterRefreshMs(readConfig(), 'gemini'));
   }
 }
 
@@ -1884,7 +1932,7 @@ async function syncGeminiAdapter() {
       geminiLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'gemini')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'gemini')) return;
     const agents = await fetchGeminiAgents({ grouping: normalizeGeminiGrouping(config.geminiGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('gemini', agents, config);
@@ -1917,7 +1965,7 @@ function scheduleAntigravitySync() {
   clearTimeout(antigravityTimer);
   antigravityTimer = null;
   if (readConfig().antigravityEnabled || antigravityPublished) {
-    antigravityTimer = setTimeout(syncAntigravityAdapter, integrationPollingRefreshMs(readConfig(), 'antigravity'));
+    antigravityTimer = setTimeout(syncAntigravityAdapter, runtimeAdapterRefreshMs(readConfig(), 'antigravity'));
   }
 }
 
@@ -1936,7 +1984,7 @@ async function syncAntigravityAdapter() {
       antigravityLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'antigravity')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'antigravity')) return;
     const agents = await fetchAntigravityAgents({
       grouping: normalizeAntigravityGrouping(config.antigravityGrouping)
     });
@@ -1971,7 +2019,7 @@ function scheduleOllamaSync() {
   clearTimeout(ollamaTimer);
   ollamaTimer = null;
   if (readConfig().ollamaEnabled || ollamaPublished) {
-    ollamaTimer = setTimeout(syncOllamaAdapter, integrationPollingRefreshMs(readConfig(), 'ollama'));
+    ollamaTimer = setTimeout(syncOllamaAdapter, runtimeAdapterRefreshMs(readConfig(), 'ollama'));
   }
 }
 
@@ -1990,7 +2038,7 @@ async function syncOllamaAdapter() {
       ollamaLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'ollama')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'ollama')) return;
     const baseUrl = config.ollamaUrl || DEFAULT_OLLAMA_URL;
     const normalizedUrl = normalizeOllamaUrl(baseUrl);
     const hostname = new URL(normalizedUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -2059,7 +2107,7 @@ function scheduleLmStudioSync() {
   clearTimeout(lmStudioTimer);
   lmStudioTimer = null;
   if (readConfig().lmStudioEnabled || lmStudioPublished) {
-    lmStudioTimer = setTimeout(syncLmStudioAdapter, integrationPollingRefreshMs(readConfig(), 'lmStudio'));
+    lmStudioTimer = setTimeout(syncLmStudioAdapter, runtimeAdapterRefreshMs(readConfig(), 'lmStudio'));
   }
 }
 
@@ -2078,7 +2126,7 @@ async function syncLmStudioAdapter() {
       lmStudioLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'lmStudio')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'lmStudio')) return;
     const baseUrl = normalizeLmStudioUrl(config.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
     const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
     const localServer = ['127.0.0.1', 'localhost', '::1'].includes(hostname);
@@ -2136,7 +2184,7 @@ function scheduleOpenClawSync() {
   clearTimeout(openClawTimer);
   openClawTimer = null;
   if (readConfig().openClawEnabled || openClawPublished) {
-    openClawTimer = setTimeout(syncOpenClawAdapter, integrationPollingRefreshMs(readConfig(), 'openClaw'));
+    openClawTimer = setTimeout(syncOpenClawAdapter, runtimeAdapterRefreshMs(readConfig(), 'openClaw'));
   }
 }
 
@@ -2155,7 +2203,7 @@ async function syncOpenClawAdapter() {
       openClawLastError = '';
       return;
     }
-    if (!providerPollingAllowed(config, 'openClaw')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'openClaw')) return;
     const baseUrl = runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL;
     const agents = await fetchOpenClawAgents({
       baseUrl,
@@ -2208,6 +2256,26 @@ function startRuntimeAdapters() {
   startOllamaAdapter();
   startLmStudioAdapter();
   startOpenClawAdapter();
+}
+
+function startRuntimeAdapterForIntegration(integration) {
+  if (runtimePowerSuspended || areProviderChecksPaused()) return;
+  const start = ({
+    openCode: startOpenCodeAdapter,
+    openClaw: startOpenClawAdapter,
+    vsCodeCopilot: startVsCodeCopilotAdapter,
+    cursor: startCursorAdapter,
+    codex: startCodexAdapter,
+    goose: startGooseAdapter,
+    hermes: startHermesAdapter,
+    buzz: startBuzzAdapter,
+    claude: startClaudeAdapter,
+    gemini: startGeminiAdapter,
+    antigravity: startAntigravityAdapter,
+    ollama: startOllamaAdapter,
+    lmStudio: startLmStudioAdapter
+  })[integration];
+  if (start) start();
 }
 
 function stopRuntimeAdapters() {
@@ -2460,6 +2528,8 @@ async function setDisplayMode(mode, selectedAgent = '') {
   officeWindow.setBounds(nextBounds);
   await loadCompanionView();
   reconcileAdditionalCompanionWindows();
+  if (nextMode === 'office') startRuntimeAdapters();
+  else startRuntimeAdapterForIntegration(integrationForAgentId(nextAgent));
   rebuildMenus();
 }
 
@@ -2583,6 +2653,7 @@ async function setAdditionalWindowAgent(targetWindow, agentId) {
     await targetWindow.loadURL(companionUrl(activeBaseUrl, readConfig(), agentId));
     forgetAdditionalFolk(previousAgentId);
     saveAdditionalFolk(agentId, targetWindow.getBounds());
+    startRuntimeAdapterForIntegration(integrationForAgentId(agentId));
   } catch (error) {
     metadata.agentId = previousAgentId;
     console.warn(`Could not switch companion folk: ${error.message}`);
@@ -2991,6 +3062,7 @@ async function createAdditionalCompanionWindow(agentId, options = {}) {
     await targetWindow.loadURL(companionUrl(activeBaseUrl, config, agentId));
     scheduleAgentSnapshotPolling();
     if (options.persist !== false) saveAdditionalFolk(agentId, targetWindow.getBounds());
+    startRuntimeAdapterForIntegration(integrationForAgentId(agentId));
   } catch (error) {
     console.warn(`Could not add companion folk: ${error.message}`);
     if (!targetWindow.isDestroyed()) targetWindow.destroy();
@@ -3016,6 +3088,8 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
     configWindow?.destroy();
     rankBoardWindow?.destroy();
     runtimeAgentMenuSignatures.clear();
+    runtimeAgentRosters.clear();
+    runtimeAgentLastPublishedAt.clear();
     openCodePublished = false;
     openCodePublishState = null;
     vsCodeCopilotPublished = false;
@@ -3473,6 +3547,8 @@ ipcMain.handle('settings:reset-config', async (event) => {
   runtimeOpenClawDeviceIdentity = null;
   startupError = '';
   runtimeAgentMenuSignatures.clear();
+  runtimeAgentRosters.clear();
+  runtimeAgentLastPublishedAt.clear();
   try {
     fs.unlinkSync(configPath());
   } catch (error) {

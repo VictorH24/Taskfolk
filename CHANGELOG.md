@@ -4,6 +4,11 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.37 (August 23, 2026)
+
+- Keep last-known agents available in Low Energy Mode while visible-provider-only polling skips their providers, and immediately refresh a provider when its preserved folk is selected
+- Repair the native **Add Another Folk** roster when an unchanged provider roster reappears after its server snapshot expires
+
 ## Version 1.0.36 (August 21, 2026)
 
 - Add authenticated remote Hermes gateway connections with profile discovery, live-session status, secure URL validation, encrypted token storage, and a Setup connection test
