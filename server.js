@@ -11,9 +11,11 @@ import * as tar from 'tar';
 const require = createRequire(import.meta.url);
 const {
   DEFAULT_OPENCLAW_URL,
+  createOpenClawGatewayClient,
   fetchOpenClawCronRuns,
   fetchOpenClawSnapshot,
-  normalizeOpenClawUrl
+  normalizeOpenClawUrl,
+  sessionActiveRunState
 } = require('./desktop/providers/openclaw.cjs');
 
 const app = express();
@@ -39,6 +41,7 @@ const OPENCLAW_GATEWAY_TOKEN = String(process.env.OPENCLAW_GATEWAY_TOKEN || '').
 const OPENCLAW_GATEWAY_PASSWORD = String(process.env.OPENCLAW_GATEWAY_PASSWORD || '');
 const OPENCLAW_GATEWAY_TIMEOUT_MS = Number(process.env.OPENCLAW_GATEWAY_TIMEOUT_MS || 8_000);
 const OPENCLAW_GATEWAY_CACHE_MS = Number(process.env.OPENCLAW_GATEWAY_CACHE_MS || 4_000);
+const OPENCLAW_GATEWAY_ACTIVE_REFRESH_MS = Number(process.env.OPENCLAW_GATEWAY_ACTIVE_REFRESH_MS || 5_000);
 const AVATAR_ASSIGNMENTS_PATH = path.resolve(process.env.AVATAR_ASSIGNMENTS_PATH || path.join(CONFIG_DIR, 'avatar-assignments.json'));
 const AGENT_STATE_PATH = path.resolve(process.env.AGENT_STATE_PATH || path.join(CONFIG_DIR, 'state.json'));
 const AGENT_ACHIEVEMENTS_PATH = path.resolve(process.env.AGENT_ACHIEVEMENTS_PATH || path.join(CONFIG_DIR, 'agent-achievements.json'));
@@ -226,6 +229,18 @@ let openClawGatewayCache = null;
 let openClawGatewayRequest = null;
 let openClawGatewayLastWarning = '';
 let achievementUpdateQueue = Promise.resolve();
+const openClawGatewayClient = OPENCLAW_CONNECTION_MODE === 'gateway' && !LOCAL_DESKTOP_MODE
+  ? createOpenClawGatewayClient({
+      baseUrl: OPENCLAW_GATEWAY_URL,
+      token: OPENCLAW_GATEWAY_TOKEN,
+      password: OPENCLAW_GATEWAY_PASSWORD,
+      timeoutMs: OPENCLAW_GATEWAY_TIMEOUT_MS,
+      activeRefreshMs: OPENCLAW_GATEWAY_ACTIVE_REFRESH_MS,
+      includeConfig: true,
+      includeCron: true,
+      onSnapshot: () => { openClawGatewayCache = null; }
+    })
+  : null;
 
 function cleanRuntimeText(value, maxLength = 240) {
   return String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
@@ -928,6 +943,11 @@ function statusFromSessionEntry(entry, lastSeenMs, nowMs = Date.now()) {
   if (entry.abortedLastRun || /\b(error|failed|failure|exception|blocked|fatal|aborted|cancelled|canceled)\b/i.test(rawStatus)) {
     return 'blocked';
   }
+  const activeRun = sessionActiveRunState(entry);
+  if (activeRun === true) return 'active';
+  if (activeRun === false) {
+    return lastSeenMs && nowMs - lastSeenMs <= AGENT_SUCCESS_MS ? 'success' : 'idle';
+  }
   if (/\b(active|running|working|busy|streaming|processing|in[-_ ]?progress|started)\b/i.test(rawStatus)) {
     return 'active';
   }
@@ -944,6 +964,12 @@ function statusFromSessionEntry(entry, lastSeenMs, nowMs = Date.now()) {
 function nextSessionStatusChangeAt(entry, lastSeenMs, nowMs) {
   const rawStatus = String(entry.status || entry.state || '').trim().toLowerCase();
   if (entry.abortedLastRun || /\b(error|failed|failure|exception|blocked|fatal|aborted|cancelled|canceled)\b/i.test(rawStatus)) return Infinity;
+  const activeRun = sessionActiveRunState(entry);
+  if (activeRun === true) return Infinity;
+  if (activeRun === false) {
+    const boundary = (lastSeenMs || 0) + AGENT_SUCCESS_MS + 1;
+    return boundary > nowMs ? boundary : Infinity;
+  }
   if (/\b(active|running|working|busy|streaming|processing|in[-_ ]?progress|started)\b/i.test(rawStatus)) return Infinity;
   const completed = Boolean(entry.endedAt) || /\b(done|complete|completed|finished|idle|success|succeeded)\b/i.test(rawStatus);
   if (completed) {
@@ -1462,6 +1488,7 @@ async function cronJobRuns(jobId, limit = 24) {
     const payload = await fetchOpenClawCronRuns({
       id: safeId,
       limit,
+      gatewayClient: openClawGatewayClient,
       baseUrl: OPENCLAW_GATEWAY_URL,
       token: OPENCLAW_GATEWAY_TOKEN,
       password: OPENCLAW_GATEWAY_PASSWORD,
@@ -2165,6 +2192,7 @@ async function configuredAgentsFromGateway() {
   if (openClawGatewayRequest) return openClawGatewayRequest;
 
   openClawGatewayRequest = fetchOpenClawSnapshot({
+    gatewayClient: openClawGatewayClient,
     baseUrl: OPENCLAW_GATEWAY_URL,
     token: OPENCLAW_GATEWAY_TOKEN,
     password: OPENCLAW_GATEWAY_PASSWORD,
@@ -3096,5 +3124,8 @@ const server = app.listen(PORT, HOST, () => {
 });
 const achievementSampler = setInterval(sampleAchievementsInBackground, ACHIEVEMENT_SAMPLE_MS);
 achievementSampler.unref();
-server.on('close', () => clearInterval(achievementSampler));
+server.on('close', () => {
+  clearInterval(achievementSampler);
+  openClawGatewayClient?.close();
+});
 void sampleAchievementsInBackground();

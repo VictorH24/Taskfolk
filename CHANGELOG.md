@@ -4,6 +4,18 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+
+## Version 1.0.42 (August 25, 2026)
+
+- Maintain one persistent OpenClaw gateway connection for desktop and standalone server integrations, sharing live agent, session, approval, and cron state across UI requests and background achievement sampling
+- Subscribe to OpenClaw session and approval events, automatically reconnect with heartbeat monitoring and exponential backoff, and reuse the same connection for older-gateway polling and cron history
+- Update remote OpenClaw device authentication to use challenge-bound v3 signatures and the gateway-provided timestamp
+- Keep manual OpenClaw setup and pairing tests independent from the persistent runtime connection so background refreshes cannot interrupt device approval
+- Honor authoritative OpenClaw run-completion signals so Docker and desktop agents leave the Working state when their sessions finish
+- Reconcile active OpenClaw sessions over the existing gateway socket so Docker agents recover from missing or incomplete run-completion events
+- Immediately refresh companion windows when OpenClaw or another provider restores its agent roster during app startup
+
+
 ## Version 1.0.41 (August 24, 2026)
 
 - Fold Hermes project and workspace-less Desktop activity into one profile agent whenever Hermes exposes an existing profile identity

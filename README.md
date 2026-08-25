@@ -124,7 +124,7 @@ In **Setup**, enable **Connect to an OpenClaw instance** and enter the gateway U
 
 Remote gateways require OpenClaw device pairing. Taskfolk creates and securely stores a stable Ed25519 device identity. Use **Test connection / request approval** in Setup to submit the pairing request before opening the office. Setup reports the connection stage, device ID, gateway error codes, and exact request ID. On the OpenClaw host, verify the pending **Taskfolk** request and approve it with the displayed `openclaw devices approve <requestId>` command, then test again. The approved device token is stored with the operating system's secure storage and reused for that gateway.
 
-Taskfolk requests `agents.list` and `sessions.list` with the `operator.read` scope, then publishes configured agents, current status, session title, model, workspace, and timestamps into the office. It does not request transcript messages, prompts, tool output, or configuration writes. Gateway tokens and passwords are encrypted with Electron `safeStorage` when available. Managed launches can provide `OPENCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_TOKEN`, and `OPENCLAW_GATEWAY_PASSWORD`.
+Taskfolk keeps one persistent gateway WebSocket with the `operator.read` and `operator.approvals` scopes. It loads configured agents, safe session metadata, and pending approvals once, subscribes to session and approval events, and updates the office immediately without reconnecting for each refresh. A dropped connection is restored automatically; older gateways without session subscriptions fall back to polling over the same socket. Taskfolk does not request transcript messages, prompts, tool output, or configuration writes. Gateway tokens and passwords are encrypted with Electron `safeStorage` when available. Managed launches can provide `OPENCLAW_GATEWAY_URL`, `OPENCLAW_GATEWAY_TOKEN`, and `OPENCLAW_GATEWAY_PASSWORD`.
 
 ### Track Visual Studio Code Copilot chats
 
@@ -308,7 +308,7 @@ The standalone server supports three OpenClaw connection modes. Select one with 
 
 - `none` (default) disables OpenClaw discovery. Taskfolk can still show manual agents and other runtime integrations.
 - `files` reads OpenClaw data from the mounted runtime paths listed below.
-- `gateway` connects to `OPENCLAW_GATEWAY_URL` and requests configured agents, safe session metadata, configuration, cron jobs, and cron run history from read-only gateway RPCs.
+- `gateway` maintains one persistent connection to `OPENCLAW_GATEWAY_URL`, shares live agent, session, approval, configuration, and cron metadata across page requests and background achievement sampling, and reuses that connection for cron run history. While an agent is working, Taskfolk also reconciles session metadata every five seconds over the same socket so a missed completion event cannot leave it stuck in the working pose; override that interval with `OPENCLAW_GATEWAY_ACTIVE_REFRESH_MS`.
 
 An unset or empty `OPENCLAW_CONNECTION_MODE` is treated as `none`. The supplied `docker-compose.yml` therefore starts with OpenClaw disabled unless you explicitly select a connection mode. It does not mount OpenClaw's logs, config, state database, cron directory, agent session stores, or workspaces. Only Taskfolk's own `./config` directory is mounted by default.
 

@@ -1,1 +1,1 @@
-docker compose down && docker compose -f docker-compose.yml -f docker-compose.gateway.yml -f docker-compose.FolderModule.yml up -d --build  && docker system prune -f
+docker compose down && docker compose -f docker-compose.yml -f docker-compose.gateway.yml -f docker-compose.FolderModule.yml up -d --build --force-recreate && docker system prune -f

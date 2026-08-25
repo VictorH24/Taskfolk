@@ -16,6 +16,7 @@ const { fetchOpenCodeDesktopAgents } = require('./providers/opencode-desktop.cjs
 const {
   DEFAULT_OPENCLAW_URL,
   createOpenClawDeviceIdentity,
+  createOpenClawGatewayClient,
   fetchOpenClawAgents,
   normalizeOpenClawUrl
 } = require('./providers/openclaw.cjs');
@@ -166,6 +167,8 @@ let runtimeOpenClawCredentials = null;
 let runtimeOpenClawCredentialsUrl = '';
 let runtimeOpenClawUrl = '';
 let runtimeOpenClawDeviceIdentity = null;
+let openClawGatewayClient = null;
+let openClawGatewayConnectionKey = '';
 let localServerProcess = null;
 let localServerUrl = '';
 let localServerCredentials = null;
@@ -1277,6 +1280,10 @@ async function publishRuntimeAgents(provider, agents, config = readConfig()) {
     availableAgents = await fetchAvailableAgents(activeBaseUrl, ses);
     reconcileAdditionalCompanionWindows();
     rebuildMenus();
+    // Startup connectors finish independently of the first renderer snapshot.
+    // Refresh every companion as soon as a provider's roster appears so
+    // OpenClaw and other late-discovered folk do not require a manual reload.
+    refreshAgentSnapshotAfterRuntimePublish();
   }
 }
 
@@ -2205,6 +2212,39 @@ function scheduleOpenClawSync() {
   }
 }
 
+function closeOpenClawGatewayClient() {
+  const client = openClawGatewayClient;
+  openClawGatewayClient = null;
+  openClawGatewayConnectionKey = '';
+  client?.close();
+}
+
+function ensureOpenClawGatewayClient(baseUrl, credentials, deviceIdentity) {
+  const connectionKey = JSON.stringify([
+    normalizeOpenClawUrl(baseUrl),
+    String(credentials?.token || ''),
+    String(credentials?.password || ''),
+    String(deviceIdentity?.deviceId || '')
+  ]);
+  if (openClawGatewayClient && connectionKey === openClawGatewayConnectionKey) {
+    return openClawGatewayClient;
+  }
+  closeOpenClawGatewayClient();
+  const client = createOpenClawGatewayClient({
+    baseUrl,
+    ...(credentials || {}),
+    deviceIdentity,
+    onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes),
+    onSnapshot: () => {
+      if (client !== openClawGatewayClient || openClawSyncInFlight || runtimePowerSuspended || areProviderChecksPaused()) return;
+      void syncOpenClawAdapter();
+    }
+  });
+  openClawGatewayClient = client;
+  openClawGatewayConnectionKey = connectionKey;
+  return client;
+}
+
 async function syncOpenClawAdapter() {
   if (openClawSyncInFlight) {
     scheduleOpenClawSync();
@@ -2215,22 +2255,26 @@ async function syncOpenClawAdapter() {
   try {
     const config = readConfig();
     if (!config.openClawEnabled) {
+      closeOpenClawGatewayClient();
       if (openClawPublished) await publishRuntimeAgents('openclaw', [], config);
       openClawPublished = false;
       openClawLastError = '';
       return;
     }
-    if (await preserveRuntimeAgentsForSkippedPolling(config, 'openClaw')) return;
+    if (await preserveRuntimeAgentsForSkippedPolling(config, 'openClaw')) {
+      closeOpenClawGatewayClient();
+      return;
+    }
     const baseUrl = runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL;
-    const agents = await fetchOpenClawAgents({
-      baseUrl,
+    const credentials = {
       ...savedOpenClawCredentials(config, baseUrl),
       ...(runtimeOpenClawCredentials && runtimeOpenClawCredentialsUrl === normalizeOpenClawUrl(baseUrl)
         ? runtimeOpenClawCredentials
-        : {}),
-      deviceIdentity: ensureOpenClawDeviceIdentity(config),
-      onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes)
-    });
+        : {})
+    };
+    const deviceIdentity = ensureOpenClawDeviceIdentity(config);
+    const gatewayClient = ensureOpenClawGatewayClient(baseUrl, credentials, deviceIdentity);
+    const agents = await fetchOpenClawAgents({ gatewayClient });
     if (syncGeneration !== runtimeSyncGeneration) return;
     await publishRuntimeAgents('openclaw', agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
@@ -2297,6 +2341,7 @@ function startRuntimeAdapterForIntegration(integration) {
 
 function stopRuntimeAdapters() {
   runtimeSyncGeneration += 1;
+  closeOpenClawGatewayClient();
   for (const timer of [
     openCodeTimer,
     vsCodeCopilotTimer,
@@ -2356,6 +2401,7 @@ async function restoreCachedRuntimeRostersAfterWake(config = readConfig(), expec
 
 function restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately = true } = {}) {
   if (!activeBaseUrl || runtimePowerSuspended || areProviderChecksPaused()) return;
+  closeOpenClawGatewayClient();
   runtimeSyncGeneration += 1;
   const restartGeneration = runtimeSyncGeneration;
   openCodeSyncInFlight = false;
@@ -3602,13 +3648,16 @@ ipcMain.handle('settings:openclaw-test', async (_event, input = {}) => {
     runtimeOpenClawCredentialsUrl = baseUrl;
   }
 
+  const gatewayClient = createOpenClawGatewayClient({
+    baseUrl,
+    ...(credentials || {}),
+    deviceIdentity,
+    onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes)
+  });
+
   try {
-    const agents = await fetchOpenClawAgents({
-      baseUrl,
-      ...(credentials || {}),
-      deviceIdentity,
-      onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes)
-    });
+    await gatewayClient.connect({ force: true });
+    const agents = await fetchOpenClawAgents({ gatewayClient });
     return {
       ok: true,
       stage: 'connected',
@@ -3629,6 +3678,8 @@ ipcMain.handle('settings:openclaw-test', async (_event, input = {}) => {
       detailsCode: error.detailsCode || '',
       message: error.message || 'Could not connect to OpenClaw.'
     };
+  } finally {
+    gatewayClient.close();
   }
 });
 
