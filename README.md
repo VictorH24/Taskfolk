@@ -87,6 +87,8 @@ npm run desktop
 
 Set `TASKFOLK_PASSWORD` too when the gateway requires one. Environment credentials take precedence over saved settings for that launch.
 
+To troubleshoot the macOS primary-avatar wake lifecycle, launch the desktop app with `TASKFOLK_DEBUG_PRIMARY_WAKE=1 npm run desktop`. This enables `[Taskfolk primary]` focus, visibility, power, activation, and recovery logs; it is disabled by default.
+
 ### Options 
 The setup page can choose between the full office and a single live avatar on a transparent background. In avatar mode, choose which connected agent to display; its pose continues to update from the live agent state. The setup page also controls window opacity from 25% to 100%.
 

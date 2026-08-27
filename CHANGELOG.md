@@ -5,6 +5,12 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 ## Unreleased
 
 
+## Version 1.0.43 (August 26, 2026)
+
+- Avoid re-showing an already-visible primary transparent window during delayed macOS activation after wake, preventing its avatar surface from disappearing while additional folk remain visible
+- Preserve the last confirmed OpenClaw folk roster through transient gateway reconnect timeouts after macOS wakes
+- Reload only the visible primary avatar after macOS completes its automatic wake-time hide/show cycle
+
 ## Version 1.0.42 (August 25, 2026)
 
 - Maintain one persistent OpenClaw gateway connection for desktop and standalone server integrations, sharing live agent, session, approval, and cron state across UI requests and background achievement sampling

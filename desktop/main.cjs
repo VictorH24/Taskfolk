@@ -111,6 +111,7 @@ const PARTITION = 'persist:taskfolk';
 const APP_ICON_PATH = path.join(__dirname, 'icon.png');
 const MAC_TRAY_ICON_PATH = path.join(__dirname, 'assets', 'trayTemplate.png');
 const MOST_RECENT_AGENT_ID = '__latest__';
+const DEBUG_PRIMARY_WAKE = process.env.TASKFOLK_DEBUG_PRIMARY_WAKE === '1';
 const OPENCODE_REQUEST_TIMEOUT_MS = 2_500;
 const RUNTIME_PUBLISH_TIMEOUT_MS = 5_000;
 const OLLAMA_REQUEST_TIMEOUT_MS = 2_500;
@@ -149,6 +150,7 @@ let macDockIcon = null;
 let dockHideRetryTimer = null;
 let dockShowRetryTimer = null;
 let boundsTimer = null;
+let primaryWakeReloadTimer = null;
 let runtimeCredentials = null;
 let startupError = '';
 let activeBaseUrl = '';
@@ -251,6 +253,27 @@ function companionWindowForSender(event) {
     if (!window.isDestroyed() && event.sender === window.webContents) return window;
   }
   return null;
+}
+
+function logPrimaryWindowEvent(eventName) {
+  if (!DEBUG_PRIMARY_WAKE || !officeWindow || officeWindow.isDestroyed()) return;
+  console.log(`[Taskfolk primary] ${eventName}: window=${officeWindow.id} visible=${officeWindow.isVisible()} focused=${officeWindow.isFocused()}`);
+}
+
+function schedulePrimaryAvatarReloadAfterWake() {
+  clearTimeout(primaryWakeReloadTimer);
+  primaryWakeReloadTimer = setTimeout(() => {
+    primaryWakeReloadTimer = null;
+    const targetWindow = officeWindow;
+    if (process.platform !== 'darwin'
+      || !targetWindow
+      || targetWindow.isDestroyed()
+      || !targetWindow.isVisible()
+      || displayMode(readConfig()) !== 'avatar') return;
+    logPrimaryWindowEvent('wake reload');
+    targetWindow.reload();
+  }, 500);
+  primaryWakeReloadTimer.unref();
 }
 
 ipcMain.on('office-window-drag:start', (event) => {
@@ -2285,9 +2308,13 @@ async function syncOpenClawAdapter() {
     const message = error?.message || 'Could not read OpenClaw gateway activity.';
     if (message !== openClawLastError) console.warn(`OpenClaw adapter: ${message}`);
     openClawLastError = message;
-    if (openClawPublished) {
-      try { await publishRuntimeAgents('openclaw', []); } catch {}
-      openClawPublished = false;
+    // A remote gateway commonly needs longer than one polling timeout to
+    // reconnect after macOS wakes. Keep the last confirmed roster alive until
+    // a successful snapshot replaces it; only explicitly disabling OpenClaw
+    // should withdraw its folk.
+    const cachedAgents = runtimeAgentRosters.get('openclaw');
+    if (cachedAgents?.length) {
+      try { await publishRuntimeAgents('openclaw', cachedAgents); } catch {}
     }
   } finally {
     if (syncGeneration !== runtimeSyncGeneration) return;
@@ -3208,6 +3235,11 @@ async function createOfficeWindow(baseUrl, credentials, authenticated = false) {
   secureCompanionNavigation(primaryWindow, normalizedUrl);
   officeWindow.on('move', persistWindowState);
   officeWindow.on('resize', persistWindowState);
+  if (DEBUG_PRIMARY_WAKE) {
+    for (const eventName of ['show', 'hide', 'focus', 'blur']) {
+      officeWindow.on(eventName, () => logPrimaryWindowEvent(eventName));
+    }
+  }
   officeWindow.on('closed', () => {
     windowDrags.delete(primaryWindow);
     mouseIgnoringWindows.delete(primaryWindow);
@@ -3859,18 +3891,22 @@ app.whenReady().then(async () => {
     updateRuntimePowerSuspension();
   });
   powerMonitor.on('resume', () => {
+    logPrimaryWindowEvent('powerMonitor resume');
     systemSuspended = false;
     updateRuntimePowerSuspension();
     if (!isLowEnergyModeEnabled()) restartRuntimeAdaptersAfterWake();
+    schedulePrimaryAvatarReloadAfterWake();
   });
   powerMonitor.on('lock-screen', () => {
     sessionLocked = true;
     updateRuntimePowerSuspension();
   });
   powerMonitor.on('unlock-screen', () => {
+    logPrimaryWindowEvent('powerMonitor unlock-screen');
     sessionLocked = false;
     updateRuntimePowerSuspension();
     if (!isLowEnergyModeEnabled()) restartRuntimeAdaptersAfterWake();
+    schedulePrimaryAvatarReloadAfterWake();
   });
   setInterval(checkForSystemSleepGap, 5_000).unref();
   initializeAutoUpdater();
@@ -3937,8 +3973,12 @@ app.whenReady().then(async () => {
   }
 
   app.on('activate', () => {
-    if (officeWindow) officeWindow.show();
-    else openSettingsWindow();
+    logPrimaryWindowEvent('app activate');
+    // macOS can emit activate shortly after wake/Dock reconciliation. Calling
+    // show() again on an already-visible transparent primary window can drop
+    // its compositor surface while additional companion windows remain fine.
+    if (officeWindow && !officeWindow.isVisible()) officeWindow.show();
+    else if (!officeWindow) openSettingsWindow();
   });
 });
 
