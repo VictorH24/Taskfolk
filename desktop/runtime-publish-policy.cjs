@@ -1,4 +1,5 @@
 const DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS = 60_000;
+const DEFAULT_RUNTIME_WAKE_ROSTER_GRACE_MS = 20_000;
 
 function runtimePublishDue(
   previous,
@@ -24,9 +25,30 @@ function runtimeRosterRefreshMs(refreshMs, pollingAllowed, hasCachedAgents, hear
     : refreshMs;
 }
 
+function runtimeWakeRosterShouldBePreserved(
+  cachedAgents,
+  nextAgents,
+  wakeStartedAtMs,
+  nowMs = Date.now(),
+  graceMs = DEFAULT_RUNTIME_WAKE_ROSTER_GRACE_MS
+) {
+  if (!Array.isArray(cachedAgents) || cachedAgents.length === 0) return false;
+  if (Array.isArray(nextAgents) && nextAgents.length > 0) return false;
+  const wakeAt = Number(wakeStartedAtMs);
+  const now = Number(nowMs);
+  const grace = Math.max(0, Number(graceMs) || 0);
+  return Number.isFinite(wakeAt)
+    && wakeAt > 0
+    && Number.isFinite(now)
+    && now >= wakeAt
+    && now - wakeAt <= grace;
+}
+
 module.exports = {
   DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS,
+  DEFAULT_RUNTIME_WAKE_ROSTER_GRACE_MS,
   runtimePublishDue,
   runtimeRosterMissingFromCache,
-  runtimeRosterRefreshMs
+  runtimeRosterRefreshMs,
+  runtimeWakeRosterShouldBePreserved
 };

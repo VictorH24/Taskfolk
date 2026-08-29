@@ -94,7 +94,8 @@ const {
   DEFAULT_RUNTIME_PUBLISH_HEARTBEAT_MS,
   runtimePublishDue,
   runtimeRosterMissingFromCache,
-  runtimeRosterRefreshMs
+  runtimeRosterRefreshMs,
+  runtimeWakeRosterShouldBePreserved
 } = require('./runtime-publish-policy.cjs');
 
 const DEFAULT_BOUNDS = { width: 720, height: 500 };
@@ -230,6 +231,7 @@ let runtimeLmStudioToken = '';
 let runtimeLmStudioCredentialsUrl = '';
 let runtimeSyncGeneration = 0;
 let lastRuntimeHeartbeatAt = Date.now();
+let runtimeWakeRecoveryStartedAt = 0;
 let quitting = false;
 let systemSuspended = false;
 let sessionLocked = false;
@@ -1826,6 +1828,17 @@ async function syncHermesAdapter() {
         })
       : await fetchHermesAgents({ grouping: normalizeHermesGrouping(config.hermesGrouping) });
     if (syncGeneration !== runtimeSyncGeneration) return;
+    const cachedAgents = runtimeAgentRosters.get('hermes');
+    if (runtimeWakeRosterShouldBePreserved(
+      cachedAgents,
+      agents,
+      runtimeWakeRecoveryStartedAt
+    )) {
+      await publishRuntimeAgents('hermes', cachedAgents, config);
+      hermesPublished = true;
+      hermesLastError = '';
+      return;
+    }
     await publishRuntimeAgents('hermes', agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
     hermesPublished = agents.length > 0;
@@ -1835,6 +1848,18 @@ async function syncHermesAdapter() {
     const message = error?.message || 'Could not read Hermes activity.';
     if (message !== hermesLastError) console.warn(`Hermes adapter: ${message}`);
     hermesLastError = message;
+    const cachedAgents = runtimeAgentRosters.get('hermes');
+    if (runtimeWakeRosterShouldBePreserved(
+      cachedAgents,
+      [],
+      runtimeWakeRecoveryStartedAt
+    )) {
+      try {
+        await publishRuntimeAgents('hermes', cachedAgents);
+        hermesPublished = true;
+      } catch {}
+      return;
+    }
     if (hermesPublished) {
       try { await publishRuntimeAgents('hermes', []); } catch {}
       hermesPublished = false;
@@ -2428,6 +2453,7 @@ async function restoreCachedRuntimeRostersAfterWake(config = readConfig(), expec
 
 function restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately = true } = {}) {
   if (!activeBaseUrl || runtimePowerSuspended || areProviderChecksPaused()) return;
+  runtimeWakeRecoveryStartedAt = Date.now();
   closeOpenClawGatewayClient();
   runtimeSyncGeneration += 1;
   const restartGeneration = runtimeSyncGeneration;

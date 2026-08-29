@@ -5,6 +5,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 ## Unreleased
 
 
+## Version 1.0.44 (August 28, 2026)
+
+- Preserve the last confirmed Hermes folk roster while macOS process and database discovery stabilizes immediately after wake
+
 ## Version 1.0.43 (August 26, 2026)
 
 - Avoid re-showing an already-visible primary transparent window during delayed macOS activation after wake, preventing its avatar surface from disappearing while additional folk remain visible
