@@ -5,6 +5,10 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 ## Unreleased
 
 
+## Version 1.0.45 (August 31, 2026)
+
+- Keep layered custom avatars draggable across their visible Working, Gaming, and Watching TV screens, including in Low Energy Mode
+
 ## Version 1.0.44 (August 28, 2026)
 
 - Preserve the last confirmed Hermes folk roster while macOS process and database discovery stabilizes immediately after wake

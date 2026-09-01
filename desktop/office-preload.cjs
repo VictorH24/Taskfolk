@@ -185,6 +185,43 @@ function loaderContainsPoint(x, y) {
     && Math.abs(y - window.innerHeight / 2) <= 68;
 }
 
+function visualContainsOpaquePixel(visual, x, y) {
+  const isImage = visual instanceof HTMLImageElement;
+  const isCanvas = visual instanceof HTMLCanvasElement;
+  if ((!isImage && !isCanvas) || (isImage && !visual.complete)) return false;
+  const sourceWidth = isImage ? visual.naturalWidth : visual.width;
+  const sourceHeight = isImage ? visual.naturalHeight : visual.height;
+  if (!sourceWidth || !sourceHeight) return false;
+  const rect = visual.getBoundingClientRect();
+  if (!rect.width || !rect.height) return false;
+
+  const objectFit = getComputedStyle(visual).objectFit;
+  const fill = objectFit === 'fill';
+  const scaleX = rect.width / sourceWidth;
+  const scaleY = rect.height / sourceHeight;
+  const scale = fill ? 1 : Math.min(scaleX, scaleY);
+  const drawnWidth = fill ? rect.width : sourceWidth * scale;
+  const drawnHeight = fill ? rect.height : sourceHeight * scale;
+  const left = rect.left + (rect.width - drawnWidth) / 2;
+  const top = rect.top + (rect.height - drawnHeight) / 2;
+  if (x < left || x > left + drawnWidth || y < top || y > top + drawnHeight) return false;
+
+  const imageX = Math.floor((x - left) / (fill ? scaleX : scale));
+  const imageY = Math.floor((y - top) / (fill ? scaleY : scale));
+  const sampleX = Math.max(0, Math.min(sourceWidth - 1, imageX - 2));
+  const sampleY = Math.max(0, Math.min(sourceHeight - 1, imageY - 2));
+  const sampleWidth = Math.min(5, sourceWidth - sampleX);
+  const sampleHeight = Math.min(5, sourceHeight - sampleY);
+
+  try {
+    alphaContext.clearRect(0, 0, 1, 1);
+    alphaContext.drawImage(visual, sampleX, sampleY, sampleWidth, sampleHeight, 0, 0, 1, 1);
+    return alphaContext.getImageData(0, 0, 1, 1).data[3] >= 24;
+  } catch {
+    return true;
+  }
+}
+
 function avatarContainsOpaquePixel(x, y) {
   if (!document.documentElement.classList.contains('companion-revealed')) {
     return loaderContainsPoint(x, y);
@@ -194,30 +231,13 @@ function avatarContainsOpaquePixel(x, y) {
   if (document.querySelector('.companionAvatarEmpty.agentLoadFailure')) return true;
   const target = document.elementFromPoint(x, y);
   if (target instanceof Element && target.closest('[data-companion-interactive]')) return true;
-  const image = document.querySelector('.companionAvatar .sceneArt');
-  if (!(image instanceof HTMLImageElement) || !image.complete || !image.naturalWidth || !image.naturalHeight) return false;
-  const rect = image.getBoundingClientRect();
-  const scale = Math.min(rect.width / image.naturalWidth, rect.height / image.naturalHeight);
-  const drawnWidth = image.naturalWidth * scale;
-  const drawnHeight = image.naturalHeight * scale;
-  const left = rect.left + (rect.width - drawnWidth) / 2;
-  const top = rect.top + (rect.height - drawnHeight) / 2;
-  if (x < left || x > left + drawnWidth || y < top || y > top + drawnHeight) return false;
-
-  const imageX = Math.floor((x - left) / scale);
-  const imageY = Math.floor((y - top) / scale);
-  const sourceX = Math.max(0, Math.min(image.naturalWidth - 1, imageX - 2));
-  const sourceY = Math.max(0, Math.min(image.naturalHeight - 1, imageY - 2));
-  const sourceWidth = Math.min(5, image.naturalWidth - sourceX);
-  const sourceHeight = Math.min(5, image.naturalHeight - sourceY);
-
-  try {
-    alphaContext.clearRect(0, 0, 1, 1);
-    alphaContext.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, 1, 1);
-    return alphaContext.getImageData(0, 0, 1, 1).data[3] >= 24;
-  } catch {
-    return true;
-  }
+  const visuals = document.querySelectorAll([
+    '.companionAvatar .sceneArt',
+    '.companionAvatar .sceneWorkingScreen',
+    '.companionAvatar .sceneGamingScreen',
+    '.companionAvatar .sceneTVScreen'
+  ].join(','));
+  return Array.from(visuals).some((visual) => visualContainsOpaquePixel(visual, x, y));
 }
 
 window.addEventListener('mousemove', (event) => {
