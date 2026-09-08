@@ -4,6 +4,9 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.46 (September 8, 2026)
+
+- Remove build-only npm from the production Docker image, eliminating vulnerabilities reported in npm's bundled dependencies
 
 ## Version 1.0.45 (August 31, 2026)
 

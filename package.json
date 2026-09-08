@@ -1,6 +1,6 @@
 {
   "name": "taskfolk",
-  "version": "1.0.45",
+  "version": "1.0.46",
   "private": true,
   "description": "Taskfolk is a visual mission control dashboard for AI agents and shared workspace tools.",
   "main": "desktop/main.cjs",
@@ -17,9 +17,9 @@
   "dependencies": {
     "@agentclientprotocol/codex-acp": "1.1.7",
     "electron-updater": "^6.8.9",
-    "express": "^4.18.3",
+    "express": "^5.2.1",
     "multer": "^2.1.1",
-    "tar": "^7.5.13",
+    "tar": "^7.5.22",
     "ws": "^8.21.1"
   },
   "devDependencies": {

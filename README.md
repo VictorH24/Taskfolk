@@ -312,7 +312,7 @@ The standalone server supports three OpenClaw connection modes. Select one with 
 - `files` reads OpenClaw data from the mounted runtime paths listed below.
 - `gateway` maintains one persistent connection to `OPENCLAW_GATEWAY_URL`, shares live agent, session, approval, configuration, and cron metadata across page requests and background achievement sampling, and reuses that connection for cron run history. While an agent is working, Taskfolk also reconciles session metadata every five seconds over the same socket so a missed completion event cannot leave it stuck in the working pose; override that interval with `OPENCLAW_GATEWAY_ACTIVE_REFRESH_MS`.
 
-An unset or empty `OPENCLAW_CONNECTION_MODE` is treated as `none`. The supplied `docker-compose.yml` therefore starts with OpenClaw disabled unless you explicitly select a connection mode. It does not mount OpenClaw's logs, config, state database, cron directory, agent session stores, or workspaces. Only Taskfolk's own `./config` directory is mounted by default.
+An unset or empty `OPENCLAW_CONNECTION_MODE` is treated as `none`. The supplied `docker-compose.yml` therefore starts with OpenClaw disabled unless you explicitly select a connection mode. It does not mount OpenClaw's logs, config, state database, cron directory, agent session stores, or workspaces. Taskfolk's own `./config` directory and the read-only `./custom-variants` avatar directory are mounted by default.
 
 For example, add these values to the Compose project's `.env` file:
 

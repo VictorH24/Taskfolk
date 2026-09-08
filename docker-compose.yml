@@ -16,10 +16,12 @@ services:
       GATEWAY_AUTH_TOKEN: ${GATEWAY_AUTH_TOKEN:-}
       GATEWAY_AUTH_PASSWORD: ${GATEWAY_AUTH_PASSWORD:-}
       GATEWAY_AUTH_SECURE_COOKIE: ${GATEWAY_AUTH_SECURE_COOKIE:-false}
-      CUSTOM_AVATAR_VARIANTS_DIR: ${CUSTOM_AVATAR_VARIANTS_DIR:-}
+      CUSTOM_AVATAR_VARIANTS_DIR: ${CUSTOM_AVATAR_VARIANTS_DIR:-/app/custom-variants}
     volumes:
       # config folder stored locally for persistence, you can change ./config to the host folder you want to use.
       - ./config:/config
+      # Custom avatar artwork and screen-layout metadata are loaded at server startup.
+      - ./custom-variants:/app/custom-variants:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
