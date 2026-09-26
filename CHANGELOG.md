@@ -4,6 +4,11 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.47 (September 25, 2026)
+
+- Let the desktop app connect to multiple OpenClaw gateways concurrently, with independent pairing credentials, reconnect state, cached rosters, and collision-safe agent identities
+- Refresh desktop OpenClaw connections after Setup changes and replace clients when a gateway receives its device approval token, so newly paired agents appear without restarting Taskfolk
+
 ## Version 1.0.46 (September 8, 2026)
 
 - Remove build-only npm from the production Docker image, eliminating vulnerabilities reported in npm's bundled dependencies

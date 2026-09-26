@@ -70,17 +70,17 @@ You can enable one or several integrations in Setup. For project-based tools, **
 
 ### OpenClaw
 
-1. Enable **Connect to an OpenClaw instance**.
-2. For a local gateway, use the default URL `ws://127.0.0.1:18789`.
-3. For a remote gateway, use `wss://` or `https://` and enter its token or password if required.
-4. Click **Test connection / request approval**.
-5. If Setup displays a pairing request, run the command it provides on the OpenClaw host. The command has this form:
+1. Enable **Connect to OpenClaw instances**.
+2. Use the first connection card for your local gateway, or click **Add OpenClaw instance** for another gateway.
+3. Give every connection a recognizable name. For a local gateway, use `ws://127.0.0.1:18789`. For a remote gateway, use `wss://` or `https://` and enter its token or password if required.
+4. Click **Test connection / request approval** on each connection card.
+5. If Setup displays a pairing request, run the command it provides on that connection's OpenClaw host. The command has this form:
 
    ```bash
    openclaw devices approve <requestId>
    ```
 
-6. After approval, click **Test connection / request approval** again and confirm that the connection succeeds.
+6. After approval, test that connection again. Enabled gateways connect concurrently and their agents appear together in the office.
 
 ### Visual Studio Code Copilot
 

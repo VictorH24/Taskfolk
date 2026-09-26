@@ -163,26 +163,13 @@
       <section class="integrationField">
         <label class="checkRow">
           <input id="openClawEnabled" name="openClawEnabled" type="checkbox" />
-          <span class="integrationLabel"><img class="integrationIcon" src="./assets/openclaw.png" alt="" />Connect to an OpenClaw instance</span>
+          <span class="integrationLabel"><img class="integrationIcon" src="./assets/openclaw.png" alt="" />Connect to OpenClaw instances</span>
         </label>
-        <label id="openClawUrlField">
-          <span>OpenClaw gateway URL</span>
-          <input id="openClawUrl" name="openClawUrl" type="url" value="ws://127.0.0.1:18789" />
-          <small>Use wss:// for remote gateways, or ws:// with a loopback/Tailscale 100.x address.</small>
-        </label>
-        <div id="openClawAuthFields" class="displayGrid">
-          <label>
-            <span>Gateway token <small>optional</small></span>
-            <input id="openClawToken" name="openClawToken" type="password" autocomplete="off" />
-          </label>
-          <label>
-            <span>Gateway password <small>optional</small></span>
-            <input id="openClawPassword" name="openClawPassword" type="password" autocomplete="off" />
-          </label>
+        <div id="openClawInstances" class="openClawInstances"></div>
+        <div id="openClawActions" class="integrationActions">
+          <button id="addOpenClawButton" class="secondaryButton integrationButton" type="button">Add OpenClaw instance</button>
         </div>
-        <button id="testOpenClawButton" class="secondaryButton integrationButton" type="button">Test connection / request approval</button>
-        <p id="openClawTestStatus" class="integrationStatus" role="status"></p>
-        <small>Remote gateways require one-time device approval. After connecting, run <code>openclaw devices list</code> and <code>openclaw devices approve &lt;requestId&gt;</code> on the OpenClaw host.</small>
+        <small>Each gateway connects independently. Remote gateways require one-time device approval on their OpenClaw host.</small>
       </section>
       <section class="integrationField">
         <label class="checkRow">

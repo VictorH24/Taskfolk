@@ -164,14 +164,11 @@ let openCodePublishState = null;
 let runtimeOpenCodeCredentials = null;
 let openClawTimer = null;
 let openClawSyncInFlight = false;
+let openClawResyncRequested = false;
 let openClawPublished = false;
-let openClawLastError = '';
-let runtimeOpenClawCredentials = null;
-let runtimeOpenClawCredentialsUrl = '';
-let runtimeOpenClawUrl = '';
+let runtimeOpenClawInstances = null;
 let runtimeOpenClawDeviceIdentity = null;
-let openClawGatewayClient = null;
-let openClawGatewayConnectionKey = '';
+const openClawRuntimes = new Map();
 let localServerProcess = null;
 let localServerUrl = '';
 let localServerCredentials = null;
@@ -533,16 +530,55 @@ function savedHermesGatewayToken(config = readConfig(), baseUrl = '') {
   return credentialsMatch ? decrypt(config.encryptedHermesGatewayToken) : '';
 }
 
-function savedOpenClawCredentials(config = readConfig(), baseUrl = '') {
-  const normalizedUrl = baseUrl ? normalizeOpenClawUrl(baseUrl) : '';
-  const credentialsUrl = config.openClawCredentialsUrl || config.openClawUrl || '';
-  const credentialsMatch = !normalizedUrl || !credentialsUrl
-    || normalizeOpenClawUrl(credentialsUrl) === normalizedUrl;
+function openClawInstanceId(value, index = 0) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized || `gateway-${index + 1}`;
+}
+
+function configuredOpenClawInstances(config = readConfig()) {
+  const rows = Array.isArray(config.openClawInstances) && config.openClawInstances.length
+    ? config.openClawInstances
+    : [{
+        id: 'default',
+        name: 'OpenClaw',
+        enabled: config.openClawEnabled !== false,
+        url: config.openClawUrl || DEFAULT_OPENCLAW_URL,
+        credentialsUrl: config.openClawCredentialsUrl,
+        encryptedToken: config.encryptedOpenClawToken,
+        encryptedPassword: config.encryptedOpenClawPassword,
+        deviceTokenUrl: config.openClawDeviceTokenUrl,
+        encryptedDeviceToken: config.encryptedOpenClawDeviceToken,
+        deviceTokenScopes: config.openClawDeviceTokenScopes
+      }];
+  const used = new Set();
+  return rows.map((row, index) => {
+    let id = openClawInstanceId(row?.id || row?.name, index);
+    const baseId = id;
+    let suffix = 2;
+    while (used.has(id)) id = `${baseId}-${suffix++}`;
+    used.add(id);
+    return {
+      ...row,
+      id,
+      name: String(row?.name || `OpenClaw ${index + 1}`).trim() || `OpenClaw ${index + 1}`,
+      enabled: row?.enabled !== false,
+      url: normalizeOpenClawUrl(row?.url || DEFAULT_OPENCLAW_URL)
+    };
+  });
+}
+
+function savedOpenClawCredentials(config = readConfig(), instanceOrUrl = '') {
+  const instance = typeof instanceOrUrl === 'object'
+    ? instanceOrUrl
+    : configuredOpenClawInstances(config).find((row) => row.url === normalizeOpenClawUrl(instanceOrUrl || DEFAULT_OPENCLAW_URL));
+  const normalizedUrl = normalizeOpenClawUrl(instance?.url || instanceOrUrl || DEFAULT_OPENCLAW_URL);
+  const credentialsUrl = instance?.credentialsUrl || instance?.url || '';
+  const credentialsMatch = !credentialsUrl || normalizeOpenClawUrl(credentialsUrl) === normalizedUrl;
   return {
-    token: credentialsMatch ? decrypt(config.encryptedOpenClawToken) : '',
-    password: credentialsMatch ? decrypt(config.encryptedOpenClawPassword) : '',
-    deviceToken: normalizedUrl && config.openClawDeviceTokenUrl === normalizedUrl
-      ? decrypt(config.encryptedOpenClawDeviceToken)
+    token: credentialsMatch ? decrypt(instance?.encryptedToken || '') : '',
+    password: credentialsMatch ? decrypt(instance?.encryptedPassword || '') : '',
+    deviceToken: normalizedUrl && instance?.deviceTokenUrl === normalizedUrl
+      ? decrypt(instance?.encryptedDeviceToken || '')
       : ''
   };
 }
@@ -568,14 +604,36 @@ function ensureOpenClawDeviceIdentity(config = readConfig()) {
   return runtimeOpenClawDeviceIdentity;
 }
 
-function rememberOpenClawDeviceToken(baseUrl, token, scopes = []) {
+function rememberOpenClawDeviceToken(instanceId, baseUrl, token, scopes = []) {
   if (!token) return;
+  const runtimeInstance = runtimeOpenClawInstances?.find((instance) => instance.id === instanceId);
+  if (runtimeInstance && runtimeInstance.url === normalizeOpenClawUrl(baseUrl)) {
+    runtimeInstance.credentials = { ...runtimeInstance.credentials, deviceToken: token };
+  }
   const config = readConfig();
+  let matched = false;
+  const instances = configuredOpenClawInstances(config).map((instance) => {
+    if (instance.id !== instanceId) return instance;
+    matched = true;
+    return {
+      ...instance,
+      deviceTokenUrl: normalizeOpenClawUrl(baseUrl),
+      encryptedDeviceToken: encrypt(token),
+      deviceTokenScopes: Array.isArray(scopes) ? scopes.map(String) : []
+    };
+  });
+  if (!matched) instances.push({
+    id: instanceId,
+    name: instanceId,
+    enabled: true,
+    url: normalizeOpenClawUrl(baseUrl),
+    deviceTokenUrl: normalizeOpenClawUrl(baseUrl),
+    encryptedDeviceToken: encrypt(token),
+    deviceTokenScopes: Array.isArray(scopes) ? scopes.map(String) : []
+  });
   writeConfig({
     ...config,
-    openClawDeviceTokenUrl: normalizeOpenClawUrl(baseUrl),
-    encryptedOpenClawDeviceToken: encrypt(token),
-    openClawDeviceTokenScopes: Array.isArray(scopes) ? scopes.map(String) : []
+    openClawInstances: instances
   });
 }
 
@@ -2260,42 +2318,67 @@ function scheduleOpenClawSync() {
   }
 }
 
-function closeOpenClawGatewayClient() {
-  const client = openClawGatewayClient;
-  openClawGatewayClient = null;
-  openClawGatewayConnectionKey = '';
-  client?.close();
+function closeOpenClawGatewayClients() {
+  for (const runtime of openClawRuntimes.values()) runtime.client?.close();
+  openClawRuntimes.clear();
 }
 
-function ensureOpenClawGatewayClient(baseUrl, credentials, deviceIdentity) {
+function ensureOpenClawGatewayClient(instance, credentials, deviceIdentity) {
+  const baseUrl = instance.url;
   const connectionKey = JSON.stringify([
     normalizeOpenClawUrl(baseUrl),
     String(credentials?.token || ''),
     String(credentials?.password || ''),
+    String(credentials?.deviceToken || ''),
     String(deviceIdentity?.deviceId || '')
   ]);
-  if (openClawGatewayClient && connectionKey === openClawGatewayConnectionKey) {
-    return openClawGatewayClient;
+  const current = openClawRuntimes.get(instance.id);
+  if (current?.client && connectionKey === current.connectionKey) {
+    return current;
   }
-  closeOpenClawGatewayClient();
+  current?.client?.close();
+  const runtime = { ...current, connectionKey, credentials, cachedAgents: current?.cachedAgents || [], lastError: '' };
   const client = createOpenClawGatewayClient({
     baseUrl,
     ...(credentials || {}),
     deviceIdentity,
-    onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes),
+    onDeviceToken: (token, scopes) => {
+      runtime.credentials = { ...(credentials || {}), deviceToken: token };
+      instance.credentials = runtime.credentials;
+      rememberOpenClawDeviceToken(instance.id, baseUrl, token, scopes);
+    },
     onSnapshot: () => {
-      if (client !== openClawGatewayClient || openClawSyncInFlight || runtimePowerSuspended || areProviderChecksPaused()) return;
+      if (client !== openClawRuntimes.get(instance.id)?.client || openClawSyncInFlight || runtimePowerSuspended || areProviderChecksPaused()) return;
       void syncOpenClawAdapter();
     }
   });
-  openClawGatewayClient = client;
-  openClawGatewayConnectionKey = connectionKey;
-  return client;
+  runtime.client = client;
+  openClawRuntimes.set(instance.id, runtime);
+  return runtime;
+}
+
+function namespacedOpenClawAgents(instance, agents) {
+  return agents.map((agent) => ({
+    ...agent,
+    // Preserve identities from the legacy single-gateway configuration while
+    // namespacing every additional gateway to prevent duplicate agent IDs.
+    id: instance.id === 'default' ? agent.id : `${instance.id}:${agent.id}`,
+    role: `${instance.name} · ${agent.role || 'OpenClaw'}`,
+    avatarAssignmentKey: instance.id === 'default'
+      ? agent.avatarAssignmentKey
+      : `runtime:openclaw:${instance.id}:${agent.id}`,
+    activity: {
+      ...(agent.activity || {}),
+      instanceId: instance.id,
+      instanceName: instance.name,
+      gatewayUrl: instance.url
+    }
+  }));
 }
 
 async function syncOpenClawAdapter() {
   if (openClawSyncInFlight) {
-    scheduleOpenClawSync();
+    openClawResyncRequested = true;
     return;
   }
   const syncGeneration = runtimeSyncGeneration;
@@ -2303,36 +2386,45 @@ async function syncOpenClawAdapter() {
   try {
     const config = readConfig();
     if (!config.openClawEnabled) {
-      closeOpenClawGatewayClient();
+      closeOpenClawGatewayClients();
       if (openClawPublished) await publishRuntimeAgents('openclaw', [], config);
       openClawPublished = false;
-      openClawLastError = '';
       return;
     }
     if (await preserveRuntimeAgentsForSkippedPolling(config, 'openClaw')) {
-      closeOpenClawGatewayClient();
+      closeOpenClawGatewayClients();
       return;
     }
-    const baseUrl = runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL;
-    const credentials = {
-      ...savedOpenClawCredentials(config, baseUrl),
-      ...(runtimeOpenClawCredentials && runtimeOpenClawCredentialsUrl === normalizeOpenClawUrl(baseUrl)
-        ? runtimeOpenClawCredentials
-        : {})
-    };
     const deviceIdentity = ensureOpenClawDeviceIdentity(config);
-    const gatewayClient = ensureOpenClawGatewayClient(baseUrl, credentials, deviceIdentity);
-    const agents = await fetchOpenClawAgents({ gatewayClient });
+    const instances = (runtimeOpenClawInstances || configuredOpenClawInstances(config)).filter((instance) => instance.enabled !== false);
+    const enabledIds = new Set(instances.map((instance) => instance.id));
+    for (const [id, runtime] of openClawRuntimes) {
+      if (enabledIds.has(id)) continue;
+      runtime.client?.close();
+      openClawRuntimes.delete(id);
+    }
+    await Promise.all(instances.map(async (instance) => {
+      const credentials = instance.credentials || savedOpenClawCredentials(config, instance);
+      const runtime = ensureOpenClawGatewayClient(instance, credentials, deviceIdentity);
+      try {
+        const agents = await fetchOpenClawAgents({ gatewayClient: runtime.client });
+        runtime.cachedAgents = namespacedOpenClawAgents(instance, agents);
+        runtime.lastError = '';
+      } catch (error) {
+        const message = error?.message || 'Could not read OpenClaw gateway activity.';
+        if (message !== runtime.lastError) console.warn(`OpenClaw adapter (${instance.name}): ${message}`);
+        runtime.lastError = message;
+      }
+    }));
     if (syncGeneration !== runtimeSyncGeneration) return;
+    const agents = instances.flatMap((instance) => openClawRuntimes.get(instance.id)?.cachedAgents || []);
     await publishRuntimeAgents('openclaw', agents, config);
     if (syncGeneration !== runtimeSyncGeneration) return;
     openClawPublished = agents.length > 0;
-    openClawLastError = '';
   } catch (error) {
     if (syncGeneration !== runtimeSyncGeneration) return;
     const message = error?.message || 'Could not read OpenClaw gateway activity.';
-    if (message !== openClawLastError) console.warn(`OpenClaw adapter: ${message}`);
-    openClawLastError = message;
+    console.warn(`OpenClaw adapter: ${message}`);
     // A remote gateway commonly needs longer than one polling timeout to
     // reconnect after macOS wakes. Keep the last confirmed roster alive until
     // a successful snapshot replaces it; only explicitly disabling OpenClaw
@@ -2344,13 +2436,19 @@ async function syncOpenClawAdapter() {
   } finally {
     if (syncGeneration !== runtimeSyncGeneration) return;
     openClawSyncInFlight = false;
-    scheduleOpenClawSync();
+    if (openClawResyncRequested) {
+      openClawResyncRequested = false;
+      void syncOpenClawAdapter();
+    } else {
+      scheduleOpenClawSync();
+    }
   }
 }
 
 function startOpenClawAdapter() {
   clearTimeout(openClawTimer);
   openClawTimer = null;
+  openClawResyncRequested = openClawSyncInFlight;
   void syncOpenClawAdapter();
 }
 
@@ -2393,7 +2491,7 @@ function startRuntimeAdapterForIntegration(integration) {
 
 function stopRuntimeAdapters() {
   runtimeSyncGeneration += 1;
-  closeOpenClawGatewayClient();
+  closeOpenClawGatewayClients();
   for (const timer of [
     openCodeTimer,
     vsCodeCopilotTimer,
@@ -2436,6 +2534,7 @@ function stopRuntimeAdapters() {
   ollamaSyncInFlight = false;
   lmStudioSyncInFlight = false;
   openClawSyncInFlight = false;
+  openClawResyncRequested = false;
 }
 
 async function restoreCachedRuntimeRostersAfterWake(config = readConfig(), expectedGeneration = runtimeSyncGeneration) {
@@ -2454,7 +2553,7 @@ async function restoreCachedRuntimeRostersAfterWake(config = readConfig(), expec
 function restartRuntimeAdaptersAfterWake({ refreshSnapshotImmediately = true } = {}) {
   if (!activeBaseUrl || runtimePowerSuspended || areProviderChecksPaused()) return;
   runtimeWakeRecoveryStartedAt = Date.now();
-  closeOpenClawGatewayClient();
+  closeOpenClawGatewayClients();
   runtimeSyncGeneration += 1;
   const restartGeneration = runtimeSyncGeneration;
   openCodeSyncInFlight = false;
@@ -3492,13 +3591,15 @@ ipcMain.handle('settings:load', () => {
       || savedLmStudioToken(config, config.lmStudioUrl || DEFAULT_LM_STUDIO_URL)
     ),
     openClawEnabled: Boolean(config.openClawEnabled),
-    openClawUrl: runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL,
-    openClawCredentialsStored: Boolean(
-      (runtimeOpenClawCredentialsUrl === (runtimeOpenClawUrl || config.openClawUrl)
-        && (runtimeOpenClawCredentials?.token || runtimeOpenClawCredentials?.password))
-      || savedOpenClawCredentials(config, runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL).token
-      || savedOpenClawCredentials(config, runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL).password
-    ),
+    openClawInstances: (runtimeOpenClawInstances || configuredOpenClawInstances(config)).map((instance) => ({
+      id: instance.id,
+      name: instance.name,
+      enabled: instance.enabled !== false,
+      url: instance.url,
+      credentialsStored: Boolean(instance.credentials?.token || instance.credentials?.password
+        || savedOpenClawCredentials(config, instance).token
+        || savedOpenClawCredentials(config, instance).password)
+    })),
     agents: availableAgents,
     hasSavedConfiguration: hasSavedConfig(),
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
@@ -3546,11 +3647,10 @@ ipcMain.handle('settings:import-config', async (event) => {
     throw new Error('The selected backup does not contain a valid Taskfolk configuration.');
   }
 
-  let importedOpenClawUrl;
   let importedLmStudioUrl;
   let importedHermesUrl;
   try {
-    importedOpenClawUrl = normalizeOpenClawUrl(importedConfig.openClawUrl || DEFAULT_OPENCLAW_URL);
+    configuredOpenClawInstances(importedConfig);
   } catch (error) {
     throw new Error(`The configuration has an invalid OpenClaw URL: ${error.message}`);
   }
@@ -3592,9 +3692,7 @@ ipcMain.handle('settings:import-config', async (event) => {
   runtimeHermesGatewayUrl = importedHermesUrl;
   runtimeHermesCredentialsUrl = importedHermesUrl;
   runtimeHermesGatewayToken = savedHermesGatewayToken(importedConfig, importedHermesUrl);
-  runtimeOpenClawUrl = '';
-  runtimeOpenClawCredentialsUrl = importedOpenClawUrl;
-  runtimeOpenClawCredentials = savedOpenClawCredentials(importedConfig, runtimeOpenClawCredentialsUrl);
+  runtimeOpenClawInstances = null;
   runtimeOpenClawDeviceIdentity = null;
   return { canceled: false, restoredLocalData: isBackup };
 });
@@ -3665,9 +3763,7 @@ ipcMain.handle('settings:reset-config', async (event) => {
   runtimeHermesGatewayUrl = '';
   runtimeHermesCredentialsUrl = '';
   runtimeHermesGatewayToken = '';
-  runtimeOpenClawUrl = '';
-  runtimeOpenClawCredentialsUrl = '';
-  runtimeOpenClawCredentials = null;
+  runtimeOpenClawInstances = null;
   runtimeOpenClawDeviceIdentity = null;
   startupError = '';
   runtimeAgentMenuSignatures.clear();
@@ -3687,6 +3783,7 @@ ipcMain.handle('settings:reset-config', async (event) => {
 
 ipcMain.handle('settings:openclaw-test', async (_event, input = {}) => {
   const config = readConfig();
+  const instanceId = openClawInstanceId(input.id || input.name || 'default');
   let baseUrl;
   try {
     baseUrl = normalizeOpenClawUrl(input.openClawUrl || DEFAULT_OPENCLAW_URL);
@@ -3696,21 +3793,19 @@ ipcMain.handle('settings:openclaw-test', async (_event, input = {}) => {
   const enteredToken = String(input.openClawToken || '').trim();
   const enteredPassword = String(input.openClawPassword || '');
   const hasEnteredCredentials = Boolean(enteredToken || enteredPassword);
+  const savedInstance = configuredOpenClawInstances(config).find((instance) => instance.id === instanceId || instance.url === baseUrl);
+  const runtimeInstance = runtimeOpenClawInstances?.find((instance) => instance.id === instanceId || instance.url === baseUrl);
+  const savedCredentials = savedOpenClawCredentials(config, savedInstance || baseUrl);
   const credentials = hasEnteredCredentials
-    ? { token: enteredToken, password: enteredPassword, deviceToken: '' }
-    : (runtimeOpenClawCredentialsUrl === baseUrl ? runtimeOpenClawCredentials : null)
-      || savedOpenClawCredentials(config, baseUrl);
+    ? { ...savedCredentials, token: enteredToken, password: enteredPassword }
+    : runtimeInstance?.credentials || savedCredentials;
   const deviceIdentity = ensureOpenClawDeviceIdentity(config);
-  if (hasEnteredCredentials) {
-    runtimeOpenClawCredentials = credentials;
-    runtimeOpenClawCredentialsUrl = baseUrl;
-  }
 
   const gatewayClient = createOpenClawGatewayClient({
     baseUrl,
     ...(credentials || {}),
     deviceIdentity,
-    onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(baseUrl, token, scopes)
+    onDeviceToken: (token, scopes) => rememberOpenClawDeviceToken(instanceId, baseUrl, token, scopes)
   });
 
   try {
@@ -3783,8 +3878,6 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
   const openCodeUrl = normalizeOpenCodeUrl(input.openCodeUrl || DEFAULT_OPENCODE_URL);
   const ollamaUrl = normalizeOllamaUrl(input.ollamaUrl || DEFAULT_OLLAMA_URL);
   const lmStudioUrl = normalizeLmStudioUrl(input.lmStudioUrl || DEFAULT_LM_STUDIO_URL);
-  const openClawUrl = normalizeOpenClawUrl(input.openClawUrl || DEFAULT_OPENCLAW_URL);
-  runtimeOpenClawUrl = openClawUrl;
   const savedOpenCode = savedOpenCodeCredentials(config);
   const replaceOpenCodeCredentials = Boolean(String(input.openCodePassword || ''));
   runtimeOpenCodeCredentials = replaceOpenCodeCredentials
@@ -3796,14 +3889,31 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     || (runtimeLmStudioCredentialsUrl === lmStudioUrl ? runtimeLmStudioToken : '')
     || savedLmStudioToken(config, lmStudioUrl);
   runtimeLmStudioCredentialsUrl = lmStudioUrl;
-  const savedOpenClaw = savedOpenClawCredentials(config, openClawUrl);
-  const replaceOpenClawCredentials = Boolean(
-    String(input.openClawToken || '').trim() || String(input.openClawPassword || '')
-  );
-  runtimeOpenClawCredentials = replaceOpenClawCredentials
-    ? { token: String(input.openClawToken || '').trim(), password: String(input.openClawPassword || '') }
-    : (runtimeOpenClawCredentialsUrl === openClawUrl ? runtimeOpenClawCredentials : null) || savedOpenClaw;
-  runtimeOpenClawCredentialsUrl = openClawUrl;
+  const savedOpenClawInstances = configuredOpenClawInstances(config);
+  const inputOpenClawInstances = Array.isArray(input.openClawInstances) && input.openClawInstances.length
+    ? input.openClawInstances.slice(0, 10)
+    : [{ id: 'default', name: 'OpenClaw', enabled: true, url: DEFAULT_OPENCLAW_URL }];
+  const usedOpenClawIds = new Set();
+  runtimeOpenClawInstances = inputOpenClawInstances.map((row, index) => {
+    const id = openClawInstanceId(row?.id || row?.name, index);
+    if (usedOpenClawIds.has(id)) throw new Error(`Each OpenClaw connection needs a unique name (${id} is duplicated).`);
+    usedOpenClawIds.add(id);
+    const url = normalizeOpenClawUrl(row?.url || DEFAULT_OPENCLAW_URL);
+    const saved = savedOpenClawInstances.find((instance) => instance.id === id || instance.url === url);
+    const entered = { token: String(row?.token || '').trim(), password: String(row?.password || '') };
+    const savedCredentials = savedOpenClawCredentials(config, saved || url);
+    const credentials = entered.token || entered.password
+      ? { ...savedCredentials, ...entered }
+      : savedCredentials;
+    return {
+      id,
+      name: String(row?.name || `OpenClaw ${index + 1}`).trim() || `OpenClaw ${index + 1}`,
+      enabled: row?.enabled !== false,
+      url,
+      credentials,
+      saved
+    };
+  });
   const openClawDeviceIdentity = ensureOpenClawDeviceIdentity(config);
   const hermesConnectionMode = normalizeHermesConnectionMode(input.hermesConnectionMode);
   const hermesGatewayUrl = normalizeHermesGatewayUrl(input.hermesGatewayUrl || DEFAULT_HERMES_GATEWAY_URL);
@@ -3868,10 +3978,18 @@ ipcMain.handle('settings:connect', async (_event, input = {}) => {
     lmStudioCredentialsUrl: lmStudioUrl,
     encryptedLmStudioApiToken: encrypt(runtimeLmStudioToken),
     openClawEnabled: Boolean(input.openClawEnabled),
-    openClawUrl,
-    openClawCredentialsUrl: openClawUrl,
-    encryptedOpenClawToken: encrypt(runtimeOpenClawCredentials.token),
-    encryptedOpenClawPassword: encrypt(runtimeOpenClawCredentials.password),
+    openClawInstances: runtimeOpenClawInstances.map((instance) => ({
+      id: instance.id,
+      name: instance.name,
+      enabled: instance.enabled,
+      url: instance.url,
+      credentialsUrl: instance.url,
+      encryptedToken: encrypt(instance.credentials.token),
+      encryptedPassword: encrypt(instance.credentials.password),
+      deviceTokenUrl: instance.saved?.deviceTokenUrl || '',
+      encryptedDeviceToken: instance.saved?.encryptedDeviceToken || '',
+      deviceTokenScopes: instance.saved?.deviceTokenScopes || []
+    })),
     openClawDeviceId: openClawDeviceIdentity.deviceId,
     openClawDevicePublicKey: openClawDeviceIdentity.publicKey,
     encryptedOpenClawDevicePrivateKey: encrypt(openClawDeviceIdentity.privateKey)
@@ -3967,16 +4085,16 @@ app.whenReady().then(async () => {
   runtimeHermesCredentialsUrl = runtimeHermesGatewayUrl;
   runtimeHermesGatewayToken = String(process.env.HERMES_GATEWAY_TOKEN || '')
     || savedHermesGatewayToken(config, runtimeHermesGatewayUrl);
-  runtimeOpenClawCredentials = process.env.OPENCLAW_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_PASSWORD
-    ? {
-        token: String(process.env.OPENCLAW_GATEWAY_TOKEN || ''),
-        password: String(process.env.OPENCLAW_GATEWAY_PASSWORD || '')
-      }
-    : savedOpenClawCredentials(config, runtimeOpenClawUrl || config.openClawUrl || DEFAULT_OPENCLAW_URL);
-  runtimeOpenClawUrl = process.env.OPENCLAW_GATEWAY_URL
-    ? normalizeOpenClawUrl(process.env.OPENCLAW_GATEWAY_URL)
-    : '';
-  runtimeOpenClawCredentialsUrl = runtimeOpenClawUrl || normalizeOpenClawUrl(config.openClawUrl || DEFAULT_OPENCLAW_URL);
+  runtimeOpenClawInstances = process.env.OPENCLAW_GATEWAY_URL ? [{
+    id: 'environment',
+    name: 'OpenClaw',
+    enabled: true,
+    url: normalizeOpenClawUrl(process.env.OPENCLAW_GATEWAY_URL),
+    credentials: {
+      token: String(process.env.OPENCLAW_GATEWAY_TOKEN || ''),
+      password: String(process.env.OPENCLAW_GATEWAY_PASSWORD || '')
+    }
+  }] : null;
   const startupUrl = environmentUrl || config.url;
   const startupMode = environmentUrl ? 'remote' : connectionMode(config);
 

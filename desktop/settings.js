@@ -40,13 +40,9 @@ const openCodeAuthFields = document.querySelector('#openCodeAuthFields');
 const openCodeUsernameInput = document.querySelector('#openCodeUsername');
 const openCodePasswordInput = document.querySelector('#openCodePassword');
 const openClawEnabledInput = document.querySelector('#openClawEnabled');
-const openClawUrlField = document.querySelector('#openClawUrlField');
-const openClawUrlInput = document.querySelector('#openClawUrl');
-const openClawAuthFields = document.querySelector('#openClawAuthFields');
-const openClawTokenInput = document.querySelector('#openClawToken');
-const openClawPasswordInput = document.querySelector('#openClawPassword');
-const testOpenClawButton = document.querySelector('#testOpenClawButton');
-const openClawTestStatus = document.querySelector('#openClawTestStatus');
+const openClawInstancesContainer = document.querySelector('#openClawInstances');
+const openClawActions = document.querySelector('#openClawActions');
+const addOpenClawButton = document.querySelector('#addOpenClawButton');
 const vsCodeCopilotEnabledInput = document.querySelector('#vsCodeCopilotEnabled');
 const vsCodeCopilotGroupingField = document.querySelector('#vsCodeCopilotGroupingField');
 const vsCodeCopilotGroupingInput = document.querySelector('#vsCodeCopilotGrouping');
@@ -119,6 +115,7 @@ const integrationRefreshDefaults = Object.freeze({
 const integrationRefreshChoices = [1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 const integrationRefreshInputs = {};
 let encryptionAvailable = false;
+let openClawInstances = [];
 
 function refreshChoiceLabel(milliseconds) {
   const seconds = milliseconds / 1_000;
@@ -277,16 +274,64 @@ function updateLmStudioFields() {
 }
 
 function updateOpenClawFields() {
-  openClawUrlField.classList.toggle('hidden', !openClawEnabledInput.checked);
-  openClawAuthFields.classList.toggle('hidden', !openClawEnabledInput.checked);
-  testOpenClawButton.classList.toggle('hidden', !openClawEnabledInput.checked);
-  openClawTestStatus.classList.toggle('hidden', !openClawEnabledInput.checked);
-  openClawUrlInput.required = openClawEnabledInput.checked;
+  openClawInstancesContainer.classList.toggle('hidden', !openClawEnabledInput.checked);
+  openClawActions.classList.toggle('hidden', !openClawEnabledInput.checked);
+  for (const input of openClawInstancesContainer.querySelectorAll('.openClawUrl')) {
+    input.required = openClawEnabledInput.checked;
+  }
 }
 
-function showOpenClawTestStatus(kind = '', value = '') {
-  openClawTestStatus.textContent = value;
-  openClawTestStatus.className = `integrationStatus${value ? ` visible ${kind}` : ''}`;
+function newOpenClawInstance(index = openClawInstances.length) {
+  return { id: `gateway-${Date.now()}-${index}`, name: `OpenClaw ${index + 1}`, enabled: true, url: 'ws://127.0.0.1:18789' };
+}
+
+function renderOpenClawInstances() {
+  openClawInstancesContainer.replaceChildren();
+  openClawInstances.forEach((instance, index) => {
+    const card = document.createElement('div');
+    card.className = 'openClawInstance';
+    card.dataset.id = instance.id;
+    card.innerHTML = `
+      <div class="openClawInstanceHeader">
+        <label class="checkRow"><input class="openClawInstanceEnabled" type="checkbox" /> <span>Enabled</span></label>
+        <button class="secondaryButton dangerButton removeOpenClawButton" type="button">Remove</button>
+      </div>
+      <div class="displayGrid">
+        <label><span>Connection name</span><input class="openClawName" maxlength="80" required /></label>
+        <label><span>Gateway URL</span><input class="openClawUrl" type="url" required /></label>
+      </div>
+      <div class="displayGrid">
+        <label><span>Gateway token <small>optional</small></span><input class="openClawToken" type="password" autocomplete="off" /></label>
+        <label><span>Gateway password <small>optional</small></span><input class="openClawPassword" type="password" autocomplete="off" /></label>
+      </div>
+      <button class="secondaryButton testOpenClawButton" type="button">Test connection / request approval</button>
+      <p class="integrationStatus openClawTestStatus" role="status"></p>`;
+    card.querySelector('.openClawInstanceEnabled').checked = instance.enabled !== false;
+    card.querySelector('.openClawName').value = instance.name || `OpenClaw ${index + 1}`;
+    card.querySelector('.openClawUrl').value = instance.url || 'ws://127.0.0.1:18789';
+    const credentialNote = instance.credentialsStored ? 'Saved securely — enter to replace' : 'Only if gateway auth is enabled';
+    card.querySelector('.openClawToken').placeholder = credentialNote;
+    card.querySelector('.openClawPassword').placeholder = credentialNote;
+    openClawInstancesContainer.append(card);
+  });
+  updateOpenClawFields();
+}
+
+function collectOpenClawInstances() {
+  return [...openClawInstancesContainer.querySelectorAll('.openClawInstance')].map((card) => ({
+    id: card.dataset.id,
+    name: card.querySelector('.openClawName').value.trim(),
+    enabled: card.querySelector('.openClawInstanceEnabled').checked,
+    url: card.querySelector('.openClawUrl').value,
+    token: card.querySelector('.openClawToken').value,
+    password: card.querySelector('.openClawPassword').value
+  }));
+}
+
+function showOpenClawTestStatus(card, kind = '', value = '') {
+  const status = card.querySelector('.openClawTestStatus');
+  status.textContent = value;
+  status.className = `integrationStatus openClawTestStatus${value ? ` visible ${kind}` : ''}`;
 }
 
 function updateConnectionFields() {
@@ -337,13 +382,10 @@ async function initialize() {
     ? 'Saved securely — enter to replace'
     : 'Only if server auth is enabled';
   openClawEnabledInput.checked = Boolean(settings.openClawEnabled);
-  openClawUrlInput.value = settings.openClawUrl || 'ws://127.0.0.1:18789';
-  openClawTokenInput.placeholder = settings.openClawCredentialsStored
-    ? 'Saved securely — enter to replace'
-    : 'Only if gateway token auth is enabled';
-  openClawPasswordInput.placeholder = settings.openClawCredentialsStored
-    ? 'Saved securely — enter to replace'
-    : 'Only if gateway password auth is enabled';
+  openClawInstances = settings.openClawInstances?.length
+    ? settings.openClawInstances
+    : [newOpenClawInstance(0)];
+  renderOpenClawInstances();
   vsCodeCopilotEnabledInput.checked = Boolean(settings.vsCodeCopilotEnabled);
   vsCodeCopilotGroupingInput.value = settings.vsCodeCopilotGrouping === 'single' ? 'single' : 'project';
   cursorEnabledInput.checked = Boolean(settings.cursorEnabled);
@@ -503,41 +545,60 @@ resetConfigButton.addEventListener('click', async () => {
   }
 });
 
-testOpenClawButton.addEventListener('click', async () => {
-  if (!openClawUrlInput.reportValidity()) return;
-  showOpenClawTestStatus('pending', 'Connecting to the OpenClaw gateway and signing its device challenge…');
-  testOpenClawButton.disabled = true;
-  const previousLabel = testOpenClawButton.textContent;
-  testOpenClawButton.textContent = 'Testing…';
+addOpenClawButton.addEventListener('click', () => {
+  openClawInstances = collectOpenClawInstances();
+  openClawInstances.push(newOpenClawInstance());
+  renderOpenClawInstances();
+});
+
+openClawInstancesContainer.addEventListener('click', async (event) => {
+  const card = event.target.closest('.openClawInstance');
+  if (!card) return;
+  if (event.target.closest('.removeOpenClawButton')) {
+    openClawInstances = collectOpenClawInstances().filter((instance) => instance.id !== card.dataset.id);
+    if (!openClawInstances.length) openClawInstances.push(newOpenClawInstance(0));
+    renderOpenClawInstances();
+    return;
+  }
+  const testButton = event.target.closest('.testOpenClawButton');
+  if (!testButton) return;
+  const urlInput = card.querySelector('.openClawUrl');
+  if (!urlInput.reportValidity()) return;
+  showOpenClawTestStatus(card, 'pending', 'Connecting to the OpenClaw gateway and signing its device challenge…');
+  testButton.disabled = true;
+  const previousLabel = testButton.textContent;
+  testButton.textContent = 'Testing…';
   try {
     const result = await window.clawOffice.testOpenClaw({
-      openClawUrl: openClawUrlInput.value,
-      openClawToken: openClawTokenInput.value,
-      openClawPassword: openClawPasswordInput.value
+      id: card.dataset.id,
+      name: card.querySelector('.openClawName').value,
+      openClawUrl: urlInput.value,
+      openClawToken: card.querySelector('.openClawToken').value,
+      openClawPassword: card.querySelector('.openClawPassword').value
     });
     const device = result.deviceId ? `\nDevice: ${result.deviceId}` : '';
     if (result.ok) {
-      showOpenClawTestStatus('success', `${result.message}\nGateway: ${result.gatewayUrl}${device}`);
+      showOpenClawTestStatus(card, 'success', `${result.message}\nGateway: ${result.gatewayUrl}${device}`);
     } else if (result.pairingRequired) {
       const approval = result.requestId
         ? `openclaw devices approve ${result.requestId}`
         : 'openclaw devices list\nopenclaw devices approve <requestId>';
-      showOpenClawTestStatus(
+      showOpenClawTestStatus(card,
         'pending',
         `Pairing request created. On the OpenClaw host run:\n${approval}\n\nAfter approval, press this test button again.${device}`
       );
     } else {
       const diagnostic = [result.stage, result.gatewayCode, result.detailsCode].filter(Boolean).join(' / ');
-      showOpenClawTestStatus(
+      showOpenClawTestStatus(card,
         'error',
-        `${result.message}${diagnostic ? `\nStage: ${diagnostic}` : ''}\nGateway: ${result.gatewayUrl || openClawUrlInput.value}${device}`
+        `${result.message}${diagnostic ? `\nStage: ${diagnostic}` : ''}\nGateway: ${result.gatewayUrl || urlInput.value}${device}`
       );
     }
   } catch (error) {
-    showOpenClawTestStatus('error', error.message || 'Could not test the OpenClaw connection.');
+    showOpenClawTestStatus(card, 'error', error.message || 'Could not test the OpenClaw connection.');
   } finally {
-    testOpenClawButton.disabled = false;
-    testOpenClawButton.textContent = previousLabel;
+    testButton.disabled = false;
+    testButton.textContent = previousLabel;
   }
 });
 
@@ -601,9 +662,7 @@ form.addEventListener('submit', async (event) => {
       openCodeUsername: openCodeUsernameInput.value,
       openCodePassword: openCodePasswordInput.value,
       openClawEnabled: openClawEnabledInput.checked,
-      openClawUrl: openClawUrlInput.value,
-      openClawToken: openClawTokenInput.value,
-      openClawPassword: openClawPasswordInput.value,
+      openClawInstances: collectOpenClawInstances(),
       vsCodeCopilotEnabled: vsCodeCopilotEnabledInput.checked,
       vsCodeCopilotGrouping: vsCodeCopilotGroupingInput.value,
       cursorEnabled: cursorEnabledInput.checked,

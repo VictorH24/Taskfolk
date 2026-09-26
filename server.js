@@ -2412,7 +2412,7 @@ app.post('/api/runtime-agents', (req, res) => {
     return res.status(400).json({ error: 'A valid runtime provider is required.' });
   }
   if (!Array.isArray(inputAgents)) return res.status(400).json({ error: 'agents must be an array.' });
-  if (inputAgents.length > 24) return res.status(400).json({ error: 'A runtime source may publish at most 24 agents.' });
+  if (inputAgents.length > 240) return res.status(400).json({ error: 'A runtime source may publish at most 240 agents.' });
 
   const previousSource = runtimeAgentSources.get(sourceId);
   if (publishedAtMs && previousSource?.publishedAtMs && publishedAtMs < previousSource.publishedAtMs) {
