@@ -4,6 +4,11 @@ Notable changes to Taskfolk are recorded here. Add new entries under **Unrelease
 
 ## Unreleased
 
+## Version 1.0.48 (October 30, 2026)
+
+- Upgrade Electron from 43.1.1 to 45.2.0, updating the bundled Node.js runtime from 24.18.0 to 24.22.1 and Chromium to 156
+- Update the release build tooling to Node.js 26.13.0 and npm 11.20.0
+
 ## Version 1.0.47 (September 25, 2026)
 
 - Let the desktop app connect to multiple OpenClaw gateways concurrently, with independent pairing credentials, reconnect state, cached rosters, and collision-safe agent identities
